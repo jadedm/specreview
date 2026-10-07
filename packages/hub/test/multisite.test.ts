@@ -309,16 +309,38 @@ describe('review fixes', () => {
       'docs: pending',
       'docs: ready to build',
     ]);
-    const before = github.calls.filter((c) => c.startsWith('POST /repos/inoltrotech/sidecar/labels')).length;
+    // Checked once per isolate: the next sync asks GitHub about labels not at all.
+    const labelCalls = () => github.calls.filter((c) => c.includes('/repos/inoltrotech/sidecar/labels')).length;
+    const before = labelCalls();
     await setStatus(SIDECAR, TEAM, 'pending', 1, LIVE_HASH);
-    const after = github.calls.filter((c) => c.startsWith('POST /repos/inoltrotech/sidecar/labels')).length;
-    expect(after).toBe(before);
+    expect(labelCalls()).toBe(before);
   });
 
   it('labels that cannot be created fail the sync instead of pretending', async () => {
-    github.downRepos.add('inoltrotech/sidecar');
+    github.labelsMode = 'down';
     const r = await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
     expect(r.body).toMatchObject({ labels: 'failed' });
+  });
+
+  it('a 422 that is a validation error, not "already exists", fails the sync', async () => {
+    github.labelsMode = 'invalid';
+    const r = await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
+    expect(r.body).toMatchObject({ labels: 'failed' });
+  });
+
+  it('a cron run that changes nothing keeps the cached ticket as the fallback when GitHub is down', async () => {
+    await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
+    await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER });
+    await runCron();
+    github.down = true;
+    const tickets = (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER }))
+      .body as unknown as {
+      number: number;
+      stale?: boolean;
+      unavailable?: boolean;
+    }[];
+    expect(tickets.find((t) => t.number === 23)).toMatchObject({ number: 23 });
+    expect(tickets.find((t) => t.number === 23)?.unavailable).toBeUndefined();
   });
 
   it('the ticket box shows the new label straight after a status change', async () => {

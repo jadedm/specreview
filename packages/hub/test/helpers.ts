@@ -187,6 +187,9 @@ export const github = {
   calls: [] as string[],
   // Label definitions per repo; repos start with ours missing.
   labelDefs: new Map<string, Set<string>>(),
+  // Fail only the label-definition endpoints: 'down' answers 503, 'invalid' a
+  // 422 validation error on create.
+  labelsMode: 'ok' as 'ok' | 'down' | 'invalid',
   down: false,
   downRepos: new Set<string>(),
   failWritesFor: new Set<number>(),
@@ -194,6 +197,7 @@ export const github = {
     this.repos = freshRepos();
     this.calls = [];
     this.labelDefs = new Map();
+    this.labelsMode = 'ok';
     this.down = false;
     this.downRepos = new Set();
     this.failWritesFor = new Set();
@@ -204,7 +208,9 @@ const githubResponse = async (req: Request, url: URL): Promise<Response> => {
   github.calls.push(`${req.method} ${url.pathname}${url.search}`);
   const def = /^\/repos\/([^/]+\/[^/]+)\/labels(?:\/(.+))?$/.exec(url.pathname);
   if (def) {
-    if (github.down || github.downRepos.has(def[1])) return new Response('unavailable', { status: 503 });
+    if (github.down || github.downRepos.has(def[1]) || github.labelsMode === 'down') {
+      return new Response('unavailable', { status: 503 });
+    }
     const defs = github.labelDefs.get(def[1]) ?? new Set<string>();
     github.labelDefs.set(def[1], defs);
     if (req.method === 'GET' && def[2]) {
@@ -214,7 +220,8 @@ const githubResponse = async (req: Request, url: URL): Promise<Response> => {
     }
     if (req.method === 'POST' && !def[2]) {
       const { name } = (await req.json()) as { name: string };
-      if (defs.has(name)) return Response.json({ message: 'already_exists' }, { status: 422 });
+      if (github.labelsMode === 'invalid') return Response.json({ errors: [{ code: 'invalid' }] }, { status: 422 });
+      if (defs.has(name)) return Response.json({ errors: [{ code: 'already_exists' }] }, { status: 422 });
       defs.add(name);
       return Response.json({ name }, { status: 201 });
     }

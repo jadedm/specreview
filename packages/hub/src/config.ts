@@ -51,7 +51,13 @@ const PUBLIC_MAIL = new Set([
   'fastmail.com',
   'hey.com',
 ]);
-const TOP_KEYS = new Set(['accessTeamDomain', 'sites']);
+// Big providers run a domain per country (yahoo.co.in, hotmail.co.uk), so
+// these are matched by name followed directly by a public suffix; a company's
+// own subdomain such as mail.acme.com is not a match.
+const PUBLIC_MAIL_BRANDS =
+  /^(yahoo|ymail|hotmail|outlook|live|msn|windowslive|aol|gmx|yandex|mail|web|protonmail|proton|rediffmail|rediff|tutanota|tuta|zoho|icloud|me|mac|gmail|googlemail|fastmail|hey|pm|qq|163|126|sina|naver|daum|rambler|libero|orange|laposte|t-online|seznam|wp|o2|interia|rocketmail|lycos)\.(?:[a-z]{2,3}|(?:co|com|net|org)\.[a-z]{2})$/;
+const isPublicMail = (domain: string) => PUBLIC_MAIL.has(domain) || PUBLIC_MAIL_BRANDS.test(domain);
+const TOP_KEYS = new Set(['$schema', 'accessTeamDomain', 'sites']);
 const SITE_KEYS = new Set(['repo', 'accessAud', 'teamDomains', 'approvers', 'ticketRepo']);
 const ownerOf = (repo: string) => repo.split('/')[0];
 
@@ -107,9 +113,10 @@ export const problemsIn = (raw: unknown): string[] => {
     if (!domains || domains.length === 0) problems.push(`${at}.teamDomains must be a non-empty list`);
     if (domains && domains.some((d) => !DOMAIN.test(d))) problems.push(`${at}.teamDomains has a malformed domain`);
     if (domains && new Set(domains).size !== domains.length) problems.push(`${at}.teamDomains has a duplicate`);
-    if (domains && domains.some((d) => PUBLIC_MAIL.has(d))) problems.push(`${at}.teamDomains has a public mail domain`);
+    if (domains && domains.some(isPublicMail)) problems.push(`${at}.teamDomains has a public mail domain`);
     // Sites sharing a ticket repo share its tickets and labels, so they must
-    // have the same team.
+    // have the same team: identical domain lists, aliases included (strict on
+    // purpose; list every alias on every site that shares the repo).
     if (domains && typeof ticketRepo === 'string') {
       const team = [...domains].sort().join(',');
       const seen = teamsByTicketRepo.get(ticketRepo);

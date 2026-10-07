@@ -13,6 +13,14 @@ describe('M7, M23: config rules, one at a time', () => {
     expect(problemsIn(valid())).toEqual([]);
   });
 
+  it('a $schema line and a company subdomain as team domain are fine', () => {
+    expect(problemsIn({ $schema: './specreview.schema.json', ...valid() })).toEqual([]);
+    const c = valid();
+    c.sites[2].teamDomains = ['mail.tikiti.live'];
+    c.sites[2].approvers = [];
+    expect(problemsIn(c)).toEqual([]);
+  });
+
   const cases: [string, (c: C) => unknown, RegExp][] = [
     ['empty team domain', (c) => ({ ...c, accessTeamDomain: '' }), /accessTeamDomain/],
     ['team domain not Access', (c) => ({ ...c, accessTeamDomain: 'evil.example.com' }), /accessTeamDomain/],
@@ -67,6 +75,13 @@ describe('M7, M23: config rules, one at a time', () => {
     ],
     ['no sites', (c) => ({ ...c, sites: [] }), /sites must be a non-empty list/],
   ];
+  for (const domain of ['yahoo.co.in', 'hotmail.co.uk', 'outlook.in', 'pm.me', 'web.de', 'mail.ru', 'rediffmail.com']) {
+    cases.push([
+      `regional public mail ${domain}`,
+      (c) => ((c.sites[2].teamDomains = [domain]), (c.sites[2].approvers = []), c),
+      /public mail domain/,
+    ]);
+  }
 
   for (const [name, patch, expected] of cases) {
     it(name, () => {

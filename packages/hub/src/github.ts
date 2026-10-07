@@ -142,8 +142,14 @@ const ensureLabels = async (hub: Hub, repo: string): Promise<boolean> => {
           description: 'Set by specreview from the docs page status',
         }),
       }).catch(() => null);
-      // 422: someone created it meanwhile.
-      return made?.ok === true || made?.status === 422;
+      if (made?.ok) return true;
+      // 422 is also used for validation errors; only "already exists" (someone
+      // created it meanwhile) counts as done.
+      const body =
+        made?.status === 422
+          ? ((await made.json().catch(() => null)) as { errors?: { code?: string }[] } | null)
+          : null;
+      return body?.errors?.some((e) => e.code === 'already_exists') === true;
     }),
   );
   if (results.every(Boolean)) labelsReady.add(repo);
@@ -180,8 +186,15 @@ const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string): Pr
       ),
     );
   const removed = (await Promise.all(removals)).every(Boolean);
-  // The ticket box would otherwise show the old label as fresh for minutes.
-  await hub.env.DB.prepare('DELETE FROM ticket_cache WHERE repo = ? AND number = ?').bind(repo, n).run();
+  // Only when a label actually changed: mark the cached copy as expired, so the
+  // ticket box refetches instead of showing the old label as fresh, while the
+  // copy stays available as the stale fallback if GitHub is down.
+  const changed = !have.includes(wanted) || removals.length > 0;
+  if (changed) {
+    await hub.env.DB.prepare('UPDATE ticket_cache SET fetched_at = 0 WHERE repo = ? AND number = ?')
+      .bind(repo, n)
+      .run();
+  }
   return removed;
 };
 
