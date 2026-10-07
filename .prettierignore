@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+**/dist
+**/.vitepress/dist
+**/.vitepress/cache
+**/.wrangler
+LICENSE

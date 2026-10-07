@@ -1,0 +1,9 @@
+// The specreview hub: one Worker per team, serving every site (#3).
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "specreview-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "preview_urls": false,
+}

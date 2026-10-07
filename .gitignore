@@ -1,0 +1,11 @@
+node_modules
+dist
+.wrangler
+.vitepress/dist
+.vitepress/cache
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.playwright-mcp

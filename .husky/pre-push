@@ -1,0 +1,13 @@
+# Gitflow: no direct pushes to develop or main; branch names <prefix>/<issue>-<slug>.
+branch=$(git rev-parse --abbrev-ref HEAD)
+case "$branch" in
+  develop|main) echo "pre-push: push a branch and open a pull request instead of pushing to $branch." >&2; exit 1 ;;
+esac
+if ! echo "$branch" | grep -Eq '^(feature|bugfix|hotfix|chore|fix|ci|infra|refactor|docs|release)/[0-9]+-[a-z0-9.-]+$'; then
+  echo "pre-push: branch '$branch' must be <prefix>/<issue>-<slug>, prefix one of feature bugfix hotfix chore fix ci infra refactor docs release." >&2
+  exit 1
+fi
+while read -r _local _sha remote_ref _rsha; do
+  case "$remote_ref" in refs/heads/develop|refs/heads/main) echo "pre-push: refusing to push to $remote_ref." >&2; exit 1 ;; esac
+done
+pnpm -s typecheck
