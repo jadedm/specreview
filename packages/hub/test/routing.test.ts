@@ -74,8 +74,7 @@ describe('49, 50: responses and shadowing', () => {
     }
   });
 
-  // Called directly, so this checks the Worker's own handling of the path;
-  // the asset router is covered by the config test and the smoke.
+  // The hub has no static assets: every path goes through the Worker.
   it('the Worker answers /api/comments/ itself, refusing it without a token', async () => {
     const r = await call('/api/comments/');
     expect(r.status).toBe(401);

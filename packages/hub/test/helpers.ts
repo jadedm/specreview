@@ -9,6 +9,7 @@ import { configOf } from '../src/config';
 import { reconcileLabels } from '../src/github';
 import { envTokens } from '../src/github-auth';
 import { createHub } from '../src/index';
+import { forgetLabelSetup } from '../src/github';
 import { forgetManifests } from '../src/manifest';
 import { memoryStore, type SiteStore } from '../src/store';
 
@@ -184,12 +185,15 @@ export const github = {
     return this.repos.get('inoltrotech/sidecar')!;
   },
   calls: [] as string[],
+  // Label definitions per repo; repos start with ours missing.
+  labelDefs: new Map<string, Set<string>>(),
   down: false,
   downRepos: new Set<string>(),
   failWritesFor: new Set<number>(),
   reset() {
     this.repos = freshRepos();
     this.calls = [];
+    this.labelDefs = new Map();
     this.down = false;
     this.downRepos = new Set();
     this.failWritesFor = new Set();
@@ -198,6 +202,24 @@ export const github = {
 
 const githubResponse = async (req: Request, url: URL): Promise<Response> => {
   github.calls.push(`${req.method} ${url.pathname}${url.search}`);
+  const def = /^\/repos\/([^/]+\/[^/]+)\/labels(?:\/(.+))?$/.exec(url.pathname);
+  if (def) {
+    if (github.down || github.downRepos.has(def[1])) return new Response('unavailable', { status: 503 });
+    const defs = github.labelDefs.get(def[1]) ?? new Set<string>();
+    github.labelDefs.set(def[1], defs);
+    if (req.method === 'GET' && def[2]) {
+      return defs.has(decodeURIComponent(def[2]))
+        ? Response.json({ name: decodeURIComponent(def[2]) })
+        : Response.json({}, { status: 404 });
+    }
+    if (req.method === 'POST' && !def[2]) {
+      const { name } = (await req.json()) as { name: string };
+      if (defs.has(name)) return Response.json({ message: 'already_exists' }, { status: 422 });
+      defs.add(name);
+      return Response.json({ name }, { status: 201 });
+    }
+    return new Response('not found', { status: 404 });
+  }
   const m = /^\/repos\/([^/]+\/[^/]+)\/issues(?:\/(\d+)(\/labels(?:\/(.+))?)?)?$/.exec(url.pathname);
   if (!m) return new Response('not found', { status: 404 });
   const repo = m[1];
@@ -266,6 +288,7 @@ export const reset = async () => {
   deps.store = memoryStore(manifests(), historyFiles());
   deps.github = null;
   forgetManifests();
+  forgetLabelSetup();
   await env.DB.batch(
     ['replies', 'threads', 'status_history', 'page_status', 'ticket_cache', 'write_log'].map((t) =>
       env.DB.prepare(`DELETE FROM ${t}`),

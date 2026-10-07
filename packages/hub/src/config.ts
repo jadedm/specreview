@@ -22,6 +22,38 @@ const NAME = /^[a-z0-9._-]{1,100}$/;
 const DOMAIN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const ACCESS_TEAM = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.cloudflareaccess\.com$/;
 const EMAIL = /^[^\s@]+@([^\s@]+)$/;
+// A team domain makes everyone at it team on the site; a public mail domain
+// would make every user of that service team.
+const PUBLIC_MAIL = new Set([
+  'gmail.com',
+  'googlemail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'msn.com',
+  'yahoo.com',
+  'ymail.com',
+  'icloud.com',
+  'me.com',
+  'mac.com',
+  'aol.com',
+  'proton.me',
+  'protonmail.com',
+  'gmx.com',
+  'gmx.net',
+  'mail.com',
+  'zoho.com',
+  'yandex.com',
+  'yandex.ru',
+  'qq.com',
+  '163.com',
+  'rediffmail.com',
+  'fastmail.com',
+  'hey.com',
+]);
+const TOP_KEYS = new Set(['accessTeamDomain', 'sites']);
+const SITE_KEYS = new Set(['repo', 'accessAud', 'teamDomains', 'approvers', 'ticketRepo']);
+const ownerOf = (repo: string) => repo.split('/')[0];
 
 export const isRepoKey = (value: string) => {
   const [owner, name, extra] = value.split('/');
@@ -41,14 +73,19 @@ export const problemsIn = (raw: unknown): string[] => {
   const problems: string[] = [];
   if (typeof raw !== 'object' || raw === null) return ['config is not a JSON object'];
   const cfg = raw as Raw;
+  // A misspelt key would silently drop whatever it was meant to restrict.
+  for (const key of Object.keys(cfg)) if (!TOP_KEYS.has(key)) problems.push(`unknown key ${key}`);
   if (typeof cfg.accessTeamDomain !== 'string' || !ACCESS_TEAM.test(cfg.accessTeamDomain)) {
     problems.push('accessTeamDomain must be <team>.cloudflareaccess.com');
   }
   if (!Array.isArray(cfg.sites) || cfg.sites.length === 0) return [...problems, 'sites must be a non-empty list'];
   const repos = new Set<string>();
   const auds = new Set<string>();
+  const teamsByTicketRepo = new Map<string, string>();
   (cfg.sites as RawSite[]).forEach((site, i) => {
     const at = `sites[${i}]`;
+    if (typeof site !== 'object' || site === null) return void problems.push(`${at} is not an object`);
+    for (const key of Object.keys(site)) if (!SITE_KEYS.has(key)) problems.push(`${at} has unknown key ${key}`);
     const repo = site?.repo;
     if (typeof repo !== 'string' || !isRepoKey(repo)) problems.push(`${at}.repo must be lowercase owner/name`);
     if (typeof repo === 'string' && repos.has(repo.toLowerCase())) problems.push(`${at}.repo is listed twice`);
@@ -56,6 +93,11 @@ export const problemsIn = (raw: unknown): string[] => {
     const ticketRepo = site?.ticketRepo;
     if (typeof ticketRepo !== 'string' || !isRepoKey(ticketRepo)) {
       problems.push(`${at}.ticketRepo must be lowercase owner/name`);
+    }
+    // A site shows its tickets to its readers and drives their labels, so it
+    // may only use tickets of its own owner.
+    if (typeof ticketRepo === 'string' && typeof repo === 'string' && ownerOf(ticketRepo) !== ownerOf(repo)) {
+      problems.push(`${at}.ticketRepo must belong to the same owner as repo`);
     }
     const aud = site?.accessAud;
     if (typeof aud !== 'string' || !/^\S{1,200}$/.test(aud)) problems.push(`${at}.accessAud is missing or malformed`);
@@ -65,6 +107,15 @@ export const problemsIn = (raw: unknown): string[] => {
     if (!domains || domains.length === 0) problems.push(`${at}.teamDomains must be a non-empty list`);
     if (domains && domains.some((d) => !DOMAIN.test(d))) problems.push(`${at}.teamDomains has a malformed domain`);
     if (domains && new Set(domains).size !== domains.length) problems.push(`${at}.teamDomains has a duplicate`);
+    if (domains && domains.some((d) => PUBLIC_MAIL.has(d))) problems.push(`${at}.teamDomains has a public mail domain`);
+    // Sites sharing a ticket repo share its tickets and labels, so they must
+    // have the same team.
+    if (domains && typeof ticketRepo === 'string') {
+      const team = [...domains].sort().join(',');
+      const seen = teamsByTicketRepo.get(ticketRepo);
+      if (seen !== undefined && seen !== team) problems.push(`${at} shares ${ticketRepo} with a site of another team`);
+      teamsByTicketRepo.set(ticketRepo, team);
+    }
     const approvers = strings(site?.approvers);
     if (!approvers) problems.push(`${at}.approvers must be a list (it may be empty)`);
     for (const email of approvers ?? []) {

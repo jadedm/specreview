@@ -238,7 +238,15 @@ export const reopenThread = async (ctx: Ctx, email: string, role: Role, threadId
   const now = Date.now();
   await recordWrite(ctx, email, now);
   const at = new Date(now).toISOString();
-  const page = await pageOf(ctx.deps.store, site, thread.page);
+  // A thread on a page that has since been removed can still be reopened; its
+  // own hash stands in for the page's in the status history row.
+  const pageHash = await pageOf(ctx.deps.store, site, thread.page).then(
+    (p) => p.hash,
+    (err: unknown) => {
+      if (err instanceof AppError && err.code === 'UNKNOWN_PAGE') return thread.page_hash;
+      throw err;
+    },
+  );
   // Reopening counts against the same caps as posting: the page's, and the
   // thread author's.
   const reopen = db(ctx)
@@ -257,7 +265,7 @@ export const reopenThread = async (ctx: Ctx, email: string, role: Role, threadId
       thread.author,
       MAX_OPEN_THREADS_PER_AUTHOR,
     );
-  const [done, demoted] = await db(ctx).batch([reopen, ...demoteIfReady(ctx, thread.page, email, at, page.hash)]);
+  const [done, demoted] = await db(ctx).batch([reopen, ...demoteIfReady(ctx, thread.page, email, at, pageHash)]);
   if (done.meta.changes === 0 && (await threadOf(ctx, threadId)).state === 'open') {
     throw new AppError(409, 'ALREADY_OPEN');
   }

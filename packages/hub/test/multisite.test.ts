@@ -97,8 +97,11 @@ describe('paths', () => {
     expect((await call(traversal)).status).toBe(401);
     expect((await call(traversal, { email: TEAM })).body).toMatchObject({ email: TEAM });
     // A traversal cannot reach another site's history.
+    // A traversal that lands on another site's history meets that site's
+    // audience: a sidecar token held by a tikiti team member is refused.
     const across = `/inoltrotech/sidecar/_history/${COMMIT_OLD}/../../../../tikiti/backend/_history/${COMMIT_OLD}/${PAGE}.md`;
-    const r = await call(across, { email: TEAM });
+    const r = await call(across, { raw: true, token: await token({ email: 'dev@tikiti.live', aud: AUD[SIDECAR] }) });
+    expect(r.status).toBe(401);
     expect(String(r.body)).not.toContain('Tikiti only');
   });
 
@@ -279,5 +282,65 @@ describe('config', () => {
     const broken = { SPECREVIEW_CONFIG: configWith((c) => ({ ...c, sites: [] })) };
     expect((await call('/', { envOverride: broken })).status).toBe(500);
     expect((await call('/no/site/_api/me', { envOverride: broken })).status).toBe(500);
+  });
+});
+
+describe('review fixes', () => {
+  it('config: ticketRepo under another owner, shared ticket repo across teams, public mail, unknown keys', async () => {
+    const cases: [string, (c: typeof CONFIG) => unknown][] = [
+      // Each case breaks one rule only: tikiti has its own team and ticket repo.
+      ['ticketRepo of another owner', (c) => ((c.sites[2].ticketRepo = 'someone-else/tracker'), c)],
+      ['shared ticket repo, different team', (c) => ((c.sites[1].teamDomains = ['inoltro.ai', 'partner.example']), c)],
+      ['public mail as team', (c) => ((c.sites[2].teamDomains = ['gmail.com']), (c.sites[2].approvers = []), c)],
+      ['unknown top-level key', (c) => ({ ...c, sitez: [] })],
+      ['unknown site key', (c) => (((c.sites[0] as Record<string, unknown>).readerz = ['x@y.z']), c)],
+    ];
+    for (const [name, patch] of cases) {
+      const r = await call('/api/me', { email: TEAM, envOverride: { SPECREVIEW_CONFIG: configWith(patch) } });
+      expect(errorCode(r), name).toBe('CONFIG_INVALID');
+    }
+  });
+
+  it('labels are created in a repo that has none, once', async () => {
+    expect(github.labelDefs.get('inoltrotech/sidecar')).toBeUndefined();
+    await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
+    expect([...github.labelDefs.get('inoltrotech/sidecar')!].sort()).toEqual([
+      'docs: in review',
+      'docs: pending',
+      'docs: ready to build',
+    ]);
+    const before = github.calls.filter((c) => c.startsWith('POST /repos/inoltrotech/sidecar/labels')).length;
+    await setStatus(SIDECAR, TEAM, 'pending', 1, LIVE_HASH);
+    const after = github.calls.filter((c) => c.startsWith('POST /repos/inoltrotech/sidecar/labels')).length;
+    expect(after).toBe(before);
+  });
+
+  it('labels that cannot be created fail the sync instead of pretending', async () => {
+    github.downRepos.add('inoltrotech/sidecar');
+    const r = await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
+    expect(r.body).toMatchObject({ labels: 'failed' });
+  });
+
+  it('the ticket box shows the new label straight after a status change', async () => {
+    await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER });
+    await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
+    // #23 is linked only from this page (#52 also from the pending approval page).
+    const tickets = (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER }))
+      .body as unknown as {
+      number: number;
+      labels: string[];
+    }[];
+    expect(tickets.find((t) => t.number === 23)?.labels).toEqual(['docs: in review']);
+  });
+
+  it('the team can reopen a thread on a page that has been removed', async () => {
+    const c = await comment(READER);
+    await call(`/api/comments/${c.body.id}/resolve`, { email: TEAM, body: {} });
+    const all = manifests();
+    delete all[SIDECAR].pages[PAGE];
+    deps.store = memoryStore(all, historyFiles());
+    const { forgetManifests } = await import('../src/manifest');
+    forgetManifests();
+    expect((await call(`/api/comments/${c.body.id}/reopen`, { email: TEAM, body: {} })).status).toBe(200);
   });
 });

@@ -118,6 +118,41 @@ const wantedStatuses = async (hub: Hub, repo: string): Promise<Map<number, Statu
   return want;
 };
 
+// Our three labels are created in a repo the first time they are needed
+// (once per isolate), so a fresh repo needs no manual setup.
+const LABEL_COLOUR: Record<string, string> = {
+  [STATUS_LABEL.pending]: 'cfd3d7',
+  [STATUS_LABEL.in_review]: 'fbca04',
+  [STATUS_LABEL.ready]: '0e8a16',
+};
+const labelsReady = new Set<string>();
+
+const ensureLabels = async (hub: Hub, repo: string): Promise<boolean> => {
+  if (labelsReady.has(repo)) return true;
+  const results = await Promise.all(
+    ownedLabels.map(async (name) => {
+      const res = await call(hub, repo, 'write', `/labels/${encodeURIComponent(name)}`).catch(() => null);
+      if (res?.ok) return true;
+      if (res?.status !== 404) return false;
+      const made = await call(hub, repo, 'write', '/labels', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          color: LABEL_COLOUR[name],
+          description: 'Set by specreview from the docs page status',
+        }),
+      }).catch(() => null);
+      // 422: someone created it meanwhile.
+      return made?.ok === true || made?.status === 422;
+    }),
+  );
+  if (results.every(Boolean)) labelsReady.add(repo);
+  return results.every(Boolean);
+};
+
+// For tests.
+export const forgetLabelSetup = () => labelsReady.clear();
+
 const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string): Promise<boolean> => {
   const res = await call(hub, repo, 'write', `/issues/${n}`).catch(() => null);
   if (!res?.ok) return false;
@@ -144,7 +179,10 @@ const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string): Pr
         () => false,
       ),
     );
-  return (await Promise.all(removals)).every(Boolean);
+  const removed = (await Promise.all(removals)).every(Boolean);
+  // The ticket box would otherwise show the old label as fresh for minutes.
+  await hub.env.DB.prepare('DELETE FROM ticket_cache WHERE repo = ? AND number = ?').bind(repo, n).run();
+  return removed;
 };
 
 // Sets each ticket's label from the statuses read at the start of the sync.
@@ -153,7 +191,7 @@ const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string): Pr
 const syncTickets = async (hub: Hub, repo: string, tickets: number[]): Promise<'updated' | 'failed' | 'none'> => {
   if (tickets.length === 0) return 'none';
   const want = await wantedStatuses(hub, repo).catch(() => null);
-  if (!want) return 'failed';
+  if (!want || !(await ensureLabels(hub, repo))) return 'failed';
   const results = await Promise.all(
     tickets.map((n) => syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'])),
   );
