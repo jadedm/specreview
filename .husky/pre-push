@@ -1,0 +1,16 @@
+# Gitflow, checked on what is pushed, not on the branch checked out:
+# no pushes to develop or main; other branches named <prefix>/<issue>-<slug>
+# or release/<x.y.z>; tags pass.
+valid='^(feature|bugfix|hotfix|chore|fix|ci|infra|refactor|docs)/[0-9]+-[a-z0-9.-]+$|^release/[0-9]+\.[0-9]+\.[0-9]+$'
+while read -r _local _sha remote_ref _rsha; do
+  case "$remote_ref" in
+    refs/tags/*) continue ;;
+    refs/heads/develop|refs/heads/main) echo "pre-push: refusing to push to $remote_ref; open a pull request." >&2; exit 1 ;;
+  esac
+  name=${remote_ref#refs/heads/}
+  if ! echo "$name" | grep -Eq "$valid"; then
+    echo "pre-push: branch '$name' must be <prefix>/<issue>-<slug> or release/<x.y.z>." >&2
+    exit 1
+  fi
+done
+pnpm -s typecheck

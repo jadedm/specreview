@@ -1,0 +1,33 @@
+{
+  "name": "specreview-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "lint": "eslint --fix .",
+    "lint:check": "eslint --max-warnings 0 .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "build": "pnpm -r build",
+    "prepare": "husky",
+    "check:packages": "node scripts/check-packages.mjs"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "prettier": "^3.9.9",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^7.3.7",
+    "vitest": "~4.1.11"
+  }
+}
