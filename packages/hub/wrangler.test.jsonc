@@ -1,0 +1,8 @@
+// Test-only config: the hub with a local D1. Sites, tokens and the store come
+// from the test helpers.
+{
+  "name": "specreview-hub-test",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "d1_databases": [{ "binding": "DB", "database_name": "test", "database_id": "test", "migrations_dir": "migrations" }],
+}

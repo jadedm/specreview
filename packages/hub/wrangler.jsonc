@@ -6,4 +6,15 @@
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
   "preview_urls": false,
+  // Written by `specreview init` (#7) when it creates the database.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "specreview",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  // Label reconciliation: repairs failed or overlapping syncs and clears stray labels.
+  "triggers": { "crons": ["*/5 * * * *"] },
 }
