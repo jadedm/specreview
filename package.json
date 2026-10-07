@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.28.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "lint": "eslint --fix .",
@@ -13,7 +13,8 @@
     "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
     "test": "pnpm -r --workspace-concurrency=1 test",
     "build": "pnpm -r build",
-    "prepare": "husky"
+    "prepare": "husky",
+    "check:packages": "node scripts/check-packages.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.3",

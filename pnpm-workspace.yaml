@@ -1,2 +1,6 @@
 packages:
   - packages/*
+# Native binaries the Workers runtime and bundler need; everything else stays blocked.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

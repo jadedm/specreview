@@ -1,5 +1,5 @@
 {
-  "name": "@specreview/cli",
+  "name": "@jadedm/specreview",
   "private": true,
   "type": "module",
   "scripts": {
