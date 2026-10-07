@@ -1,0 +1,5 @@
+# Block environment files; examples with placeholders are the only exception.
+if git diff --cached --name-only | grep -E '(^|/)\.env' | grep -v '\.example$'; then
+  echo "pre-commit: refusing to commit an environment file (above)." >&2
+  exit 1
+fi
