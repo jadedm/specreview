@@ -50,6 +50,16 @@ describe('6: sidebar from the folder tree', () => {
     ]);
   });
 
+  it('titles are escaped, since VitePress renders sidebar text as HTML', () => {
+    const items = sidebarOf([
+      page('index.md', 'Home'),
+      page('a.md', 'A & "B"'),
+      page('g/x.md', 'X'),
+      page('g/index.md', "G's"),
+    ]);
+    expect(items.map((i) => i.text)).toEqual(['Home', 'A &amp; &quot;B&quot;', 'G&#39;s']);
+  });
+
   it('ties break by path, so the order is the same every build', () => {
     const a = sidebarOf([page('index.md', 'H'), page('b.md', 'Same'), page('a.md', 'Same')]);
     expect(a.map((i) => i.link)).toEqual(['/', '/a', '/b']);
