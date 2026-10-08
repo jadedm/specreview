@@ -37,4 +37,6 @@ export type ManifestPage = {
   sections: Section[];
   history: HistoryEntry[];
 };
-export type Manifest = { commit: string; builtAt: string; pages: Record<string, ManifestPage> };
+// csp: the Content-Security-Policy for every response of this version; absent
+// means default-src 'self'.
+export type Manifest = { commit: string; builtAt: string; csp?: string; pages: Record<string, ManifestPage> };

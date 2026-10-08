@@ -4,7 +4,7 @@ import type { Ctx, Deps } from './ctx';
 import type { Env } from './env';
 import type { Purpose } from './github-auth';
 import { AppError } from './http';
-import { manifestOf } from './manifest';
+import { snapshotOf, type Snapshot } from './manifest';
 import { effectiveStatus, readSiteStatuses } from './status-read';
 
 const API = 'https://api.github.com';
@@ -94,20 +94,34 @@ const ownedLabels = Object.values(STATUS_LABEL);
 // them: it is ready to build only when every page that names it is ready.
 const RANK: Record<Status, number> = { pending: 0, in_review: 1, ready: 2 };
 
-// Statuses for every ticket of one ticket repo, across every site that files
-// tickets there. A site never published links nothing; any other failure to
-// read a site makes the whole answer unknown (null), never a guess.
-const wantedStatuses = async (hub: Hub, repo: string): Promise<Map<number, Status> | null> => {
-  const want = new Map<number, Status>();
+// One snapshot per site that files tickets in this repo, read once and used
+// for every decision of a sync, so link collection and statuses never come
+// from two different publishes. A site never published links nothing; a site
+// whose pointer or manifest is broken makes the whole answer unknown (null),
+// never a guess. `known` passes in snapshots the caller already holds.
+type Snapshots = Map<string, Snapshot>;
+const snapshotsFor = async (hub: Hub, repo: string, known: Snapshots = new Map()): Promise<Snapshots | null> => {
+  const snaps: Snapshots = new Map();
   for (const site of hub.config.sites.values()) {
     if (site.ticketRepo !== repo) continue;
-    const manifest = await manifestOf(hub.deps.store, site.repo).catch((err: unknown) =>
-      err instanceof AppError && err.code === 'SITE_NOT_PUBLISHED' ? 'unpublished' : null,
-    );
-    if (manifest === null) return null;
-    if (manifest === 'unpublished') continue;
-    const byPage = new Map((await readSiteStatuses(hub.env, site.repo)).map((r) => [r.page, r]));
-    for (const [page, entry] of Object.entries(manifest.pages)) {
+    const held = known.get(site.key);
+    const snap =
+      held ??
+      (await snapshotOf(hub.deps.store, site.repo).catch((err: unknown) =>
+        err instanceof AppError && err.code === 'SITE_NOT_PUBLISHED' ? 'unpublished' : null,
+      ));
+    if (snap === null) return null;
+    if (snap !== 'unpublished') snaps.set(site.key, snap);
+  }
+  return snaps;
+};
+
+// Statuses for every ticket of one ticket repo, across the given snapshots.
+const wantedStatuses = async (hub: Hub, snaps: Snapshots): Promise<Map<number, Status>> => {
+  const want = new Map<number, Status>();
+  for (const [key, snap] of snaps) {
+    const byPage = new Map((await readSiteStatuses(hub.env, key)).map((r) => [r.page, r]));
+    for (const [page, entry] of Object.entries(snap.manifest.pages)) {
       const status = effectiveStatus(byPage.get(page) ?? null, entry.hash).status;
       for (const n of entry.issues) {
         const current = want.get(n);
@@ -201,9 +215,14 @@ const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string): Pr
 // Sets each ticket's label from the statuses read at the start of the sync.
 // Two syncs that overlap on a shared ticket can still leave the older label
 // or two labels for a moment; the cron below puts it right within 5 minutes.
-const syncTickets = async (hub: Hub, repo: string, tickets: number[]): Promise<'updated' | 'failed' | 'none'> => {
+const syncTickets = async (
+  hub: Hub,
+  repo: string,
+  tickets: number[],
+  snaps: Snapshots,
+): Promise<'updated' | 'failed' | 'none'> => {
   if (tickets.length === 0) return 'none';
-  const want = await wantedStatuses(hub, repo).catch(() => null);
+  const want = await wantedStatuses(hub, snaps).catch(() => null);
   if (!want || !(await ensureLabels(hub, repo))) return 'failed';
   const results = await Promise.all(
     tickets.map((n) => syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'])),
@@ -214,8 +233,10 @@ const syncTickets = async (hub: Hub, repo: string, tickets: number[]): Promise<'
 // After a change on one page: its tickets, with statuses from every site that
 // shares the ticket repo.
 export const syncSiteLabels = async (ctx: Ctx, page: string) => {
-  const manifest = await manifestOf(ctx.deps.store, ctx.site.repo);
-  return syncTickets(ctx, ctx.site.ticketRepo, manifest.pages[page]?.issues ?? []);
+  const own = await ctx.snapshot();
+  const snaps = await snapshotsFor(ctx, ctx.site.ticketRepo, new Map([[ctx.site.key, own]]));
+  if (!snaps) return 'failed';
+  return syncTickets(ctx, ctx.site.ticketRepo, own.manifest.pages[page]?.issues ?? [], snaps);
 };
 
 // Every ticket carrying the label, a page of 100 at a time; null if any page
@@ -261,18 +282,13 @@ const clearUnlinked = async (hub: Hub, repo: string, linked: Set<number>): Promi
 };
 
 const reconcileRepo = async (hub: Hub, repo: string): Promise<'updated' | 'failed' | 'none'> => {
+  const snaps = await snapshotsFor(hub, repo);
+  // Without every site's links, "no page links this ticket" is unknown.
+  if (!snaps) return 'failed';
   const linked = new Set<number>();
-  for (const site of hub.config.sites.values()) {
-    if (site.ticketRepo !== repo) continue;
-    const manifest = await manifestOf(hub.deps.store, site.repo).catch((err: unknown) =>
-      err instanceof AppError && err.code === 'SITE_NOT_PUBLISHED' ? 'unpublished' : null,
-    );
-    // Without every site's links, "no page links this ticket" is unknown.
-    if (manifest === null) return 'failed';
-    if (manifest === 'unpublished') continue;
-    for (const entry of Object.values(manifest.pages)) for (const n of entry.issues) linked.add(n);
-  }
-  const result = await syncTickets(hub, repo, [...linked]);
+  for (const snap of snaps.values())
+    for (const entry of Object.values(snap.manifest.pages)) for (const n of entry.issues) linked.add(n);
+  const result = await syncTickets(hub, repo, [...linked], snaps);
   const cleared = await clearUnlinked(hub, repo, linked);
   return cleared ? result : 'failed';
 };

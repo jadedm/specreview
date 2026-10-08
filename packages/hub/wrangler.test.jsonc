@@ -5,4 +5,5 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "d1_databases": [{ "binding": "DB", "database_name": "test", "database_id": "test", "migrations_dir": "migrations" }],
+  "r2_buckets": [{ "binding": "SITES", "bucket_name": "test-sites" }],
 }

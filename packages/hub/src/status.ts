@@ -2,7 +2,7 @@ import { STATUSES, type Status } from '../shared/text';
 import { type Ctx, siteKey } from './ctx';
 import { syncSiteLabels } from './github';
 import { AppError } from './http';
-import { manifestOf, pageOf } from './manifest';
+import { pageOf } from './manifest';
 import { recordWrite } from './rate-limit';
 import type { Role } from './roles';
 import { effectiveStatus, readSiteStatuses, readStatusRow } from './status-read';
@@ -10,7 +10,7 @@ import { parseBody } from './validate';
 
 export const listStatuses = async (ctx: Ctx) => {
   const site = siteKey(ctx);
-  const manifest = await manifestOf(ctx.deps.store, site);
+  const { manifest } = await ctx.snapshot();
   const byPage = new Map((await readSiteStatuses(ctx.env, site)).map((r) => [r.page, r]));
   return Object.entries(manifest.pages).map(([page, entry]) => ({
     page,
@@ -40,7 +40,7 @@ export const changeStatus = async (ctx: Ctx, email: string, role: Role, raw: unk
   const status = input.status;
   if (!mayChoose[status](role)) throw new AppError(403, 'FORBIDDEN');
   const site = siteKey(ctx);
-  const entry = await pageOf(ctx.deps.store, site, input.page);
+  const entry = pageOf(await ctx.snapshot(), input.page);
   // The client sends the content it was looking at; a sign-off for older
   // content than is live would approve something nobody read.
   if (input.hash !== entry.hash) throw new AppError(409, 'STALE_CONTENT', 'The page changed; reload it.');
