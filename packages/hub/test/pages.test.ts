@@ -23,6 +23,7 @@ import {
   TIKITI,
   token,
   VERSION,
+  WEB,
 } from './helpers';
 
 let spy: ReturnType<typeof installFetch>;
@@ -131,11 +132,13 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
   it('18: someone who may not read the site gets 403 everywhere, with no store or database read', async () => {
     const { files, reads } = spyStore(publishedFiles());
     files.set(`${TIKITI}/current.json`, 'not json');
-    files.delete(`${SIDECAR}/current.json`);
+    files.delete(`${WEB}/current.json`);
     const noDb = { DB: undefined as unknown as Env['DB'] };
+    // sidecar is published, web is not, tikiti's pointer is broken.
     const paths = [
       `/${SIDECAR}/${PAGE}`,
       `/${SIDECAR}/missing`,
+      `/${WEB}/${PAGE}`,
       `/${SIDECAR}/_api/status`,
       `/${SIDECAR}/_api/me`,
       `/${SIDECAR}/_history/${'a'.repeat(40)}/${PAGE}.md`,
@@ -427,8 +430,6 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
       ['hash over 100 characters', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h'.repeat(101) } } })],
       ['hash with a tab', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h\th' } } })],
       ['blank hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '   ' } } })],
-      ['hash with a tab', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h\th' } } })],
-      ['blank hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '   ' } } })],
       ['empty hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '' } } })],
       ['issue as a string', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: ['52'] } } })],
       [
@@ -462,8 +463,11 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
       const out = patch(JSON.parse(files.get(key)!) as Record<string, unknown>);
       if (out === undefined) files.delete(key);
       else files.set(key, typeof out === 'string' ? out : JSON.stringify(out));
+      github.issues.get(52)!.labels.push('docs: in review');
       const r = await page(`/${SIDECAR}/${PAGE}`);
       expect([r.status, errorCode(r)], name).toEqual([503, 'SITE_BROKEN']);
+      expect((await reconcile())['inoltrotech/sidecar'], name).toBe('failed');
+      expect(docsLabels('inoltrotech/sidecar', 52), name).toEqual(['docs: in review']);
     }
   });
 
