@@ -1,19 +1,19 @@
 import { identify } from './auth';
 import { createComment, listComments, reopenThread, replyTo, resolveThread } from './comments';
 import { configOf, type HubConfig } from './config';
+import type { Caller } from './identity';
 import { type Ctx, type Deps, makeCtx } from './ctx';
 import type { Env } from './env';
 import { reconcileLabels, ticketsFor } from './github';
 import { envTokens } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
-import { pageOf } from './manifest';
+import { pageOf, pagesView } from './manifest';
 import { protectedHeaders, servePage } from './pages';
-import { canRead, isTeam, roleOf, type Role } from './roles';
+import { canRead, isTeam, roleOf } from './roles';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
 import { readText, unconfiguredStore } from './store';
 
-type Caller = { email: string; role: Role };
 type Req = { request: Request; url: URL; ctx: Ctx; caller: Caller; params: string[] };
 type Handler = (req: Req) => Promise<Response>;
 
@@ -25,9 +25,11 @@ const pageParam = (url: URL) => {
 
 const get: Record<string, Handler> = {
   '/me': async ({ caller }) => json(caller),
-  '/comments': async ({ ctx, url, caller }) => json(await listComments(ctx, pageParam(url), caller.role)),
-  '/status': async ({ ctx }) => json(await listStatuses(ctx)),
-  '/tickets': async ({ ctx, url }) => json(await ticketsFor(ctx, pageOf(await ctx.snapshot(), pageParam(url)).issues)),
+  '/comments': async ({ ctx, url, caller }) => json(await listComments(ctx, pageParam(url), caller)),
+  '/status': async ({ ctx, caller }) => json(await listStatuses(ctx, caller)),
+  '/tickets': async ({ ctx, url, caller }) =>
+    json(await ticketsFor(ctx, pageOf(await ctx.snapshot(), pageParam(url)).issues, caller.role)),
+  '/pages': async ({ ctx, caller }) => json(pagesView(await ctx.snapshot(), isTeam(caller.role))),
 };
 
 const post: Record<string, Handler> = {
