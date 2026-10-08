@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { UserConfig } from 'vitepress';
 import { filesIn, isInside } from './checks.js';
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
+import { sanitizeRendered } from './sanitize.js';
 import { readPage, sidebarOf } from './sidebar.js';
 
 // A product repo has no node_modules: the Markdown pages it compiles import
@@ -52,6 +53,9 @@ export const historyDirOf = (out: string) => path.join(out, 'history');
 // already v-pre in VitePress.
 const escapeBraces = (html: string) => html.replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 export const noInterpolation = (md: MarkdownIt) => {
+  // Last, after every VitePress plugin: the whole rendered page is sanitized.
+  const render = md.render.bind(md);
+  md.render = (src, env) => sanitizeRendered(render(src, env));
   for (const rule of ['text', 'code_inline'] as const) {
     const original = md.renderer.rules[rule];
     md.renderer.rules[rule] = (tokens, idx, options, env, self) =>

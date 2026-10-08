@@ -14,13 +14,15 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc -p tsconfig.theme.json && cp src/theme/review/review.css dist/theme/review/"
   },
   "devDependencies": {
-    "@types/markdown-it": "^14.2.0"
+    "@types/markdown-it": "^14.2.0",
+    "@types/sanitize-html": "^2.16.2"
   },
   "dependencies": {
     "@specreview/shared": "workspace:*",
     "diff": "9.0.0",
     "gray-matter": "^4.0.3",
     "markdown-it": "15.0.2",
+    "sanitize-html": "^2.18.0",
     "vitepress": "1.6.4",
     "vue": "^3.5.43"
   }

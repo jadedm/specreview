@@ -5,8 +5,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import { BuildError } from './checks.js';
+import { escapeHtml } from './sanitize.js';
 
 const FRONT_MATTER = new Set(['title', 'order', 'issues']);
+// A front matter fence with anything after the dashes names a language.
+export const FRONT_MATTER_LANGUAGE = /^\uFEFF?---[^\S\r\n]*\S/;
+const refuse = () => {
+  throw new BuildError('front matter must be YAML');
+};
 
 export type SidebarItem = { text: string; link?: string; items?: SidebarItem[] };
 type PageInfo = { file: string; title: string; order: number };
@@ -19,7 +25,11 @@ export const titleOf = (file: string, markdown: string, data: Record<string, unk
 };
 
 export const readPage = (docs: string, file: string): PageInfo & { issues: unknown } => {
-  const { data, content } = matter(readFileSync(path.join(docs, file), 'utf8'));
+  const raw = readFileSync(path.join(docs, file), 'utf8');
+  // Front matter in another language (---js) is evaluated by the parser:
+  // refused before any parsing. The same check runs before VitePress (checks.ts).
+  if (FRONT_MATTER_LANGUAGE.test(raw)) throw new BuildError(`${file}: front matter must be YAML`);
+  const { data, content } = matter(raw, { engines: { js: refuse, javascript: refuse } });
   // VitePress acts on other front matter: head adds scripts and tags, layout
   // and hero render HTML. A reviewed page takes only these.
   const unknown = Object.keys(data).filter((k) => !FRONT_MATTER.has(k));
@@ -67,10 +77,11 @@ export const sidebarOf = (pages: PageInfo[]): SidebarItem[] => {
     const groups = subfolders.map((sub): SidebarItem & { sort: PageInfo } => {
       const index = pages.find((p) => p.file === `${sub}/index.md`);
       const sort = index ?? { file: `${sub}/`, title: path.posix.basename(sub), order: Number.POSITIVE_INFINITY };
-      return { text: sort.title, ...(index ? { link: linkOf(index.file) } : {}), items: build(sub), sort };
+      return { text: escapeHtml(sort.title), ...(index ? { link: linkOf(index.file) } : {}), items: build(sub), sort };
     });
     const items: (SidebarItem & { sort: PageInfo })[] = [
-      ...own.map((p) => ({ text: p.title, link: linkOf(p.file), sort: p })),
+      // VitePress renders sidebar text as HTML: titles are escaped.
+      ...own.map((p) => ({ text: escapeHtml(p.title), link: linkOf(p.file), sort: p })),
       ...groups,
     ];
     // The site's own index leads; the rest by order, title, path.

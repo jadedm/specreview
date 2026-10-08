@@ -307,6 +307,50 @@ describe('builds that must fail, naming the cause', () => {
     });
   });
 
+  it('---js front matter is refused before anything evaluates it', () => {
+    const marker = path.join(scratch, `ran-${n}`);
+    const repo = minimal();
+    write(
+      repo,
+      'docs/js.md',
+      `---js\n{ title: require('fs').writeFileSync(${JSON.stringify(marker)}, 'x') }\n---\n\n# JS\n`,
+    );
+    commit(repo, 'js');
+    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('YAML') });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('code-group and alert titles and an HTML page title reach no reader as code or markup', () => {
+    const repo = minimal();
+    write(
+      repo,
+      'docs/sinks.md',
+      page(
+        'Sinks',
+        '::: code-group\n```sh [{{ 6*7 }}<form action=x>]\nx\n```\n:::\n\n> [!TIP] {{ 3*3 }} <form><input></form>\n> body',
+        'title: "<form action=x>Title</form>"\n',
+      ),
+    );
+    commit(repo, 'sinks');
+    expect(build(repo).status).toBe(0);
+    const site = path.join(repo, '.specreview', 'site');
+    // Rendered pages carry no form and no evaluated value; the title is
+    // shown escaped in the sidebar. (Page data JSON holds the title as a
+    // string, which VitePress never renders as markup.)
+    for (const f of filesUnder(site).filter((x) => x.endsWith('.html'))) {
+      const html = readFileSync(path.join(site, f), 'utf8');
+      expect(html, f).not.toMatch(/<form/i);
+      expect(html, f).not.toMatch(/>\s*(42|9)\s*</);
+    }
+    expect(readFileSync(path.join(site, 'index.html'), 'utf8')).toContain('&lt;form action=x&gt;Title&lt;/form&gt;');
+    const chunk = filesUnder(path.join(site, 'assets')).find((x) => /^sinks\.md\.[^.]+\.js$/.test(x))!;
+    const code = readFileSync(path.join(site, 'assets', chunk), 'utf8');
+    // Interpolation would compile to code calling (6*7); here the titles are
+    // literal text inside a static HTML string.
+    expect(code).not.toMatch(/\(\s*6\s*\*\s*7\s*\)|\(\s*3\s*\*\s*3\s*\)/);
+    expect(code).toContain('{{ 3*3 }}');
+  });
+
   it('front matter VitePress acts on (head, layout) is refused', () => {
     for (const front of [
       'head:\n  - - script\n    - {}\n    - "window.__PWN_HEAD=1"\n',

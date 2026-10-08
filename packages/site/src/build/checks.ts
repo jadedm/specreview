@@ -145,6 +145,8 @@ const OUTSIDE_CODE: [RegExp, string][] = [
 const FENCE = /^\s*(`{3,}|~{3,})/;
 
 export const forbiddenIn = (markdown: string): string | null => {
+  if (/^\uFEFF?---[^\S\r\n]*\S/.test(markdown))
+    return 'front matter in a language other than YAML (---js and the like)';
   if (INCLUDE.test(markdown)) return 'includes (<!--@include)';
   // An open fence closes with the same character, at least as long.
   let fence: string | null = null;

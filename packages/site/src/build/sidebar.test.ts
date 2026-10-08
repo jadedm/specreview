@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { linkOf, readPage, sidebarOf, titleOf } from './sidebar.js';
@@ -86,6 +86,17 @@ describe('front matter', () => {
         writeFileSync(path.join(dir, 'bad.md'), `---\n${key}:${value}\n---\n# B\n`);
         expect(() => readPage(dir, 'bad.md'), key).toThrow(`found ${key}`);
       }
+      // Front matter in another language is refused before anything parses it,
+      // so its code never runs.
+      const ran = path.join(dir, 'ran');
+      for (const fence of ['---js', '---javascript', '--- js', '\uFEFF---js']) {
+        writeFileSync(
+          path.join(dir, 'js.md'),
+          `${fence}\n{ title: require('fs').writeFileSync(${JSON.stringify(ran)}, 'x') }\n---\n# J\n`,
+        );
+        expect(() => readPage(dir, 'js.md'), fence).toThrow('YAML');
+      }
+      expect(existsSync(ran)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
