@@ -69,12 +69,23 @@ const PUBLIC_MAIL = new Set([
   'mailbox.org',
   'posteo.de',
   'hanmail.net',
+  'att.net',
+  'comcast.net',
+  'btinternet.com',
+  'free.fr',
+  'inbox.ru',
+  'bk.ru',
+  'list.ru',
+  'yeah.net',
+  'sohu.com',
+  'aliyun.com',
+  'email.com',
 ]);
 // Big providers run a domain per country (yahoo.co.in, hotmail.co.uk), so
 // these are matched by name followed directly by a public suffix; a company's
 // own subdomain such as mail.acme.com is not a match.
 const PUBLIC_MAIL_BRANDS =
-  /^(yahoo|ymail|hotmail|outlook|live|msn|windowslive|aol|gmx|yandex|mail|web|protonmail|proton|rediffmail|rediff|tutanota|tuta|zoho|icloud|me|mac|gmail|googlemail|fastmail|hey|pm|qq|163|126|sina|naver|daum|rambler|libero|orange|laposte|t-online|seznam|wp|o2|interia|rocketmail|lycos)\.(?:[a-z]{2,3}|(?:co|com|net|org)\.[a-z]{2})$/;
+  /^(yahoo|ymail|hotmail|outlook|live|msn|windowslive|aol|gmx|yandex|mail|web|protonmail|proton|rediffmail|rediff|tutanota|tuta|zoho|icloud|me|mac|gmail|googlemail|fastmail|hey|pm|qq|163|126|sina|naver|daum|rambler|libero|orange|laposte|t-online|seznam|wp|o2|interia|rocketmail|lycos)\.(?:[a-z]{2}|(?:co|com|net|org)\.[a-z]{2})$/;
 const isPublicMail = (domain: string) => PUBLIC_MAIL.has(domain) || PUBLIC_MAIL_BRANDS.test(domain);
 
 const TOP_KEYS = new Set(['$schema', 'org', 'accessTeamDomain', 'accessAud', 'admins', 'sites']);

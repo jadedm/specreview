@@ -14,6 +14,15 @@ describe('config rules, one at a time', () => {
     expect(problemsIn(valid())).toEqual([]);
   });
 
+  it('company domains that share a name with a mail brand are fine', () => {
+    for (const domain of ['web.dev', 'hey.app', 'orange.com', 'mac.org']) {
+      const c = valid();
+      c.sites[2].teamDomains = [domain];
+      c.sites[2].approvers = [];
+      expect(problemsIn(c), domain).toEqual([]);
+    }
+  });
+
   it('a $schema line and a company subdomain as team domain are fine', () => {
     expect(problemsIn({ $schema: './specreview.schema.json', ...valid() })).toEqual([]);
     const c = valid();
@@ -113,7 +122,17 @@ describe('config rules, one at a time', () => {
     ],
     ['regional public mail reader domain', (c) => ((c.sites[2].readers = ['@yahoo.co.in']), c), /public mail domain/],
   ];
-  for (const domain of ['yahoo.co.in', 'hotmail.co.uk', 'outlook.in', 'pm.me', 'web.de', 'mail.ru', 'rediffmail.com']) {
+  for (const domain of [
+    'comcast.net',
+    'free.fr',
+    'yahoo.co.in',
+    'hotmail.co.uk',
+    'outlook.in',
+    'pm.me',
+    'web.de',
+    'mail.ru',
+    'rediffmail.com',
+  ]) {
     cases.push([
       `regional public mail team ${domain}`,
       (c) => ((c.sites[2].teamDomains = [domain]), (c.sites[2].approvers = []), c),

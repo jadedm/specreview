@@ -34,11 +34,14 @@ const isPage = (p: unknown): p is ManifestPage => {
   const page = p as ManifestPage;
   const issuesOk =
     Array.isArray(page.issues) &&
-    page.issues.every((n) => Number.isInteger(n) && n > 0) &&
+    page.issues.every((n) => Number.isSafeInteger(n) && n > 0) &&
     new Set(page.issues).size === page.issues.length;
   return (
     isString(page.title) &&
     isString(page.hash) &&
+    // The status API takes a hash of at most 100 characters.
+    page.hash.length > 0 &&
+    page.hash.length <= 100 &&
     issuesOk &&
     Array.isArray(page.sections) &&
     page.sections.every(isSection) &&

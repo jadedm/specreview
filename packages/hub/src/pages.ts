@@ -46,7 +46,9 @@ export const protectedHeaders = (csp: string): Record<string, string> => ({
 const candidates = (path: string, directory: boolean): string[] => {
   if (path === '') return ['index.html'];
   if (directory) return [`${path}/index.html`];
-  if (extensionOf(path) !== '') return [path];
+  // A known file type is served as named; anything else may be a clean URL
+  // with a dot in it (release-1.2 is release-1.2.html).
+  if (Object.hasOwn(TYPES, extensionOf(path))) return [path];
   return [`${path}.html`, `${path}/index.html`, path];
 };
 

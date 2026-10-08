@@ -233,6 +233,8 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
     files.set(`${v}/a/c/index.html`, 'c index');
     files.set(`${v}/a/d`, 'd file');
     files.set(`${v}/a/e.js`, 'e js');
+    files.set(`${v}/release-1.2.html`, 'release page');
+    files.set(`${v}/notes.v2/index.html`, 'dotted dir');
     expect(String((await page(`/${SIDECAR}/a/b`)).body)).toBe('b.html');
     expect(String((await page(`/${SIDECAR}/a/b.html`)).body)).toBe('b.html');
     expect(String((await page(`/${SIDECAR}/a/b/`)).body)).toBe('b index');
@@ -240,6 +242,9 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
     expect(String((await page(`/${SIDECAR}/a/d`)).body)).toBe('d file');
     expect(String((await page(`/${SIDECAR}/a/e.js`)).body)).toBe('e js');
     expect((await page(`/${SIDECAR}/a/e`)).status).toBe(404);
+    // A dot in a clean URL is not a file type.
+    expect(String((await page(`/${SIDECAR}/release-1.2`)).body)).toBe('release page');
+    expect(String((await page(`/${SIDECAR}/notes.v2`)).body)).toBe('dotted dir');
   });
 
   it('27: content types from the table; anything else downloads', async () => {
@@ -407,6 +412,9 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
       ['duplicate issues', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: [52, 52] } } })],
       ['issue zero', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: [0] } } })],
       ['bad section', (m) => ({ ...m, pages: { [PAGE]: { ...page0, sections: [{ id: 'a' }] } } })],
+      ['issue past 2^53', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: [1e21] } } })],
+      ['hash over 100 characters', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h'.repeat(101) } } })],
+      ['empty hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '' } } })],
       ['issue as a string', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: ['52'] } } })],
       [
         'duplicate section ids',
@@ -420,7 +428,10 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
         'history hash not a string',
         (m) => ({ ...m, pages: { [PAGE]: { ...page0, history: [{ ...page0.history[0], hash: null }] } } }),
       ],
-      ['bad history commit', (m) => ({ ...m, pages: { [PAGE]: { ...page0, history: [{ commit: 'abc' }] } } })],
+      [
+        'bad history commit',
+        (m) => ({ ...m, pages: { [PAGE]: { ...page0, history: [{ ...page0.history[0], commit: 'abc' }] } } }),
+      ],
       ['empty csp', (m) => ({ ...m, csp: '' })],
       ['csp with a newline', (m) => ({ ...m, csp: "default-src 'self'\nscript-src *" })],
       ['csp of spaces', (m) => ({ ...m, csp: '   ' })],
