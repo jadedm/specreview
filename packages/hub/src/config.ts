@@ -106,10 +106,11 @@ const isPublicMail = (domain: string) => PUBLIC_MAIL.has(domain) || PUBLIC_MAIL_
 const TOP_KEYS = new Set(['$schema', 'org', 'accessTeamDomain', 'accessAud', 'admins', 'teamLabel', 'sites']);
 const SITE_KEYS = new Set(['repo', 'teamDomains', 'approvers', 'readers', 'ticketRepo', 'teamLabel']);
 
-// Control characters, line and paragraph separators, and the bidi overrides
-// and isolates that reorder text. Joiners and direction marks stay allowed:
+// Control, unassigned, private-use and lone surrogate characters, line and
+// paragraph separators, interlinear annotations, and the bidi overrides and
+// isolates that reorder text. Joiners and direction marks stay allowed:
 // Persian, Indic scripts and emoji need them.
-const INVISIBLE = /[\p{Cc}\p{Zl}\p{Zp}\u202a-\u202e\u2066-\u2069]/u;
+const INVISIBLE = /[\p{Cc}\p{Cn}\p{Co}\p{Cs}\p{Zl}\p{Zp}\u202a-\u202e\u2066-\u2069\ufff9-\ufffb]/u;
 // What does not show on its own: marks, spaces, default-ignorable characters
 // (fillers, joiners, variation selectors) and the blank Braille cell.
 const BLANK = /[\p{Default_Ignorable_Code_Point}\p{M}\s\u2800]/gu;
@@ -126,7 +127,10 @@ const labelProblem = (v: unknown): string | null => {
   // NFKC folds lookalikes such as the fullwidth at sign and letters.
   const folded = v.normalize('NFKC').toLowerCase();
   if (folded.includes('@')) return 'must not contain @';
-  return RESERVED_LABELS.has(folded) ? 'must not be You or Reader' : null;
+  // Invisible characters do not change how a name reads: "You" with a
+  // zero-width space is still You. Lookalike letters from other scripts
+  // (a Cyrillic o) are not caught.
+  return RESERVED_LABELS.has(folded.replace(BLANK, '')) ? 'must not be You or Reader' : null;
 };
 
 export const isOwner = (v: string) => OWNER.test(v);
