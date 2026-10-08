@@ -294,6 +294,51 @@ describe('builds that must fail, naming the cause', () => {
     }
   });
 
+  it('the confinement refuses a file under some other node_modules on the machine', () => {
+    const secret = path.join(scratch, `outside-${n}`, 'node_modules', 'x', 'secret.txt');
+    mkdirSync(path.dirname(secret), { recursive: true });
+    writeFileSync(secret, 'SECRET_NM_TOKEN=abc');
+    const repo = minimal();
+    write(repo, 'docs/leak.md', page('Leak', `![a](${'../'.repeat(30)}${secret.slice(1)}?url)`));
+    commit(repo, 'leak');
+    expect(build(repo)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('only use files inside the docs folder'),
+    });
+  });
+
+  it('front matter VitePress acts on (head, layout) is refused', () => {
+    for (const front of [
+      'head:\n  - - script\n    - {}\n    - "window.__PWN_HEAD=1"\n',
+      'layout: home\nhero:\n  text: "<form></form>"\n',
+    ]) {
+      const repo = minimal();
+      write(repo, 'docs/fm.md', page('FM', 'x', front));
+      commit(repo, 'fm');
+      expect(build(repo), front).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining('front matter may hold only'),
+      });
+    }
+  });
+
+  it('{...} attributes do not reach Vue: no handler, no binding, the text shows', () => {
+    const repo = minimal();
+    write(
+      repo,
+      'docs/attrs.md',
+      page('Attrs', `para two {@click="console.log('PWN_CLICK')"}\n\ny {:title="'PWN_BIND'+(6*7)"}`),
+    );
+    commit(repo, 'attrs');
+    expect(build(repo).status).toBe(0);
+    const site = path.join(repo, '.specreview', 'site');
+    const html = readFileSync(path.join(site, 'attrs.html'), 'utf8');
+    expect(html).not.toContain('PWN_BIND42');
+    expect(html).toContain('@click');
+    const chunks = filesUnder(path.join(site, 'assets')).filter((f) => f.startsWith('attrs.md'));
+    for (const c of chunks) expect(readFileSync(path.join(site, 'assets', c), 'utf8')).not.toMatch(/onClick/);
+  });
+
   it('symlinks in the docs folder are refused', () => {
     const repo = minimal();
     write(repo, 'src/config.txt', 'SECRET');
@@ -312,6 +357,16 @@ describe('builds that must fail, naming the cause', () => {
     write(repo, 'docs/public/x.html', '<script>alert(1)</script>');
     commit(repo, 'html');
     expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('public/x.html') });
+  });
+
+  // macOS disks ignore case: DOCS is docs there.
+  const caseInsensitive = existsSync(path.join(import.meta.dirname.toUpperCase()));
+  it.runIf(caseInsensitive)('--out in other letter case is still the docs folder or .git', () => {
+    const repo = minimal();
+    for (const out of ['DOCS/gen', '.GIT/x']) {
+      expect(build(repo, '--out', out), out).toMatchObject({ status: 1, stderr: expect.stringContaining('--out') });
+    }
+    expect(existsSync(path.join(repo, 'docs', 'gen'))).toBe(false);
   });
 
   it('--out . or .. deletes nothing', () => {

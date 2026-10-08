@@ -13,10 +13,22 @@ import { readPage, sidebarOf } from './sidebar.js';
 // A product repo has no node_modules: the Markdown pages it compiles import
 // Vue, so Vue resolves to the copy this package depends on.
 const vueDir = path.dirname(createRequire(import.meta.url).resolve('vue/package.json'));
-const packageDir = realpathSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'));
+const packageDir = realpathSync.native(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..'));
+// The node_modules tree this package was installed into (where VitePress and
+// Vue are), and no other: a file under some other node_modules on the
+// machine is still outside the docs.
+const nodeModulesOf = (dir: string) => {
+  const marker = `${path.sep}node_modules${path.sep}`;
+  return dir.slice(0, dir.indexOf(marker) + marker.length - 1);
+};
+const modulesDir = nodeModulesOf(
+  realpathSync.native(path.dirname(createRequire(import.meta.url).resolve('vitepress/package.json'))),
+);
 // The theme imports the shared package, which in this workspace is a symlink
 // to a folder outside any node_modules.
-const sharedDir = realpathSync(path.dirname(createRequire(import.meta.url).resolve('@specreview/shared/package.json')));
+const sharedDir = realpathSync.native(
+  path.dirname(createRequire(import.meta.url).resolve('@specreview/shared/package.json')),
+);
 
 export type SiteOptions = {
   repo: string;
@@ -59,12 +71,12 @@ export const confineTo = (allowed: string[]) => ({
     if (file.startsWith('\0') || !path.isAbsolute(file)) return null;
     const real = (() => {
       try {
-        return realpathSync(file);
+        return realpathSync.native(file);
       } catch {
         return null;
       }
     })();
-    if (real === null || real.includes(`${path.sep}node_modules${path.sep}`)) return null;
+    if (real === null) return null;
     if (allowed.some((dir) => isInside(real, dir))) return null;
     throw new Error(`${file}: a page may only use files inside the docs folder`);
   },
@@ -87,7 +99,8 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptio
     // No colour-scheme switch: it adds an inline script and a toggle nobody needs here.
     appearance: false,
     // Pages are Markdown only; raw HTML in a page would bypass the review UI's text-only rule.
-    markdown: { html: false, config: noInterpolation },
+    // {...} attributes would pass Vue directives (@click, :title) to the compiler.
+    markdown: { html: false, attrs: { disable: true }, config: noInterpolation },
     themeConfig: {
       sidebar: sidebarOf(pages),
       outline: { level: [2, 3] },
@@ -101,7 +114,7 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptio
     buildEnd: buildEndFor(collected, historyDirOf(out), root, docsRel),
     vite: {
       resolve: { alias: { vue: vueDir } },
-      plugins: [confineTo([realpathSync(docs), packageDir, sharedDir, realpathSync(vpRoot)])],
+      plugins: [confineTo([realpathSync.native(docs), packageDir, sharedDir, modulesDir, realpathSync.native(vpRoot)])],
     },
   };
 };

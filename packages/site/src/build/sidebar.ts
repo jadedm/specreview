@@ -6,6 +6,8 @@ import path from 'node:path';
 import matter from 'gray-matter';
 import { BuildError } from './checks.js';
 
+const FRONT_MATTER = new Set(['title', 'order', 'issues']);
+
 export type SidebarItem = { text: string; link?: string; items?: SidebarItem[] };
 type PageInfo = { file: string; title: string; order: number };
 
@@ -18,6 +20,14 @@ export const titleOf = (file: string, markdown: string, data: Record<string, unk
 
 export const readPage = (docs: string, file: string): PageInfo & { issues: unknown } => {
   const { data, content } = matter(readFileSync(path.join(docs, file), 'utf8'));
+  // VitePress acts on other front matter: head adds scripts and tags, layout
+  // and hero render HTML. A reviewed page takes only these.
+  const unknown = Object.keys(data).filter((k) => !FRONT_MATTER.has(k));
+  if (unknown.length > 0) {
+    throw new BuildError(
+      `${file}: front matter may hold only ${[...FRONT_MATTER].join(', ')}; found ${unknown.join(', ')}`,
+    );
+  }
   if (data.order !== undefined && (typeof data.order !== 'number' || !Number.isFinite(data.order))) {
     throw new BuildError(`${file}: front matter "order" must be a number`);
   }

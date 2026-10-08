@@ -38,9 +38,9 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   if (!existsSync(docsArg)) throw new BuildError(`--docs ${values.docs} is not a folder`);
   // The repository is the one the command runs in.
   checkGit(cwd);
-  const root = realpathSync(git(cwd, ['rev-parse', '--show-toplevel']).trim());
+  const root = realpathSync.native(git(cwd, ['rev-parse', '--show-toplevel']).trim());
   checkArguments(values.repo, { root, docs: docsArg, out });
-  const docsRel = path.relative(root, realpathSync(docsArg)).split(path.sep).join('/');
+  const docsRel = path.relative(root, realpathSync.native(docsArg)).split(path.sep).join('/');
 
   const exported = exportDocs(root, docsRel);
   try {

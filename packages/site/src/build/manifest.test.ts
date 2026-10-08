@@ -7,6 +7,7 @@ import { MAX_MANIFEST_BYTES } from '@specreview/shared';
 import { checkGit } from './checks.js';
 import {
   assertManifestSize,
+  isKnownScript,
   cspFor,
   docBodyOf,
   inlineScriptHashes,
@@ -130,4 +131,28 @@ describe('24: history needs a full clone', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000); // eight git subprocesses; slow when the Worker project runs alongside
+});
+
+describe('only the inline scripts VitePress writes', () => {
+  const MAC = 'document.documentElement.classList.toggle("mac",/Mac|iPhone|iPod|iPad/i.test(navigator.platform));';
+  const DATA =
+    'window.__VP_HASH_MAP__=JSON.parse("{\\"index.md\\":\\"abc\\"}");window.__VP_SITE_DATA__=JSON.parse("{\\"title\\":\\"T\\"}");';
+  it('accepts the macOS check and the data script', () => {
+    expect(isKnownScript('id="check-mac-os"', MAC)).toBe(true);
+    expect(isKnownScript('', DATA)).toBe(true);
+  });
+
+  it.each([
+    ['a page script', '', 'window.__PWN=1'],
+    ['the macOS check under another id', 'id="other"', MAC],
+    ['code after the data', '', `${DATA}alert(1);`],
+    ['code between the data', '', DATA.replace(';window.__VP_SITE_DATA__', ';alert(1);window.__VP_SITE_DATA__')],
+    [
+      'a string that does not close',
+      '',
+      'window.__VP_HASH_MAP__=JSON.parse("x);window.__VP_SITE_DATA__=JSON.parse("y");',
+    ],
+  ])('refuses %s', (_name, attrs, code) => {
+    expect(isKnownScript(attrs, code)).toBe(false);
+  });
 });

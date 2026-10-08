@@ -32,7 +32,7 @@ export const isInside = (child: string, parent: string) => {
 // with one unresolved path would miss /var against /private/var.
 export const realOf = (p: string): string => {
   const abs = path.resolve(p);
-  if (existsSync(abs)) return realpathSync(abs);
+  if (existsSync(abs)) return realpathSync.native(abs);
   const parent = path.dirname(abs);
   return parent === abs ? abs : path.join(realOf(parent), path.basename(abs));
 };
@@ -46,8 +46,8 @@ export const checkArguments = (repo: string, paths: Paths) => {
   if (!existsSync(paths.docs) || !statSync(paths.docs).isDirectory()) {
     throw new BuildError(`--docs ${paths.docs} is not a folder`);
   }
-  const root = realpathSync(paths.root);
-  const docs = realpathSync(paths.docs);
+  const root = realpathSync.native(paths.root);
+  const docs = realpathSync.native(paths.docs);
   const out = realOf(paths.out);
   if (!isInside(docs, root)) throw new BuildError('--docs must be inside the repository');
   // --out is emptied: it must be a folder of its own inside the repo, never
@@ -92,7 +92,7 @@ export const exportDocs = (root: string, docsRel: string): { docs: string; remov
   }
   // Resolved through symlinks (/var is /private/var on macOS), so VitePress's
   // page paths and ours agree.
-  const into = realpathSync(mkdtempSync(path.join(tmpdir(), 'specreview-docs-')));
+  const into = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'specreview-docs-')));
   const archive = spawnSync('git', ['archive', '--format=tar', 'HEAD', '--', docsRel === '' ? '.' : docsRel], {
     cwd: root,
     maxBuffer: 1024 * 1024 * 1024,

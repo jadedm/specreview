@@ -114,11 +114,32 @@ export const parseGitLog = (log: string, contentPrefix: string): LogEntry[] =>
       ];
     });
 
+const inlineScripts = (html: string) =>
+  [...html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi)]
+    .map((m) => ({ attrs: m[1].trim(), code: m[2] }))
+    .filter((s) => s.code.trim().length > 0);
+
 export const inlineScriptHashes = (html: string): string[] =>
-  [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
-    .map((m) => m[1])
-    .filter((code) => code.trim().length > 0)
-    .map((code) => `'sha256-${createHash('sha256').update(code).digest('base64')}'`);
+  inlineScripts(html).map(({ code }) => `'sha256-${createHash('sha256').update(code).digest('base64')}'`);
+
+// The only inline scripts VitePress writes into a page: the macOS check, and
+// the hash map and site data as JSON string literals. Anything else came from
+// the page (front matter head, say) and would be allowed by hashing it into
+// the CSP, so the build refuses it instead.
+const MAC_CHECK = 'document.documentElement.classList.toggle("mac",/Mac|iPhone|iPod|iPad/i.test(navigator.platform));';
+const JSON_STRING = '"(?:[^"\\\\]|\\\\.)*"';
+const DATA = new RegExp(
+  `^window\\.__VP_HASH_MAP__=JSON\\.parse\\(${JSON_STRING}\\);window\\.__VP_SITE_DATA__=JSON\\.parse\\(${JSON_STRING}\\);$`,
+);
+export const isKnownScript = (attrs: string, code: string) =>
+  (attrs === 'id="check-mac-os"' && code === MAC_CHECK) || (attrs === '' && DATA.test(code));
+
+export const assertKnownScripts = (file: string, html: string) => {
+  for (const { attrs, code } of inlineScripts(html)) {
+    if (!isKnownScript(attrs, code))
+      throw new Error(`${file}: an inline script the build did not write: ${code.slice(0, 80)}`);
+  }
+};
 
 export const cspFor = (hashes: string[]) =>
   [
@@ -212,7 +233,11 @@ export const buildEndFor =
     }
 
     // Every inline script in every built page, the 404 page included.
-    const hashes = htmlFiles(config.outDir).flatMap((f) => inlineScriptHashes(readFileSync(f, 'utf8')));
+    const hashes = htmlFiles(config.outDir).flatMap((f) => {
+      const html = readFileSync(f, 'utf8');
+      assertKnownScripts(path.relative(config.outDir, f), html);
+      return inlineScriptHashes(html);
+    });
     const manifest: Manifest = {
       commit: git(repo, ['rev-parse', 'HEAD']).trim(),
       builtAt: new Date().toISOString(),

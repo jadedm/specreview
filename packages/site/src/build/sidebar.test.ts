@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { linkOf, sidebarOf, titleOf } from './sidebar.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { linkOf, readPage, sidebarOf, titleOf } from './sidebar.js';
 
 const page = (file: string, title: string, order = Number.POSITIVE_INFINITY) => ({ file, title, order });
 
@@ -64,5 +67,27 @@ describe('titles and links', () => {
     expect(linkOf('index.md')).toBe('/');
     expect(linkOf('guide/index.md')).toBe('/guide/');
     expect(linkOf('release-1.2.md')).toBe('/release-1.2');
+  });
+});
+
+describe('front matter', () => {
+  it('takes only title, order and issues', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fm-'));
+    try {
+      writeFileSync(path.join(dir, 'ok.md'), '---\ntitle: T\norder: 2\nissues: [1]\n---\n# T\n');
+      expect(readPage(dir, 'ok.md').title).toBe('T');
+      for (const [key, value] of [
+        ['head', '\n  - - script\n    - {}\n    - "x"'],
+        ['layout', ' home'],
+        ['hero', '\n  text: x'],
+        ['titleTemplate', ' x'],
+        ['description', ' x'],
+      ]) {
+        writeFileSync(path.join(dir, 'bad.md'), `---\n${key}:${value}\n---\n# B\n`);
+        expect(() => readPage(dir, 'bad.md'), key).toThrow(`found ${key}`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
