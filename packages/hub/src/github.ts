@@ -1,4 +1,4 @@
-import { STATUS_LABEL, type Status } from '../shared/text';
+import { STATUS_LABEL, type Status } from '@specreview/shared';
 import type { HubConfig } from './config';
 import type { Ctx, Deps } from './ctx';
 import type { Env } from './env';

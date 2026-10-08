@@ -23,6 +23,7 @@
     "@types/node": "^22.20.5",
     "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",
+    "happy-dom": "20.14.5",
     "husky": "^9.1.7",
     "prettier": "^3.9.9",
     "typescript": "~5.8.3",

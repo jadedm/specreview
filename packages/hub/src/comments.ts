@@ -1,4 +1,4 @@
-import { quoteIn } from '../shared/text';
+import { quoteIn } from '@specreview/shared';
 import {
   BODY,
   demoteIfReady,

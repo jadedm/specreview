@@ -141,6 +141,24 @@ const files = {
 };
 for (const [k, v] of Object.entries(files)) await r2.put(k, v);
 
+// SMOKE_SITE=<out of specreview-site build --repo sidecar>: publish that real
+// build as sidecar's current version instead of the hand-written pages.
+const walk = (dir) =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile())
+    .map((d) => path.relative(dir, path.join(d.parentPath, d.name)).split(path.sep).join('/'));
+if (process.env.SMOKE_SITE) {
+  const out = path.resolve(process.env.SMOKE_SITE);
+  const built = JSON.parse(readFileSync(path.join(out, 'site', 'manifest.json'), 'utf8'));
+  const version = `${built.commit}-301`;
+  for (const f of walk(path.join(out, 'site')))
+    await r2.put(`sidecar/v/${version}/${f}`, readFileSync(path.join(out, 'site', f)));
+  for (const f of walk(path.join(out, 'history')))
+    await r2.put(`sidecar/history/${f}`, readFileSync(path.join(out, 'history', f)));
+  await r2.put('sidecar/current.json', JSON.stringify({ version, publishedAt: new Date().toISOString() }));
+  console.log(`published ${out} as sidecar ${version}`);
+}
+
 const tokens = {};
 for (const e of ['riya@ariai.example', 'dev@inoltro.ai', 'pm@inoltro.ai', 'x@stranger.example', 'Riya@ARIAI.example'])
   tokens[e] = await sign(e);
@@ -174,7 +192,47 @@ http
   })
   .listen(PORT + 1, '127.0.0.1');
 
-console.log(`smoke ready: worker http://127.0.0.1:${PORT}, control http://127.0.0.1:${PORT + 1}`);
+// A stand-in for Access in front of the Worker, for a browser: /__smoke/login?email=
+// sets a cookie, and every other request is forwarded with a token for that
+// email, as Access does. No cookie is a 302 to a login page, as Access does.
+const PROXY = PORT - 1;
+http
+  .createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    if (url.pathname === '/__smoke/login') {
+      const email = url.searchParams.get('email') ?? '';
+      res.writeHead(302, {
+        'set-cookie': `smoke_as=${encodeURIComponent(email)}; Path=/; HttpOnly`,
+        location: '/sidecar/',
+      });
+      return res.end();
+    }
+    const cookie = /(?:^|;\s*)smoke_as=([^;]+)/.exec(req.headers.cookie ?? '');
+    if (!cookie) {
+      res.writeHead(302, { location: `https://${TEAM}/cdn-cgi/access/login` });
+      return res.end();
+    }
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const headers = { ...req.headers, 'cf-access-jwt-assertion': await sign(decodeURIComponent(cookie[1])) };
+    const upstream = http.request(
+      { host: '127.0.0.1', port: PORT, path: req.url, method: req.method, headers },
+      (up) => {
+        res.writeHead(up.statusCode ?? 502, up.headers);
+        up.pipe(res);
+      },
+    );
+    upstream.on('error', () => {
+      res.writeHead(502);
+      res.end('smoke proxy: worker unreachable');
+    });
+    upstream.end(Buffer.concat(chunks));
+  })
+  .listen(PROXY, '127.0.0.1');
+
+console.log(
+  `smoke ready: worker http://127.0.0.1:${PORT}, control http://127.0.0.1:${PORT + 1}, browser http://127.0.0.1:${PROXY}`,
+);
 const stop = async () => {
   await mf.dispose();
   process.exit(0);

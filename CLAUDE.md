@@ -18,12 +18,13 @@ Solo repo for now: loop step 12 (team review) is N/A.
 
 pnpm workspace, one package per part:
 
-| Package           | What it is                                                                         | Ticket     |
-| ----------------- | ---------------------------------------------------------------------------------- | ---------- |
-| `packages/hub`    | The Cloudflare Worker an org deploys: API, comments, status, labels, serving sites | #3, #4, #6 |
-| `packages/site`   | The VitePress theme and build every site uses                                      | #4, #5     |
-| `packages/action` | The publish GitHub Action                                                          | #5         |
-| `packages/cli`    | `@jadedm/specreview`: init, add a site, create the GitHub App                      | #7         |
+| Package           | What it is                                                                          | Ticket     |
+| ----------------- | ----------------------------------------------------------------------------------- | ---------- |
+| `packages/hub`    | The Cloudflare Worker an org deploys: API, comments, status, labels, serving sites  | #3, #4, #6 |
+| `packages/site`   | `specreview-site build`: VitePress config, review UI and manifest for a repo's docs | #15        |
+| `packages/shared` | Text rules and manifest validation used by both the hub and the site build          | #15        |
+| `packages/action` | The publish GitHub Action                                                           | #5         |
+| `packages/cli`    | `@jadedm/specreview`: init, add a site, create the GitHub App                       | #7         |
 
 ## Commands
 
@@ -36,10 +37,24 @@ pnpm check:packages  # fails if a package lacks typecheck, test or build (pnpm -
 pnpm typecheck       # tsc in every package, separate from any bundler
 pnpm test            # vitest in every package; the hub runs in workerd
 pnpm build
-pnpm --filter @specreview/hub test   # one package; names: @specreview/hub, @specreview/site, @specreview/action, @jadedm/specreview (cli)
+pnpm --filter @specreview/hub test   # one package; names: @specreview/hub, @specreview/site, @specreview/shared, @specreview/action, @jadedm/specreview (cli)
 ```
 
-Library packages build with `tsconfig.build.json`, which leaves tests out of `dist/`; Vitest looks only in `src/` (the hub also in `test/`). `action` and `cli` run under Node from `dist/`, so they use `NodeNext` resolution and relative imports need `.js` extensions.
+`@specreview/shared` resolves types from `src/` and runtime from `dist/`; the hub's and site's Vitest configs alias it to `src/` so tests run before the build, and `pnpm -r build` builds it first. `happy-dom` is a root dev dependency on purpose: installed in one package only, pnpm makes a second Vitest variant and the hub's Workers pool fails with "Vitest failed to find the runner" (a stale `node_modules` can keep the old variant; reinstall clean).
+
+Library packages build with `tsconfig.build.json`, which leaves tests out of `dist/`; Vitest looks in `src/` (the hub and site also in `test/`). `action` and `cli` run under Node from `dist/`, so they use `NodeNext` resolution and relative imports need `.js` extensions.
+
+## Site build (packages/site)
+
+- `specreview-site build --repo <name> [--docs docs] [--out .specreview]`, run from inside the product repo. It builds the docs folder **as committed at HEAD**: `git archive` exports it to a temp folder, so no uncommitted, untracked or gitignored file can be published and the manifest's commit is exactly what was built. A throwaway VitePress root (config and theme from this package's `dist/`) builds the export; Vue resolves to this package's copy because a product repo has no `node_modules`.
+- Refused, naming the file: symlinks and submodules in the docs tree; names outside the hub router's grammar (`[A-Za-z0-9._~-]`, no leading dot, no leading `_api`/`_history`, checked after `public/` maps to the site root); in `public/` anything but png, jpg, jpeg, gif, webp, ico, pdf, txt, csv, woff, woff2 (HTML, scripts or SVG would run in the site's origin); includes anywhere (they expand before Markdown, code included); snippet imports, `<script>` and `<style>` outside code; a missing `index.md` at HEAD; a shallow clone.
+- Front matter may hold only `title`, `order` and `issues` (VitePress acts on others: `head` adds scripts, `layout` and `hero` render HTML). The `{...}` attribute syntax is off (it would pass Vue directives to the compiler). The only inline scripts allowed into a page are VitePress's macOS check and its data script; any other fails the build rather than being hashed into the CSP.
+- Every rendered page passes an allowlist sanitizer (`src/build/sanitize.ts`, `sanitize-html`) before Vue compiles it: only the tags, attributes and styles VitePress's own output for plain Markdown uses (a test renders every feature and checks nothing is lost), http, https, mailto or relative URLs, and braces in text as entities. VitePress plugins put page text into the template unescaped (code-group and alert titles, the code language label); this catches them and any others. Sidebar titles are HTML-escaped (VitePress shows them with `v-html`). Front matter in a language other than YAML (`---js`) is refused before anything parses it: gray-matter would evaluate it on the build machine. Before VitePress starts, the command computes the site title and sidebar and refuses any string starting `_vp-fn_` (VitePress runs such strings in its site data as functions during the build) and any title containing `<` or `>` (the site title goes into an inline script unescaped). Old versions in the team's view take no `data:` or script URLs. A Vite plugin (`confineTo`) refuses to load any file outside the export, this package, and the one `node_modules` tree it was installed into, so an image or import cannot publish another repo or runner file.
+- `--out` must be a folder inside the repo, not the repo, `.git`, the docs folder or anything holding it, and is emptied only if empty or marked by an earlier build (`.specreview-output`). A failed build leaves no `site/` behind.
+- Output: `<out>/site/` (base `/<repo>/`, clean URLs, raw HTML off, sidebar from the folder tree, `manifest.json` with the CSP hashing every inline script of every page, validated by `@specreview/shared` and at most 5 MB) and `<out>/history/<commit>/<path>.md`. History follows renames and first-parent merges, keeps only versions inside the docs folder and drops old names the hub cannot serve. A repo using SHA-256 object names is refused (the hub takes 40-hex commits).
+- Review UI (`src/theme/review/`): every call under `<base>_api/` and `<base>_history/`; page data from `_api/pages`; `/folder/` is `folder/index`, `/folder` is `folder` when that page exists; authors, `mine`, ticket titles and history rendered only as the hub sends them; a write that finishes after navigation redraws nothing; the status board under the index page.
+- Tests: `pnpm --filter @specreview/site test` builds the shared package and this one, then runs unit tests and `test/build.test.ts`, which runs the built command on throwaway git repos.
+- Browser smoke: `pnpm build`, then `OUT=$(packages/site/scripts/smoke-fixture.sh)` (builds `test/smoke-docs` as site `sidecar` from a fresh repo), then `SMOKE_SITE=$OUT node packages/hub/scripts/smoke-server.mjs`, and open `http://127.0.0.1:8796/__smoke/login?email=riya@ariai.example` (a stand-in for Access that signs a token from a cookie).
 
 ## Hub (packages/hub)
 

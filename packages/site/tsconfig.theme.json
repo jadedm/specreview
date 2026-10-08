@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": [],
+    "noEmit": false,
+    "rootDir": "src/theme",
+    "outDir": "dist/theme"
+  },
+  "include": ["src/theme"],
+  "exclude": ["src/**/*.test.ts"]
+}

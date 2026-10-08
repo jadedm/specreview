@@ -11,5 +11,7 @@ export default defineConfig({
       },
     })),
   ],
+  // Tests run before the build, so the shared package is read from source.
+  resolve: { alias: { '@specreview/shared': path.join(import.meta.dirname, '../shared/src/index.ts') } },
   test: { include: ['test/**/*.test.ts'], setupFiles: ['test/apply-migrations.ts'] },
 });
