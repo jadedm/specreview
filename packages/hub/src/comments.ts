@@ -27,7 +27,7 @@ const db = (ctx: Ctx) => ctx.env.DB;
 // removed before they were given access.
 export const listComments = async (ctx: Ctx, page: string, role: Role) => {
   const site = siteKey(ctx);
-  const current = await pageOf(ctx.deps.store, site, page);
+  const current = pageOf(await ctx.snapshot(), page);
   const [open, resolved] = await db(ctx).batch<ThreadRow>([
     db(ctx)
       .prepare(`SELECT * FROM threads WHERE site = ? AND page = ? AND state = 'open' ORDER BY created_at, id LIMIT ?`)
@@ -95,7 +95,7 @@ export const createComment = async (ctx: Ctx, email: string, raw: unknown) => {
     body: BODY,
   });
   const site = siteKey(ctx);
-  const page = await pageOf(ctx.deps.store, site, input.page);
+  const page = pageOf(await ctx.snapshot(), input.page);
   const section = page.sections.find((s) => s.id === input.heading);
   if (!section) throw new AppError(400, 'UNKNOWN_HEADING');
   if (!quoteIn(input.quote, section.text)) throw new AppError(400, 'QUOTE_NOT_IN_SECTION');
@@ -240,13 +240,10 @@ export const reopenThread = async (ctx: Ctx, email: string, role: Role, threadId
   const at = new Date(now).toISOString();
   // A thread on a page that has since been removed can still be reopened; its
   // own hash stands in for the page's in the status history row.
-  const pageHash = await pageOf(ctx.deps.store, site, thread.page).then(
-    (p) => p.hash,
-    (err: unknown) => {
-      if (err instanceof AppError && err.code === 'UNKNOWN_PAGE') return thread.page_hash;
-      throw err;
-    },
-  );
+  const snapshot = await ctx.snapshot();
+  const pageHash = Object.hasOwn(snapshot.manifest.pages, thread.page)
+    ? snapshot.manifest.pages[thread.page].hash
+    : thread.page_hash;
   // Reopening counts against the same caps as posting: the page's, and the
   // thread author's.
   const reopen = db(ctx)

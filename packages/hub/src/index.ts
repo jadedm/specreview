@@ -1,16 +1,17 @@
 import { identify } from './auth';
 import { createComment, listComments, reopenThread, replyTo, resolveThread } from './comments';
 import { configOf, type HubConfig } from './config';
-import type { Ctx, Deps } from './ctx';
+import { type Ctx, type Deps, makeCtx } from './ctx';
 import type { Env } from './env';
 import { reconcileLabels, ticketsFor } from './github';
 import { envTokens } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf } from './manifest';
-import { isTeam, roleOf, type Role } from './roles';
+import { protectedHeaders, servePage } from './pages';
+import { canRead, isTeam, roleOf, type Role } from './roles';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
-import { unconfiguredStore } from './store';
+import { readText, unconfiguredStore } from './store';
 
 type Caller = { email: string; role: Role };
 type Req = { request: Request; url: URL; ctx: Ctx; caller: Caller; params: string[] };
@@ -26,8 +27,7 @@ const get: Record<string, Handler> = {
   '/me': async ({ caller }) => json(caller),
   '/comments': async ({ ctx, url, caller }) => json(await listComments(ctx, pageParam(url), caller.role)),
   '/status': async ({ ctx }) => json(await listStatuses(ctx)),
-  '/tickets': async ({ ctx, url }) =>
-    json(await ticketsFor(ctx, (await pageOf(ctx.deps.store, ctx.site.repo, pageParam(url))).issues)),
+  '/tickets': async ({ ctx, url }) => json(await ticketsFor(ctx, pageOf(await ctx.snapshot(), pageParam(url)).issues)),
 };
 
 const post: Record<string, Handler> = {
@@ -66,15 +66,10 @@ const routeApi = (req: Omit<Req, 'params'>, path: string): Promise<Response> => 
 const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: string) => {
   if (!isTeam(req.caller.role)) throw new AppError(403, 'FORBIDDEN');
   if (req.request.method !== 'GET') throw new AppError(405, 'METHOD_NOT_ALLOWED');
-  const text = await req.ctx.deps.store.history(req.ctx.site.repo, commit, path);
+  const text = await readText(req.ctx.deps.store, `${req.ctx.site.repo}/history/${commit}/${path}`);
   if (text === null) throw new AppError(404, 'NOT_FOUND');
   return new Response(text, {
-    headers: {
-      'content-type': 'text/plain; charset=utf-8',
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'none'",
-    },
+    headers: { ...protectedHeaders("default-src 'none'"), 'content-type': 'text/plain; charset=utf-8' },
   });
 };
 
@@ -85,12 +80,25 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.
   if (!route) throw new AppError(404, 'NOT_FOUND');
-  // Pages are served from the store in #4.
-  if (route.kind === 'page') throw new AppError(404, 'NOT_FOUND');
-  const ctx: Ctx = { env, deps, config, site: route.site };
-  const email = await identify(request, config, route.site);
-  const req = { request, url, ctx, caller: { email, role: roleOf(email, route.site) } };
-  return route.kind === 'history' ? serveHistory(req, route.commit, route.path) : routeApi(req, route.path);
+  const email = await identify(request, config);
+  const role = roleOf(email, route.site);
+  // Read access is decided before anything about the site is read: someone
+  // who may not read it gets the same 403 on every path, published or not.
+  if (!canRead(role)) throw new AppError(403, 'FORBIDDEN');
+  const ctx: Ctx = makeCtx(env, deps, config, route.site);
+  const req = { request, url, ctx, caller: { email, role } };
+  const byKind: Record<Route['kind'], () => Promise<Response>> = {
+    page: () => {
+      const page = route as Extract<Route, { kind: 'page' }>;
+      return servePage(ctx, request.method, page.path, page.directory);
+    },
+    history: () => {
+      const h = route as Extract<Route, { kind: 'history' }>;
+      return serveHistory(req, h.commit, h.path);
+    },
+    api: () => routeApi(req, (route as Extract<Route, { kind: 'api' }>).path),
+  };
+  return byKind[route.kind]();
 };
 
 export const createHub = (makeDeps: (env: Env) => Deps) => ({
@@ -105,6 +113,6 @@ export const createHub = (makeDeps: (env: Env) => Deps) => ({
 });
 
 export default createHub((env) => ({
-  store: unconfiguredStore,
+  store: env.SITES ?? unconfiguredStore,
   github: envTokens(env),
 })) satisfies ExportedHandler<Env>;

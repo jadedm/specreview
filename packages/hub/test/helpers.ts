@@ -20,36 +20,43 @@ export const LIVE_HASH = 'hash-live';
 export const COMMIT_OLD = 'a'.repeat(40);
 export const COMMIT_LIVE = 'b'.repeat(40);
 
-// Three sites. sidecar and web share a team and a ticket repo; globex has its
-// own team, Access application and ticket repo.
-export const SIDECAR = 'acme/sidecar';
-export const WEB = 'acme/web';
-export const GLOBEX = 'globex/backend';
-export const AUD: Record<string, string> = { [SIDECAR]: 'aud-sidecar', [WEB]: 'aud-web', [GLOBEX]: 'aud-globex' };
+// One org's hub with three sites. sidecar and web share a team and a ticket
+// repo; globex has its own team and ticket repo. Readers at initech.example
+// may read every site.
+export const ORG = 'acme';
+export const SIDECAR = 'sidecar';
+export const WEB = 'web';
+export const GLOBEX = 'globex';
+export const keyOf = (repo: string) => `${ORG}/${repo}`;
+export const HUB_AUD = 'aud-hub';
+export const VERSION = `${'b'.repeat(40)}-1`;
 
 export const CONFIG = {
+  org: ORG,
   accessTeamDomain: TEAM,
+  accessAud: HUB_AUD,
+  admins: ['owner@acme.dev'],
   sites: [
     {
       repo: SIDECAR,
-      accessAud: AUD[SIDECAR],
       teamDomains: ['acme.dev'],
       approvers: ['approver@acme.dev'],
-      ticketRepo: 'acme/sidecar',
+      readers: ['@initech.example'],
+      ticketRepo: SIDECAR,
     },
     {
       repo: WEB,
-      accessAud: AUD[WEB],
       teamDomains: ['acme.dev'],
       approvers: ['webpm@acme.dev'],
-      ticketRepo: 'acme/sidecar',
+      readers: ['@initech.example'],
+      ticketRepo: SIDECAR,
     },
     {
       repo: GLOBEX,
-      accessAud: AUD[GLOBEX],
       teamDomains: ['globex.dev'],
       approvers: ['pm@globex.dev'],
-      ticketRepo: 'globex/backend',
+      readers: ['@initech.example'],
+      ticketRepo: GLOBEX,
     },
   ],
 };
@@ -120,12 +127,27 @@ export const manifests = (webIssues: number[] = []): Record<string, Manifest> =>
 });
 
 export const historyFiles = (): Record<string, string> => ({
-  [`${SIDECAR}/${COMMIT_OLD}/${PAGE}.md`]: '# Company signup\n\nAnyone with the join link can join.\n',
-  [`${GLOBEX}/${COMMIT_OLD}/${PAGE}.md`]: '# Globex signup\n\nGlobex only.\n',
+  [`${SIDECAR}/history/${COMMIT_OLD}/${PAGE}.md`]: '# Company signup\n\nAnyone with the join link can join.\n',
+  [`${GLOBEX}/history/${COMMIT_OLD}/${PAGE}.md`]: '# Globex signup\n\nGlobex only.\n',
 });
 
+// Every site published at VERSION: pointer, manifest, pages and history.
+export const publishedFiles = (all: Record<string, Manifest> = manifests(), version = VERSION): Map<string, string> => {
+  const files = new Map<string, string>(Object.entries(historyFiles()));
+  for (const [repo, manifest] of Object.entries(all)) {
+    files.set(`${repo}/current.json`, JSON.stringify({ version, publishedAt: '2026-10-08T00:00:00.000Z' }));
+    files.set(`${repo}/v/${version}/manifest.json`, JSON.stringify(manifest));
+    files.set(`${repo}/v/${version}/index.html`, `<!doctype html><title>${repo} home</title>`);
+    files.set(`${repo}/v/${version}/${PAGE}.html`, `<!doctype html><title>${repo} signup</title>`);
+  }
+  return files;
+};
+
 // The store and GitHub access the hub under test uses; tests may replace them.
-export const deps: { store: SiteStore; github: Deps['github'] | null } = { store: memoryStore({}), github: null };
+export const deps: { store: SiteStore; github: Deps['github'] | null } = {
+  store: memoryStore(new Map()),
+  github: null,
+};
 const hub = createHub((e) => ({ store: deps.store, github: deps.github ?? envTokens(e) }));
 
 export const testEnv = (override: Partial<Env> = {}): Env => ({
@@ -156,14 +178,14 @@ export const token = async (claims: Claims = {}) => {
   const jwt = new SignJWT(payload)
     .setProtectedHeader({ alg: claims.alg ?? 'RS256', kid: claims.kid ?? 'k1' })
     .setIssuer(claims.iss ?? `https://${TEAM}`)
-    .setAudience(claims.aud ?? AUD[SIDECAR])
+    .setAudience(claims.aud ?? HUB_AUD)
     .setIssuedAt()
     .setExpirationTime(claims.expiresIn ?? '5m');
   if (claims.notBefore) jwt.setNotBefore(claims.notBefore);
   return jwt.sign(claims.key ?? signing.privateKey);
 };
 
-export const tokenFor = (email: string, site = SIDECAR) => token({ email, aud: AUD[site] });
+export const tokenFor = (email: string) => token({ email, aud: HUB_AUD });
 
 // A stand-in for GitHub's issues API: labels per issue, per repo.
 type StubIssue = { title: string; state: string; labels: string[] };
@@ -176,7 +198,7 @@ const freshRepos = () =>
         [23, { title: 'Join links', state: 'open', labels: [] }],
       ]),
     ],
-    ['globex/backend', new Map([[52, { title: 'Globex queue', state: 'open', labels: [] }]])],
+    ['acme/globex', new Map([[52, { title: 'Globex queue', state: 'open', labels: [] }]])],
   ]);
 export const github = {
   repos: freshRepos(),
@@ -292,7 +314,7 @@ export const installFetch = () =>
 // Fresh state for each test: tables, GitHub stub, store and manifest cache.
 export const reset = async () => {
   github.reset();
-  deps.store = memoryStore(manifests(), historyFiles());
+  deps.store = memoryStore(publishedFiles());
   deps.github = null;
   forgetManifests();
   forgetLabelSetup();
@@ -326,7 +348,7 @@ const pathFor = (path: string, site: string) => {
 export const call = async (path: string, opts: CallOptions = {}) => {
   const site = opts.site ?? SIDECAR;
   const headers = new Headers(opts.headers ?? {});
-  const jwt = opts.token !== undefined ? opts.token : opts.email ? await tokenFor(opts.email, site) : null;
+  const jwt = opts.token !== undefined ? opts.token : opts.email ? await tokenFor(opts.email) : null;
   if (jwt) headers.set('cf-access-jwt-assertion', jwt);
   const hasBody = opts.body !== undefined || opts.rawBody !== undefined;
   if (hasBody && !headers.has('content-type')) headers.set('content-type', 'application/json');

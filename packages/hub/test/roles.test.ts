@@ -3,28 +3,45 @@ import type { Site } from '../src/config';
 import { roleOf } from '../src/roles';
 
 const site: Site = {
-  repo: 'acme/sidecar',
-  accessAud: 'aud',
+  repo: 'sidecar',
+  key: 'acme/sidecar',
   teamDomains: ['acme.dev'],
   approvers: ['approver@acme.dev'],
+  readers: ['@initech.example', 'pm@partner.example'],
   ticketRepo: 'acme/sidecar',
 };
-const other: Site = { ...site, repo: 'globex/backend', teamDomains: ['globex.dev'], approvers: ['pm@globex.dev'] };
+const other: Site = {
+  ...site,
+  repo: 'globex',
+  key: 'acme/globex',
+  teamDomains: ['globex.dev'],
+  approvers: ['pm@globex.dev'],
+  readers: [],
+};
 
 describe('35: roles', () => {
   it('matches the domain exactly', () => {
-    expect(roleOf('x@acme.dev.evil.com', site)).toBe('reader');
-    expect(roleOf('x@evil-acme.dev', site)).toBe('reader');
-    expect(roleOf('x@sub.acme.dev', site)).toBe('reader');
+    expect(roleOf('x@acme.dev.evil.com', site)).toBe('none');
+    expect(roleOf('x@evil-acme.dev', site)).toBe('none');
+    expect(roleOf('x@sub.acme.dev', site)).toBe('none');
     expect(roleOf('x@acme.dev', site)).toBe('team');
-    expect(roleOf('x@аcme.dev', site)).toBe('reader'); // Cyrillic і
+    expect(roleOf('x@аcme.dev', site)).toBe('none'); // Cyrillic і
     expect(roleOf('approver@acme.dev', site)).toBe('approver');
   });
 
   it('M3, M4: team and approver are per site', () => {
-    expect(roleOf('x@acme.dev', other)).toBe('reader');
+    expect(roleOf('x@acme.dev', other)).toBe('none');
     expect(roleOf('x@globex.dev', other)).toBe('team');
-    expect(roleOf('approver@acme.dev', other)).toBe('reader');
-    expect(roleOf('pm@globex.dev', site)).toBe('reader');
+    expect(roleOf('approver@acme.dev', other)).toBe('none');
+    expect(roleOf('pm@globex.dev', site)).toBe('none');
+  });
+
+  it('5, 6: readers by exact email or @domain, nobody else', () => {
+    expect(roleOf('riya@initech.example', site)).toBe('reader');
+    expect(roleOf('pm@partner.example', site)).toBe('reader');
+    expect(roleOf('other@partner.example', site)).toBe('none');
+    expect(roleOf('riya@sub.initech.example', site)).toBe('none');
+    expect(roleOf('riya@initech.example', other)).toBe('none');
+    expect(roleOf('not-an-email', site)).toBe('none');
   });
 });
