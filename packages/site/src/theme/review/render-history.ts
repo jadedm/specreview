@@ -32,6 +32,9 @@ export const historyList = (entries: HistoryEntry[], me: Me, actions: HistoryAct
 // Raw HTML off: old Markdown is shown as text and Markdown only, and
 // markdown-it's link check refuses javascript: and similar links.
 const oldMarkdown = new MarkdownIt({ html: false, linkify: false });
+// markdown-it allows data: images; old versions get http, https, mailto and
+// relative links and images only.
+oldMarkdown.validateLink = (url) => !/^\s*(javascript|vbscript|file|data):/i.test(url);
 
 export const oldVersionView = (entry: HistoryEntry, markdown: string, onClose: () => void) => {
   // vp-doc gives the old version the same typography as the live page.

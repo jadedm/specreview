@@ -17,12 +17,30 @@ const refuse = () => {
 export type SidebarItem = { text: string; link?: string; items?: SidebarItem[] };
 type PageInfo = { file: string; title: string; order: number };
 
+// The first level-one heading outside fenced code.
+const firstHeading = (markdown: string): string | undefined => {
+  let fence: string | null = null;
+  for (const line of markdown.split('\n')) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker && fence === null) fence = marker;
+    else if (marker && fence !== null && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+    else if (fence === null) {
+      const heading = /^#\s+(.+?)\s*#*\s*$/.exec(line)?.[1];
+      if (heading) return heading;
+    }
+  }
+  return undefined;
+};
+
 export const titleOf = (file: string, markdown: string, data: Record<string, unknown>): string => {
   if (typeof data.title === 'string' && data.title.trim() !== '') return data.title.trim();
-  const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(markdown)?.[1];
-  if (heading) return heading;
-  return path.posix.basename(file, '.md');
+  return firstHeading(markdown) ?? path.posix.basename(file, '.md');
 };
+
+// A title is shown as text everywhere. The site title goes into an inline
+// script as JSON that VitePress does not escape for HTML, so < and > are
+// refused rather than trusted to every place a title lands.
+const titleProblem = (title: string) => (/[<>]/.test(title) ? 'may not contain < or >' : null);
 
 export const readPage = (docs: string, file: string): PageInfo & { issues: unknown } => {
   const raw = readFileSync(path.join(docs, file), 'utf8');
@@ -41,9 +59,12 @@ export const readPage = (docs: string, file: string): PageInfo & { issues: unkno
   if (data.order !== undefined && (typeof data.order !== 'number' || !Number.isFinite(data.order))) {
     throw new BuildError(`${file}: front matter "order" must be a number`);
   }
+  const title = titleOf(file, content, data);
+  const problem = titleProblem(title);
+  if (problem) throw new BuildError(`${file}: the title ${problem}`);
   return {
     file,
-    title: titleOf(file, content, data),
+    title,
     order: typeof data.order === 'number' ? data.order : Number.POSITIVE_INFINITY,
     issues: data.issues,
   };

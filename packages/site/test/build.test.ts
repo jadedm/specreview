@@ -307,6 +307,32 @@ describe('builds that must fail, naming the cause', () => {
     });
   });
 
+  it('a title, heading or folder starting _vp-fn_ is refused before VitePress could run it', () => {
+    // No < or >, so this rule is what refuses it.
+    const code = '_vp-fn_(function(){throw new Error("MARKER-"+(6*7))})()';
+    const cases: [string, string, string][] = [
+      ['front matter title', 'docs/fm.md', page('x', 'body', `title: '${code}'\n`)],
+      ['heading', 'docs/h.md', `# ${code}\n\nbody\n`],
+      ['folder name', 'docs/_vp-fn_1/p.md', page('P', 'body')],
+    ];
+    for (const [name, file, text] of cases) {
+      const repo = minimal();
+      write(repo, file, text);
+      commit(repo, name);
+      const r = build(repo);
+      expect(r.status, name).toBe(1);
+      expect(r.stderr, name).toContain('which VitePress would run as code');
+      expect(r.stderr, name).not.toContain('MARKER-42');
+    }
+  });
+
+  it('a title with < or > is refused', () => {
+    const repo = minimal();
+    write(repo, 'docs/t.md', page('x', 'body', 'title: "T</script><b>x"\n'));
+    commit(repo, 't');
+    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('may not contain < or >') });
+  });
+
   it('---js front matter is refused before anything evaluates it', () => {
     const marker = path.join(scratch, `ran-${n}`);
     const repo = minimal();
@@ -328,7 +354,7 @@ describe('builds that must fail, naming the cause', () => {
       page(
         'Sinks',
         '::: code-group\n```sh [{{ 6*7 }}<form action=x>]\nx\n```\n:::\n\n> [!TIP] {{ 3*3 }} <form><input></form>\n> body',
-        'title: "<form action=x>Title</form>"\n',
+        '',
       ),
     );
     commit(repo, 'sinks');
@@ -342,7 +368,6 @@ describe('builds that must fail, naming the cause', () => {
       expect(html, f).not.toMatch(/<form/i);
       expect(html, f).not.toMatch(/>\s*(42|9)\s*</);
     }
-    expect(readFileSync(path.join(site, 'index.html'), 'utf8')).toContain('&lt;form action=x&gt;Title&lt;/form&gt;');
     const chunk = filesUnder(path.join(site, 'assets')).find((x) => /^sinks\.md\.[^.]+\.js$/.test(x))!;
     const code = readFileSync(path.join(site, 'assets', chunk), 'utf8');
     // Interpolation would compile to code calling (6*7); here the titles are

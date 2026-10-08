@@ -65,6 +65,14 @@ describe('47: untrusted text is shown as text', () => {
     noActiveContent(view);
     const hrefs = [...view.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     expect(hrefs).toEqual(['https://inoltro.ai']);
+    const withImage = oldVersionView(
+      { commit: 'c', date: '2026-10-03T00:00:00Z', author: 'm', pr: 51, path: 'p.md', hash: 'h' },
+      '![x](data:image/png;base64,AAAA) ![y](https://inoltro.ai/a.png)',
+      () => {},
+    );
+    expect([...withImage.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
+      'https://inoltro.ai/a.png',
+    ]);
     expect(view.querySelector('h1')?.textContent).toBe('Old');
   });
 });

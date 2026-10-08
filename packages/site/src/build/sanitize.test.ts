@@ -11,6 +11,14 @@ const renderer = async () => {
   return { raw: md.render.bind(md), md: (noInterpolation(md), md) };
 };
 const tagsOf = (html: string) => [...html.matchAll(/<([a-zA-Z0-9-]+)/g)].map((m) => m[1]);
+const attrsOf = (html: string) =>
+  [...html.matchAll(/<([a-zA-Z0-9-]+)([^>]*)>/g)].map((m) =>
+    [...m[2].matchAll(/([^\s=]+)(?:="[^"]*")?/g)]
+      .map((a) => a[1])
+      .filter((name) => name !== '/')
+      .sort()
+      .join(' '),
+  );
 
 describe('the sanitizer keeps what VitePress writes for plain Markdown', () => {
   it('every element of every feature survives', async () => {
@@ -19,6 +27,9 @@ describe('the sanitizer keeps what VitePress writes for plain Markdown', () => {
     const html = raw(source, {});
     const clean = sanitizeRendered(html);
     expect(tagsOf(clean)).toEqual(tagsOf(html));
+    // And every attribute, by name, on every element, except two VitePress
+    // adds that nothing needs: aria-hidden on line numbers, v-pre on ::: v-pre.
+    expect(attrsOf(clean)).toEqual(attrsOf(html));
     for (const kept of ['v-pre', '--shiki-light', 'text-align:center', 'type="radio"', 'class="tip custom-block"']) {
       expect(clean, kept).toContain(kept);
     }

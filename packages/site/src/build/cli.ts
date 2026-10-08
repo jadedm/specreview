@@ -17,6 +17,7 @@ import {
   filesIn,
   OUTPUT_MARK,
 } from './checks.js';
+import { siteShape } from './config.js';
 import { git } from './manifest.js';
 
 const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview]';
@@ -48,6 +49,8 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     if (!files.includes('index.md')) throw new BuildError(`${values.docs}/index.md is required, committed at HEAD`);
     checkPaths(files);
     checkMarkdown(exported.docs, files);
+    // Front matter, titles and the sidebar, checked before VitePress runs.
+    siteShape(exported.docs, values.repo);
 
     // A fresh output every time, so nothing from an earlier build survives;
     // checkArguments allowed emptying it.

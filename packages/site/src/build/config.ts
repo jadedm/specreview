@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { UserConfig } from 'vitepress';
-import { filesIn, isInside } from './checks.js';
+import { BuildError, filesIn, isInside } from './checks.js';
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
 import { sanitizeRendered } from './sanitize.js';
 import { readPage, sidebarOf } from './sidebar.js';
@@ -86,14 +86,40 @@ export const confineTo = (allowed: string[]) => ({
   },
 });
 
-export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptions): UserConfig => {
+// VitePress runs any string in its site data that starts with this prefix as
+// a function, during the build. Titles, headings and folder names all reach
+// the site data, so the finished site title and theme config are searched.
+const FUNCTION_PREFIX = '_vp-fn_';
+export const assertNoFunctionStrings = (value: unknown, where: string): void => {
+  if (typeof value === 'string' && value.startsWith(FUNCTION_PREFIX)) {
+    throw new BuildError(
+      `${where}: "${value.slice(0, 40)}" starts with ${FUNCTION_PREFIX}, which VitePress would run as code`,
+    );
+  }
+  if (Array.isArray(value)) value.forEach((v, i) => assertNoFunctionStrings(v, `${where}[${i}]`));
+  else if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) assertNoFunctionStrings(v, `${where}.${k}`);
+  }
+};
+
+// The site title and theme config, from the pages: computed by the command
+// before VitePress starts (so a refusal is reported as it is) and again here.
+export const siteShape = (docs: string, repo: string) => {
   const pages = filesIn(docs)
     .filter((f) => f.endsWith('.md'))
     .map((f) => readPage(docs, f));
   for (const p of pages) parseIssues(p.file, p.issues);
+  const title = pages.find((p) => p.file === 'index.md')?.title ?? repo;
+  const themeConfig = { sidebar: sidebarOf(pages), outline: { level: [2, 3] as [number, number] } };
+  assertNoFunctionStrings({ title, themeConfig }, 'site');
+  return { title, themeConfig };
+};
+
+export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptions): UserConfig => {
+  const { title, themeConfig } = siteShape(docs, repo);
   const collected: Collected = new Map();
   return {
-    title: pages.find((p) => p.file === 'index.md')?.title ?? repo,
+    title,
     base: `/${repo}/`,
     srcDir: docs,
     outDir: siteDirOf(out),
@@ -105,10 +131,7 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptio
     // Pages are Markdown only; raw HTML in a page would bypass the review UI's text-only rule.
     // {...} attributes would pass Vue directives (@click, :title) to the compiler.
     markdown: { html: false, attrs: { disable: true }, config: noInterpolation },
-    themeConfig: {
-      sidebar: sidebarOf(pages),
-      outline: { level: [2, 3] },
-    },
+    themeConfig,
     transformPageData(pageData) {
       collected.set(pageData.relativePath, {
         title: pageData.title,

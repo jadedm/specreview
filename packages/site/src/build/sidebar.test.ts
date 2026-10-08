@@ -61,6 +61,8 @@ describe('titles and links', () => {
     expect(titleOf('a.md', '# Heading', { title: 'From front matter' })).toBe('From front matter');
     expect(titleOf('a.md', 'text\n\n# Heading #\n', {})).toBe('Heading');
     expect(titleOf('guide/a-page.md', 'no heading', { title: '  ' })).toBe('a-page');
+    // A # line inside fenced code is not the page's heading.
+    expect(titleOf('a.md', '```sh\n# a comment\n```\n\n# Real', {})).toBe('Real');
   });
 
   it('links are clean URLs; a folder index is the folder', () => {
