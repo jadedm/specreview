@@ -106,19 +106,27 @@ const isPublicMail = (domain: string) => PUBLIC_MAIL.has(domain) || PUBLIC_MAIL_
 const TOP_KEYS = new Set(['$schema', 'org', 'accessTeamDomain', 'accessAud', 'admins', 'teamLabel', 'sites']);
 const SITE_KEYS = new Set(['repo', 'teamDomains', 'approvers', 'readers', 'ticketRepo', 'teamLabel']);
 
-// Control, format (bidi overrides) and line or paragraph separators.
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+// Control characters, line and paragraph separators, and the bidi overrides
+// and isolates that reorder text. Joiners and direction marks stay allowed:
+// Persian, Indic scripts and emoji need them.
+const INVISIBLE = /[\p{Cc}\p{Zl}\p{Zp}\u202a-\u202e\u2066-\u2069]/u;
+// What does not show on its own: marks, spaces, default-ignorable characters
+// (fillers, joiners, variation selectors) and the blank Braille cell.
+const BLANK = /[\p{Default_Ignorable_Code_Point}\p{M}\s\u2800]/gu;
 // The names readers see for themselves and for each other.
 const RESERVED_LABELS = new Set(['you', 'reader']);
 
 // Shown to readers in place of a team member's email, so it must not be one.
 const labelProblem = (v: unknown): string | null => {
   if (v === undefined) return null;
-  if (typeof v !== 'string' || v.length < 1 || v.length > 40) return 'must be 1 to 40 characters';
+  const length = typeof v === 'string' ? [...v].length : 0;
+  if (typeof v !== 'string' || length < 1 || length > 40) return 'must be 1 to 40 characters';
   if (INVISIBLE.test(v) || v.trim() !== v) return 'must have no control characters or outer spaces';
-  // NFKC folds lookalikes such as the fullwidth at sign into @.
-  if (v.normalize('NFKC').includes('@')) return 'must not contain @';
-  return RESERVED_LABELS.has(v.toLowerCase()) ? 'must not be You or Reader' : null;
+  if (v.replace(BLANK, '') === '') return 'must show something';
+  // NFKC folds lookalikes such as the fullwidth at sign and letters.
+  const folded = v.normalize('NFKC').toLowerCase();
+  if (folded.includes('@')) return 'must not contain @';
+  return RESERVED_LABELS.has(folded) ? 'must not be You or Reader' : null;
 };
 
 export const isOwner = (v: string) => OWNER.test(v);

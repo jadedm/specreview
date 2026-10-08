@@ -58,15 +58,17 @@ for p in "${readers_paths[@]}"; do
   code=$(curl -s -o "$here/body" -w '%{http_code}' -H "cf-access-jwt-assertion: $(tok riya@ariai.example)" "$W$p")
   body=$(cat "$here/body")
   if [ "$code" != 200 ] || [ "${#body}" -lt 3 ]; then echo "FAIL reader view of $p answered $code"; fails=$((fails+1)); fi
-  for leak in pm@inoltro.ai dev@inoltro.ai "Company approval" '"history"'; do
+  for leak in dev@inoltro.ai "Company approval" '"history"'; do
     if grep -qF "$leak" <<<"$body"; then echo "FAIL reader view of $p carries $leak"; fails=$((fails+1)); fi
   done
 done
-# Control: the team's view does carry them, so the check above can fire.
-team_view=$(for p in "${readers_paths[@]}"; do curl -s -H "cf-access-jwt-assertion: $(tok dev@inoltro.ai)" "$W$p"; done)
-# (pm's change was superseded by dev's comment, which moved the page back to in review.)
-for want in dev@inoltro.ai "Company approval" '"history"'; do
-  if ! grep -qF "$want" <<<"$team_view"; then echo "FAIL team view lacks $want, so the reader check proves nothing"; fails=$((fails+1)); fi
+# Control, per path: the team's view of each path carries what the reader's
+# must not, so each check above can fire where it runs.
+team_wants=(dev@inoltro.ai "Company approval" '"history"' dev@inoltro.ai)
+for n in "${!readers_paths[@]}"; do
+  p=${readers_paths[$n]}
+  body=$(curl -s -H "cf-access-jwt-assertion: $(tok dev@inoltro.ai)" "$W$p")
+  if ! grep -qF "${team_wants[$n]}" <<<"$body"; then echo "FAIL team view of $p lacks ${team_wants[$n]}, so the reader check there proves nothing"; fails=$((fails+1)); fi
 done
 echo "reader status changedBy: $(curl -s -H "cf-access-jwt-assertion: $(tok riya@ariai.example)" "$W/sidecar/_api/status" | jq -c '[.[] | .changedBy]')"
 echo "D1 page_status: $(curl -s $C/rows)"

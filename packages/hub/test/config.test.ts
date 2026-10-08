@@ -23,6 +23,20 @@ describe('config rules, one at a time', () => {
     }
   });
 
+  it('labels in other scripts, with joiners, direction marks and emoji, are fine', () => {
+    for (const label of [
+      '\u062a\u06cc\u0645 \u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645',
+      '\u0915\u094d\u200d\u0937 team',
+      '\u{1f469}\u200d\u{1f4bb} team',
+      '\u05e6\u05d5\u05d5\u05ea\u200f',
+      'Équipe Inoltro',
+      '\u30a4\u30ce\u30eb\u30c8\u30ed',
+      '\u{1f600}'.repeat(40),
+    ]) {
+      expect(problemsIn({ ...valid(), teamLabel: label }), label).toEqual([]);
+    }
+  });
+
   it('team labels of 1 and 40 characters, at hub and site level, are fine', () => {
     expect(problemsIn({ ...valid(), teamLabel: 'I' })).toEqual([]);
     const c = valid();
@@ -92,6 +106,21 @@ describe('config rules, one at a time', () => {
       /^teamLabel must not contain @/,
     ],
     ['team label You', (c) => ({ ...c, teamLabel: 'You' }), /^teamLabel must not be You or Reader/],
+    ['team label of a blank Braille cell', (c) => ({ ...c, teamLabel: '\u2800' }), /^teamLabel must show something/],
+    ['team label of a variation selector', (c) => ({ ...c, teamLabel: '\ufe0f' }), /^teamLabel must show something/],
+    ['fullwidth You', (c) => ({ ...c, teamLabel: '\uff39\uff4f\uff55' }), /^teamLabel must not be You or Reader/],
+    ['team label of Hangul filler', (c) => ({ ...c, teamLabel: '\u3164' }), /^teamLabel must show something/],
+    [
+      'team label of marks only',
+      (c) => ({ ...c, teamLabel: 'x'.slice(1) + '\u0336'.repeat(3) }),
+      /^teamLabel must show something/,
+    ],
+    [
+      'team label with an isolate',
+      (c) => ({ ...c, teamLabel: 'Inoltro \u2067team' }),
+      /^teamLabel must have no control/,
+    ],
+    ['team label of 41 emoji', (c) => ({ ...c, teamLabel: '\u{1f600}'.repeat(41) }), /^teamLabel must be 1 to 40/],
     ['team label reader', (c) => ({ ...c, teamLabel: 'reader' }), /^teamLabel must not be You or Reader/],
     ['site team label blank', (c) => ((site2(c).teamLabel = '   '), c), /sites\[2\]\.teamLabel must have no control/],
     ['unknown top-level key', (c) => ({ ...c, sitez: [] }), /unknown key sitez/],
