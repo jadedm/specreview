@@ -44,3 +44,13 @@ it('without the bucket bound, a site answers STORE_NOT_CONFIGURED', async () => 
   expect(res.status).toBe(500);
   expect(((await res.json()) as { error: { code: string } }).error.code).toBe('STORE_NOT_CONFIGURED');
 });
+
+it('28: page data without the bucket bound answers STORE_NOT_CONFIGURED', async () => {
+  const res = await send(
+    `/${SIDECAR}/_api/pages`,
+    { 'cf-access-jwt-assertion': await tokenFor('riya@initech.example') },
+    { SITES: undefined },
+  );
+  expect(res.status).toBe(500);
+  expect(((await res.json()) as { error: { code: string } }).error.code).toBe('STORE_NOT_CONFIGURED');
+});

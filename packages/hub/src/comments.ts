@@ -17,6 +17,7 @@ import { type Ctx, siteKey } from './ctx';
 import { AppError } from './http';
 import { pageOf } from './manifest';
 import { recordWrite } from './rate-limit';
+import { type Caller, shownAs } from './identity';
 import { isTeam, type Role } from './roles';
 import { parseBody } from './validate';
 
@@ -25,7 +26,9 @@ const db = (ctx: Ctx) => ctx.env.DB;
 // Outdated threads quote text the page no longer has. Readers do not get that
 // text, for the same reason old versions are team-only: it may have been
 // removed before they were given access.
-export const listComments = async (ctx: Ctx, page: string, role: Role) => {
+export const listComments = async (ctx: Ctx, page: string, caller: Caller) => {
+  const { role } = caller;
+  const show = shownAs(ctx.site, caller);
   const site = siteKey(ctx);
   const current = pageOf(await ctx.snapshot(), page);
   const [open, resolved] = await db(ctx).batch<ThreadRow>([
@@ -67,17 +70,20 @@ export const listComments = async (ctx: Ctx, page: string, role: Role) => {
       prefix: hide ? '' : t.prefix,
       suffix: hide ? '' : t.suffix,
       pageHash: t.page_hash,
-      author: t.author,
+      author: show(t.author),
+      mine: t.author === caller.email,
       body: t.body,
       state: t.state,
-      resolvedBy: t.resolved_by,
-      resolvedPr: t.resolved_pr,
+      resolvedBy: t.resolved_by === null ? null : show(t.resolved_by),
+      // The fixing PR is the team's history, like page history.
+      resolvedPr: isTeam(role) ? t.resolved_pr : null,
       resolvedAt: t.resolved_at,
       createdAt: t.created_at,
       outdated,
       replies: (byThread.get(t.id) ?? []).map((r) => ({
         id: r.id,
-        author: r.author,
+        author: show(r.author),
+        mine: r.author === caller.email,
         body: r.body,
         createdAt: r.created_at,
       })),

@@ -136,4 +136,22 @@ export const pageOf = (snapshot: Snapshot, page: string): ManifestPage => {
   return found;
 };
 
+// What the review UI needs about every page of the snapshot. History (authors,
+// PRs, dates) is the team's. Built fresh: the cached manifest is never changed.
+export const pagesView = (snapshot: Snapshot, team: boolean) => ({
+  commit: snapshot.manifest.commit,
+  pages: Object.fromEntries(
+    Object.entries(snapshot.manifest.pages).map(([page, p]) => [
+      page,
+      {
+        title: p.title,
+        hash: p.hash,
+        issues: p.issues,
+        sections: p.sections.map(({ id, title, text }) => ({ id, title, text })),
+        ...(team ? { history: p.history } : {}),
+      },
+    ]),
+  ),
+});
+
 export const cspOf = (snapshot: Snapshot) => snapshot.manifest.csp ?? "default-src 'self'";

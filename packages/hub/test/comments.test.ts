@@ -23,7 +23,8 @@ type Thread = {
   resolvedPr: number | null;
   replies: { author: string; body: string }[];
 };
-const threads = async (email = READER) =>
+// The team's view, which carries emails; what a reader sees is in visibility.test.ts.
+const threads = async (email = TEAM) =>
   (await call(`/api/comments?page=${encodeURIComponent(PAGE)}`, { email })).body as unknown as Thread[];
 
 describe('posting', () => {

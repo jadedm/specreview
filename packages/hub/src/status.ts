@@ -4,20 +4,21 @@ import { syncSiteLabels } from './github';
 import { AppError } from './http';
 import { pageOf } from './manifest';
 import { recordWrite } from './rate-limit';
+import { type Caller, shownAs } from './identity';
 import type { Role } from './roles';
 import { effectiveStatus, readSiteStatuses, readStatusRow } from './status-read';
 import { parseBody } from './validate';
 
-export const listStatuses = async (ctx: Ctx) => {
+export const listStatuses = async (ctx: Ctx, caller: Caller) => {
   const site = siteKey(ctx);
+  const show = shownAs(ctx.site, caller);
   const { manifest } = await ctx.snapshot();
   const byPage = new Map((await readSiteStatuses(ctx.env, site)).map((r) => [r.page, r]));
-  return Object.entries(manifest.pages).map(([page, entry]) => ({
-    page,
-    title: entry.title,
-    hash: entry.hash,
-    ...effectiveStatus(byPage.get(page) ?? null, entry.hash),
-  }));
+  return Object.entries(manifest.pages).map(([page, entry]) => {
+    const effective = effectiveStatus(byPage.get(page) ?? null, entry.hash);
+    const changedBy = effective.changedBy === null ? null : show(effective.changedBy);
+    return { page, title: entry.title, hash: entry.hash, ...effective, changedBy };
+  });
 };
 
 const isStatus = (s: string): s is Status => (STATUSES as readonly string[]).includes(s);

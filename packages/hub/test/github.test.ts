@@ -10,9 +10,10 @@ beforeEach(async () => {
 afterEach(() => spy.mockRestore());
 
 const READER = 'riya@initech.example';
+const TEAM = 'dev@acme.dev';
 type Ticket = { number: number; title?: string; stale?: boolean; unavailable?: true; notFound?: true };
 const tickets = async () =>
-  (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER })).body as unknown as Ticket[];
+  (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: TEAM })).body as unknown as Ticket[];
 
 describe('22: tickets box', () => {
   it('fresh from GitHub, then served from the cache without a call', async () => {

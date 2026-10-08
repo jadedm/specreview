@@ -43,10 +43,34 @@ hit GET /sidecar/a//b riya@initech.example 404
 hit GET /sidecar/_api riya@initech.example 404
 hit GET /sidecar/_api/me riya@initech.example 200
 hit GET "/sidecar/_api/tickets?page=onboarding/signup" riya@initech.example 200
+hit GET /sidecar/_api/pages riya@initech.example 200
+hit GET /sidecar/_api/pages dev@acme.dev 200
 hit GET /sidecar/_history/$(printf 'a%.0s' {1..40})/onboarding/signup.md dev@acme.dev 200
 hit GET /sidecar/_history/$(printf 'a%.0s' {1..40})/onboarding/signup.md riya@initech.example 403
 hit POST /sidecar/_api/status pm@acme.dev 200 -H 'content-type: application/json' -H "origin: $W" --data '{"page":"onboarding/signup","status":"ready","expectedVersion":0,"hash":"h-signup"}'
 echo "labels on #52: $(curl -s $C/labels)"
+# A team member comments, so the reader's comment list has someone else in it.
+hit POST /sidecar/_api/comments dev@acme.dev 201 -H 'content-type: application/json' -H "origin: $W" --data '{"page":"onboarding/signup","heading":"who","quote":"Any signed-in admin","body":"Is this still true?"}'
+# A reader's view: labels, no emails, no ticket titles. Each call must answer
+# 200 with a body, or the leak check below would pass on an error.
+readers_paths=(/sidecar/_api/status "/sidecar/_api/tickets?page=onboarding/signup" /sidecar/_api/pages "/sidecar/_api/comments?page=onboarding/signup")
+for p in "${readers_paths[@]}"; do
+  code=$(curl -s -o "$here/body" -w '%{http_code}' -H "cf-access-jwt-assertion: $(tok riya@initech.example)" "$W$p")
+  body=$(cat "$here/body")
+  if [ "$code" != 200 ] || [ "${#body}" -lt 3 ]; then echo "FAIL reader view of $p answered $code"; fails=$((fails+1)); fi
+  for leak in dev@acme.dev "Company approval" '"history"'; do
+    if grep -qF "$leak" <<<"$body"; then echo "FAIL reader view of $p carries $leak"; fails=$((fails+1)); fi
+  done
+done
+# Control, per path: the team's view of each path carries what the reader's
+# must not, so each check above can fire where it runs.
+team_wants=(dev@acme.dev "Company approval" '"history"' dev@acme.dev)
+for n in "${!readers_paths[@]}"; do
+  p=${readers_paths[$n]}
+  body=$(curl -s -H "cf-access-jwt-assertion: $(tok dev@acme.dev)" "$W$p")
+  if ! grep -qF "${team_wants[$n]}" <<<"$body"; then echo "FAIL team view of $p lacks ${team_wants[$n]}, so the reader check there proves nothing"; fails=$((fails+1)); fi
+done
+echo "reader status changedBy: $(curl -s -H "cf-access-jwt-assertion: $(tok riya@initech.example)" "$W/sidecar/_api/status" | jq -c '[.[] | .changedBy]')"
 echo "D1 page_status: $(curl -s $C/rows)"
 echo "publish V2: $(curl -s $C/publish-v2)"
 hit GET /sidecar/onboarding/signup riya@initech.example 200

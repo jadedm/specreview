@@ -223,7 +223,7 @@ describe('labels across sites', () => {
   });
 
   it('M21: a site files tickets in its ticketRepo, not its own repo', async () => {
-    const tickets = await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { site: WEB, email: READER });
+    const tickets = await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { site: WEB, email: TEAM });
     expect((tickets.body as unknown as { number: number; title: string }[])[0]).toMatchObject({
       number: 52,
       title: 'Company approval',
@@ -235,7 +235,7 @@ describe('labels across sites', () => {
     await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER });
     await env.DB.prepare('UPDATE ticket_cache SET fetched_at = 0').run();
     deps.github = { tokenFor: async () => null };
-    const [a] = (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: READER })).body as unknown as {
+    const [a] = (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: TEAM })).body as unknown as {
       stale?: boolean;
       title?: string;
     }[];

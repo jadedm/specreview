@@ -9,6 +9,7 @@ const site: Site = {
   approvers: ['approver@acme.dev'],
   readers: ['@initech.example', 'pm@partner.example'],
   ticketRepo: 'acme/sidecar',
+  teamLabel: 'acme team',
 };
 const other: Site = {
   ...site,

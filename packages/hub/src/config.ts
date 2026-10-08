@@ -19,6 +19,8 @@ export type Site = {
   // Lowercase exact emails and @domain entries; interim until #12 moves
   // readers to the admin page.
   readers: string[];
+  // How a reader sees this site's team in place of their emails.
+  teamLabel: string;
 };
 
 export type HubConfig = {
@@ -101,8 +103,35 @@ const PUBLIC_MAIL_BRANDS =
   /^(yahoo|ymail|hotmail|outlook|live|msn|windowslive|aol|gmx|yandex|mail|web|protonmail|proton|rediffmail|rediff|tutanota|tuta|zoho|icloud|me|mac|gmail|googlemail|fastmail|hey|pm|qq|163|126|sina|naver|daum|rambler|libero|orange|laposte|t-online|seznam|wp|o2|interia|rocketmail|lycos)\.(?:[a-z]{2}|(?:co|com|net|org)\.[a-z]{2})$/;
 const isPublicMail = (domain: string) => PUBLIC_MAIL.has(domain) || PUBLIC_MAIL_BRANDS.test(domain);
 
-const TOP_KEYS = new Set(['$schema', 'org', 'accessTeamDomain', 'accessAud', 'admins', 'sites']);
-const SITE_KEYS = new Set(['repo', 'teamDomains', 'approvers', 'readers', 'ticketRepo']);
+const TOP_KEYS = new Set(['$schema', 'org', 'accessTeamDomain', 'accessAud', 'admins', 'teamLabel', 'sites']);
+const SITE_KEYS = new Set(['repo', 'teamDomains', 'approvers', 'readers', 'ticketRepo', 'teamLabel']);
+
+// Control, unassigned, private-use and lone surrogate characters, line and
+// paragraph separators, interlinear annotations, and the bidi overrides and
+// isolates that reorder text. Joiners and direction marks stay allowed:
+// Persian, Indic scripts and emoji need them.
+const INVISIBLE = /[\p{Cc}\p{Cn}\p{Co}\p{Cs}\p{Zl}\p{Zp}\u202a-\u202e\u2066-\u2069\ufff9-\ufffb]/u;
+// What does not show on its own: marks, spaces, default-ignorable characters
+// (fillers, joiners, variation selectors) and the blank Braille cell.
+const BLANK = /[\p{Default_Ignorable_Code_Point}\p{M}\s\u2800]/gu;
+// The names readers see for themselves and for each other.
+const RESERVED_LABELS = new Set(['you', 'reader']);
+
+// Shown to readers in place of a team member's email, so it must not be one.
+const labelProblem = (v: unknown): string | null => {
+  if (v === undefined) return null;
+  const length = typeof v === 'string' ? [...v].length : 0;
+  if (typeof v !== 'string' || length < 1 || length > 40) return 'must be 1 to 40 characters';
+  if (INVISIBLE.test(v) || v.trim() !== v) return 'must have no control characters or outer spaces';
+  if (v.replace(BLANK, '') === '') return 'must show something';
+  // NFKC folds lookalikes such as the fullwidth at sign and letters.
+  const folded = v.normalize('NFKC').toLowerCase();
+  if (folded.includes('@')) return 'must not contain @';
+  // Invisible characters do not change how a name reads: "You" with a
+  // zero-width space is still You. Lookalike letters from other scripts
+  // (a Cyrillic o) are not caught.
+  return RESERVED_LABELS.has(folded.replace(BLANK, '')) ? 'must not be You or Reader' : null;
+};
 
 export const isOwner = (v: string) => OWNER.test(v);
 export const isRepoName = (v: string) => NAME.test(v) && v !== '.' && v !== '..';
@@ -153,6 +182,8 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
     if (!domain || !isLowerEmail(email)) problems.push(`${at}.approvers has a malformed email`);
     else if (!domains?.includes(domain)) problems.push(`${at}.approvers has an email outside the team domains`);
   }
+  const label = labelProblem(site.teamLabel);
+  if (label) problems.push(`${at}.teamLabel ${label}`);
   const readers = strings(site.readers);
   if (!readers) problems.push(`${at}.readers must be a list (it may be empty)`);
   if (readers && new Set(readers).size !== readers.length) problems.push(`${at}.readers has a duplicate`);
@@ -177,6 +208,8 @@ export const problemsIn = (raw: unknown): string[] => {
   if (typeof cfg.accessAud !== 'string' || !/^\S{1,200}$/.test(cfg.accessAud)) {
     problems.push('accessAud is missing or malformed');
   }
+  const label = labelProblem(cfg.teamLabel);
+  if (label) problems.push(`teamLabel ${label}`);
   const admins = strings(cfg.admins);
   if (!admins || admins.length === 0) problems.push('admins must be a non-empty list');
   if (admins && admins.some((e) => !isLowerEmail(e))) problems.push('admins has a malformed email');
@@ -219,7 +252,15 @@ export const configOf = (text: string | undefined): HubConfig => {
     accessTeamDomain: string;
     accessAud: string;
     admins: string[];
-    sites: { repo: string; teamDomains: string[]; approvers: string[]; readers: string[]; ticketRepo: string }[];
+    teamLabel?: string;
+    sites: {
+      repo: string;
+      teamDomains: string[];
+      approvers: string[];
+      readers: string[];
+      ticketRepo: string;
+      teamLabel?: string;
+    }[];
   };
   const config: HubConfig = {
     org: cfg.org,
@@ -236,6 +277,7 @@ export const configOf = (text: string | undefined): HubConfig => {
           teamDomains: s.teamDomains,
           approvers: s.approvers,
           readers: s.readers,
+          teamLabel: s.teamLabel ?? cfg.teamLabel ?? `${cfg.org} team`,
         },
       ]),
     ),
