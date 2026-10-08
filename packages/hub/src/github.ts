@@ -5,7 +5,10 @@ import type { Env } from './env';
 import type { Purpose } from './github-auth';
 import { AppError } from './http';
 import { snapshotOf, type Snapshot } from './manifest';
+import { isTeam, type Role } from './roles';
 import { effectiveStatus, readSiteStatuses } from './status-read';
+
+const ownedLabels: string[] = Object.values(STATUS_LABEL);
 
 const API = 'https://api.github.com';
 export const TICKET_TTL_MS = 5 * 60_000;
@@ -52,8 +55,9 @@ const fromIssue = (issue: Issue, fetchedAt: number, stale: boolean): Ticket => (
   title: issue.title,
   state: issue.state,
   url: issue.html_url,
-  // Only our labels: a private ticket's other labels are not for readers.
-  labels: issue.labels.map((l) => l.name).filter((name) => name.startsWith('docs:')),
+  // Only our three labels: a private ticket's other labels, or a label that
+  // merely starts with "docs:", are free text and not for readers.
+  labels: issue.labels.map((l) => l.name).filter((name) => ownedLabels.includes(name)),
   fetchedAt: new Date(fetchedAt).toISOString(),
   stale,
 });
@@ -84,12 +88,18 @@ const fetchTicket = async (hub: Hub, repo: string, n: number, now: number): Prom
 };
 
 // Only tickets the build linked to this page, in the site's own ticket repo.
-export const ticketsFor = async (ctx: Ctx, issues: number[]) => {
+// A reader gets the number, state and our label: titles and links are the
+// team's.
+export const ticketsFor = async (ctx: Ctx, issues: number[], role: Role) => {
   const now = Date.now();
-  return Promise.all(issues.map((n) => fetchTicket(ctx, ctx.site.ticketRepo, n, now)));
+  const tickets = await Promise.all(issues.map((n) => fetchTicket(ctx, ctx.site.ticketRepo, n, now)));
+  if (isTeam(role)) return tickets;
+  return tickets.map((t) => {
+    if (!('title' in t)) return t;
+    const { title: _title, url: _url, ...rest } = t;
+    return rest;
+  });
 };
-
-const ownedLabels = Object.values(STATUS_LABEL);
 // A ticket linked from several pages carries the least advanced status among
 // them: it is ready to build only when every page that names it is ready.
 const RANK: Record<Status, number> = { pending: 0, in_review: 1, ready: 2 };

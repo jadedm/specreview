@@ -9,6 +9,7 @@ const site: Site = {
   approvers: ['approver@inoltro.ai'],
   readers: ['@ariai.example', 'pm@partner.example'],
   ticketRepo: 'inoltrotech/sidecar',
+  teamLabel: 'inoltrotech team',
 };
 const other: Site = {
   ...site,

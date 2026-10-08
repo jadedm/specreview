@@ -23,6 +23,13 @@ describe('config rules, one at a time', () => {
     }
   });
 
+  it('team labels of 1 and 40 characters, at hub and site level, are fine', () => {
+    expect(problemsIn({ ...valid(), teamLabel: 'I' })).toEqual([]);
+    const c = valid();
+    (c.sites[2] as Site).teamLabel = 'x'.repeat(40);
+    expect(problemsIn(c)).toEqual([]);
+  });
+
   it('a $schema line and a company subdomain as team domain are fine', () => {
     expect(problemsIn({ $schema: './specreview.schema.json', ...valid() })).toEqual([]);
     const c = valid();
@@ -57,6 +64,36 @@ describe('config rules, one at a time', () => {
     ['malformed admin', (c) => ({ ...c, admins: ['Owner@inoltro.ai'] }), /admins has a malformed email/],
     ['admin with a malformed domain', (c) => ({ ...c, admins: ['owner@inoltro'] }), /admins has a malformed email/],
     ['duplicate admin', (c) => ({ ...c, admins: ['owner@inoltro.ai', 'owner@inoltro.ai'] }), /admins has a duplicate/],
+    ['empty team label', (c) => ({ ...c, teamLabel: '' }), /^teamLabel must be 1 to 40/],
+    ['long team label', (c) => ({ ...c, teamLabel: 'x'.repeat(41) }), /^teamLabel must be 1 to 40/],
+    ['team label not a string', (c) => ({ ...c, teamLabel: 7 }), /^teamLabel must be 1 to 40/],
+    ['team label with a newline', (c) => ({ ...c, teamLabel: 'Inoltro\nteam' }), /^teamLabel must have no control/],
+    ['team label with a tab', (c) => ({ ...c, teamLabel: 'Inoltro\tteam' }), /^teamLabel must have no control/],
+    ['padded team label', (c) => ({ ...c, teamLabel: ' Inoltro team' }), /^teamLabel must have no control/],
+    ['team label that is an email', (c) => ({ ...c, teamLabel: 'team@inoltro.ai' }), /^teamLabel must not contain @/],
+    [
+      'team label with a bidi override',
+      (c) => ({ ...c, teamLabel: 'Inoltro \u202eteam' }),
+      /^teamLabel must have no control/,
+    ],
+    [
+      'team label with a line separator',
+      (c) => ({ ...c, teamLabel: 'Inoltro\u2028team' }),
+      /^teamLabel must have no control/,
+    ],
+    [
+      'team label with a C1 control',
+      (c) => ({ ...c, teamLabel: 'Inoltro\u0085team' }),
+      /^teamLabel must have no control/,
+    ],
+    [
+      'team label with a fullwidth at sign',
+      (c) => ({ ...c, teamLabel: 'team\uff20inoltro.ai' }),
+      /^teamLabel must not contain @/,
+    ],
+    ['team label You', (c) => ({ ...c, teamLabel: 'You' }), /^teamLabel must not be You or Reader/],
+    ['team label reader', (c) => ({ ...c, teamLabel: 'reader' }), /^teamLabel must not be You or Reader/],
+    ['site team label blank', (c) => ((site2(c).teamLabel = '   '), c), /sites\[2\]\.teamLabel must have no control/],
     ['unknown top-level key', (c) => ({ ...c, sitez: [] }), /unknown key sitez/],
     ['no sites', (c) => ({ ...c, sites: [] }), /sites must be a non-empty list/],
     ['bad repo', (c) => ((c.sites[2].repo = 'Tikiti'), c), /sites\[2\]\.repo must be/],

@@ -43,10 +43,32 @@ hit GET /sidecar/a//b riya@ariai.example 404
 hit GET /sidecar/_api riya@ariai.example 404
 hit GET /sidecar/_api/me riya@ariai.example 200
 hit GET "/sidecar/_api/tickets?page=onboarding/signup" riya@ariai.example 200
+hit GET /sidecar/_api/pages riya@ariai.example 200
+hit GET /sidecar/_api/pages dev@inoltro.ai 200
 hit GET /sidecar/_history/$(printf 'a%.0s' {1..40})/onboarding/signup.md dev@inoltro.ai 200
 hit GET /sidecar/_history/$(printf 'a%.0s' {1..40})/onboarding/signup.md riya@ariai.example 403
 hit POST /sidecar/_api/status pm@inoltro.ai 200 -H 'content-type: application/json' -H "origin: $W" --data '{"page":"onboarding/signup","status":"ready","expectedVersion":0,"hash":"h-signup"}'
 echo "labels on #52: $(curl -s $C/labels)"
+# A team member comments, so the reader's comment list has someone else in it.
+hit POST /sidecar/_api/comments dev@inoltro.ai 201 -H 'content-type: application/json' -H "origin: $W" --data '{"page":"onboarding/signup","heading":"who","quote":"Any signed-in admin","body":"Is this still true?"}'
+# A reader's view: labels, no emails, no ticket titles. Each call must answer
+# 200 with a body, or the leak check below would pass on an error.
+readers_paths=(/sidecar/_api/status "/sidecar/_api/tickets?page=onboarding/signup" /sidecar/_api/pages "/sidecar/_api/comments?page=onboarding/signup")
+for p in "${readers_paths[@]}"; do
+  code=$(curl -s -o "$here/body" -w '%{http_code}' -H "cf-access-jwt-assertion: $(tok riya@ariai.example)" "$W$p")
+  body=$(cat "$here/body")
+  if [ "$code" != 200 ] || [ "${#body}" -lt 3 ]; then echo "FAIL reader view of $p answered $code"; fails=$((fails+1)); fi
+  for leak in pm@inoltro.ai dev@inoltro.ai "Company approval" '"history"'; do
+    if grep -qF "$leak" <<<"$body"; then echo "FAIL reader view of $p carries $leak"; fails=$((fails+1)); fi
+  done
+done
+# Control: the team's view does carry them, so the check above can fire.
+team_view=$(for p in "${readers_paths[@]}"; do curl -s -H "cf-access-jwt-assertion: $(tok dev@inoltro.ai)" "$W$p"; done)
+# (pm's change was superseded by dev's comment, which moved the page back to in review.)
+for want in dev@inoltro.ai "Company approval" '"history"'; do
+  if ! grep -qF "$want" <<<"$team_view"; then echo "FAIL team view lacks $want, so the reader check proves nothing"; fails=$((fails+1)); fi
+done
+echo "reader status changedBy: $(curl -s -H "cf-access-jwt-assertion: $(tok riya@ariai.example)" "$W/sidecar/_api/status" | jq -c '[.[] | .changedBy]')"
 echo "D1 page_status: $(curl -s $C/rows)"
 echo "publish V2: $(curl -s $C/publish-v2)"
 hit GET /sidecar/onboarding/signup riya@ariai.example 200
