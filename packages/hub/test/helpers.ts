@@ -2,7 +2,7 @@ import { createExecutionContext, createScheduledController, waitOnExecutionConte
 import { env } from 'cloudflare:workers';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { vi } from 'vitest';
-import type { Manifest } from '../shared/text';
+import type { Manifest } from '@specreview/shared';
 import type { Deps } from '../src/ctx';
 import type { Env } from '../src/env';
 import { configOf } from '../src/config';

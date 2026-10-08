@@ -1,4 +1,4 @@
-import { STATUSES, type Status } from '../shared/text';
+import { STATUSES, type Status } from '@specreview/shared';
 import { type Ctx, siteKey } from './ctx';
 import { syncSiteLabels } from './github';
 import { AppError } from './http';

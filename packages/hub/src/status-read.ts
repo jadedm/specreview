@@ -1,4 +1,4 @@
-import type { Status } from '../shared/text';
+import type { Status } from '@specreview/shared';
 import type { Env } from './env';
 
 export type StatusRow = {
