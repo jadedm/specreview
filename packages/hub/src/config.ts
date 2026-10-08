@@ -80,6 +80,19 @@ const PUBLIC_MAIL = new Set([
   'sohu.com',
   'aliyun.com',
   'email.com',
+  // Brands the pattern below covers only under country domains.
+  'windowslive.com',
+  'tutanota.com',
+  'tuta.com',
+  '126.com',
+  'sina.com',
+  'sina.net',
+  '163.net',
+  'naver.com',
+  'daum.net',
+  'laposte.net',
+  'rocketmail.com',
+  'lycos.com',
 ]);
 // Big providers run a domain per country (yahoo.co.in, hotmail.co.uk), so
 // these are matched by name followed directly by a public suffix; a company's

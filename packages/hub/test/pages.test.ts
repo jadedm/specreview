@@ -235,6 +235,10 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
     files.set(`${v}/a/e.js`, 'e js');
     files.set(`${v}/release-1.2.html`, 'release page');
     files.set(`${v}/notes.v2/index.html`, 'dotted dir');
+    files.set(`${v}/guide/node.js.html`, 'node page');
+    files.set(`${v}/vue.js/index.html`, 'vue dir');
+    files.set(`${v}/guide/node.js.html`, 'node page');
+    files.set(`${v}/vue.js/index.html`, 'vue dir');
     expect(String((await page(`/${SIDECAR}/a/b`)).body)).toBe('b.html');
     expect(String((await page(`/${SIDECAR}/a/b.html`)).body)).toBe('b.html');
     expect(String((await page(`/${SIDECAR}/a/b/`)).body)).toBe('b index');
@@ -245,6 +249,13 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
     // A dot in a clean URL is not a file type.
     expect(String((await page(`/${SIDECAR}/release-1.2`)).body)).toBe('release page');
     expect(String((await page(`/${SIDECAR}/notes.v2`)).body)).toBe('dotted dir');
+    // A tail that looks like a file type falls back to the page when no such file exists.
+    expect(String((await page(`/${SIDECAR}/guide/node.js`)).body)).toBe('node page');
+    expect(String((await page(`/${SIDECAR}/vue.js`)).body)).toBe('vue dir');
+    // A tail that looks like a file type falls back to the page when no such file exists.
+    expect(String((await page(`/${SIDECAR}/guide/node.js`)).body)).toBe('node page');
+    expect(String((await page(`/${SIDECAR}/vue.js`)).body)).toBe('vue dir');
+    expect(String((await page(`/${SIDECAR}/a/e.js`)).body)).toBe('e js');
   });
 
   it('27: content types from the table; anything else downloads', async () => {
@@ -414,6 +425,10 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
       ['bad section', (m) => ({ ...m, pages: { [PAGE]: { ...page0, sections: [{ id: 'a' }] } } })],
       ['issue past 2^53', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: [1e21] } } })],
       ['hash over 100 characters', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h'.repeat(101) } } })],
+      ['hash with a tab', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h\th' } } })],
+      ['blank hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '   ' } } })],
+      ['hash with a tab', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: 'h\th' } } })],
+      ['blank hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '   ' } } })],
       ['empty hash', (m) => ({ ...m, pages: { [PAGE]: { ...page0, hash: '' } } })],
       ['issue as a string', (m) => ({ ...m, pages: { [PAGE]: { ...page0, issues: ['52'] } } })],
       [

@@ -8,6 +8,7 @@ import { readText, type SiteStore } from './store';
 // <40-hex commit>-<publish run id>.
 export const VERSION = /^[0-9a-f]{40}-[0-9]{1,20}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+const HASH = /^[\x21-\x7e]{1,100}$/;
 const CSP = /^[\x20-\x7e]*[\x21-\x7e][\x20-\x7e]*$/;
 export const POINTER_TTL_MS = 10_000;
 
@@ -39,9 +40,9 @@ const isPage = (p: unknown): p is ManifestPage => {
   return (
     isString(page.title) &&
     isString(page.hash) &&
-    // The status API takes a hash of at most 100 characters.
-    page.hash.length > 0 &&
-    page.hash.length <= 100 &&
+    // The status API takes a hash of at most 100 characters with no spaces
+    // or control characters.
+    HASH.test(page.hash) &&
     issuesOk &&
     Array.isArray(page.sections) &&
     page.sections.every(isSection) &&

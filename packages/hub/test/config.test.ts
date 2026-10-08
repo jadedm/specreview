@@ -123,6 +123,9 @@ describe('config rules, one at a time', () => {
     ['regional public mail reader domain', (c) => ((c.sites[2].readers = ['@yahoo.co.in']), c), /public mail domain/],
   ];
   for (const domain of [
+    'naver.com',
+    '126.com',
+    'laposte.net',
     'comcast.net',
     'free.fr',
     'yahoo.co.in',

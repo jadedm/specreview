@@ -48,7 +48,7 @@ const candidates = (path: string, directory: boolean): string[] => {
   if (directory) return [`${path}/index.html`];
   // A known file type is served as named; anything else may be a clean URL
   // with a dot in it (release-1.2 is release-1.2.html).
-  if (Object.hasOwn(TYPES, extensionOf(path))) return [path];
+  if (Object.hasOwn(TYPES, extensionOf(path))) return [path, `${path}.html`, `${path}/index.html`];
   return [`${path}.html`, `${path}/index.html`, path];
 };
 
