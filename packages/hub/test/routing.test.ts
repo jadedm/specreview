@@ -59,7 +59,7 @@ describe('48: old versions', () => {
     const ok = await call(path, { email: TEAM });
     expect(ok.status).toBe(200);
     expect(String(ok.body)).toContain('Anyone with the join link can join.');
-    expect(ok.headers.get('cache-control')).toBe('no-store');
+    expect(ok.headers.get('cache-control')).toBe('private, no-store');
   });
 });
 
@@ -74,15 +74,16 @@ describe('49, 50: responses and shadowing', () => {
     }
   });
 
-  // The hub has no static assets: every path goes through the Worker.
-  it('the Worker answers /api/comments/ itself, refusing it without a token', async () => {
-    const r = await call('/api/comments/');
-    expect(r.status).toBe(401);
-    expect(String(r.body)).not.toContain('must never answer');
+  // An API path with a trailing slash is no route, and never falls through to
+  // a page of the same name.
+  it('/_api/comments/ is 404, not a page', async () => {
+    const r = await call('/api/comments/', { email: TEAM });
+    expect(r.status).toBe(404);
+    expect(r.headers.get('cache-control')).toBe('no-store');
   });
 
-  it('pages are not served yet (#4); / is 404', async () => {
-    expect((await call('/inoltrotech/sidecar/onboarding/signup')).status).toBe(404);
+  it('pages are served under /<repo>/; / is 404', async () => {
+    expect((await call('/sidecar/onboarding/signup', { email: TEAM })).status).toBe(200);
     expect((await call('/')).status).toBe(404);
   });
 });

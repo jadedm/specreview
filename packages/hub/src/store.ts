@@ -1,24 +1,47 @@
-import type { Manifest } from '../shared/text';
 import { AppError } from './http';
 
-// Where a site's built pages, manifest and old versions live. #4 implements
-// this on R2; tests use the in-memory store below. Paths reaching history()
-// are already validated (routes.ts): a 40-hex commit and plain segments.
-export type SiteStore = {
-  manifest(site: string): Promise<Manifest | null>;
-  history(site: string, commit: string, path: string): Promise<string | null>;
+// Where each site's published files live. Keys, all under the bare repo name:
+//   <repo>/current.json                 which version is live (written last)
+//   <repo>/v/<version>/<path>           the built site of one publish
+//   <repo>/history/<commit>/<path>.md   old page versions
+// R2's get() has this shape, so an R2 bucket is a store as it is.
+export type StoredObject = { text(): Promise<string>; body: ReadableStream | null };
+export type SiteStore = { get(key: string): Promise<StoredObject | null> };
+
+// Any storage failure becomes one generic 503: no key, bucket or error text
+// reaches the response.
+export const read = async (store: SiteStore, key: string): Promise<StoredObject | null> => {
+  try {
+    return await store.get(key);
+  } catch (err) {
+    // The hub's own refusal (no bucket bound) is not a storage outage.
+    if (err instanceof AppError) throw err;
+    console.error('store read failed', err instanceof Error ? err.message : String(err));
+    throw new AppError(503, 'STORAGE_UNAVAILABLE', 'Storage is unavailable; try again shortly.');
+  }
 };
 
-export const memoryStore = (manifests: Record<string, Manifest>, history: Record<string, string> = {}): SiteStore => ({
-  manifest: async (site) => (Object.hasOwn(manifests, site) ? manifests[site] : null),
-  history: async (site, commit, path) => {
-    const key = `${site}/${commit}/${path}`;
-    return Object.hasOwn(history, key) ? history[key] : null;
+export const readText = async (store: SiteStore, key: string): Promise<string | null> => {
+  const obj = await read(store, key);
+  if (!obj) return null;
+  try {
+    return await obj.text();
+  } catch (err) {
+    console.error('store read failed', err instanceof Error ? err.message : String(err));
+    throw new AppError(503, 'STORAGE_UNAVAILABLE', 'Storage is unavailable; try again shortly.');
+  }
+};
+
+// For tests: an in-memory store over a map of keys to text.
+export const memoryStore = (files: Map<string, string>): SiteStore => ({
+  get: async (key) => {
+    if (!files.has(key)) return null;
+    const text = files.get(key) as string;
+    return { text: async () => text, body: new Response(text).body };
   },
 });
 
-// Until #4 there is no production store: refuse plainly rather than pretend.
+// A Worker deployed without the SITES bucket bound.
 export const unconfiguredStore: SiteStore = {
-  manifest: () => Promise.reject(new AppError(500, 'STORE_NOT_CONFIGURED')),
-  history: () => Promise.reject(new AppError(500, 'STORE_NOT_CONFIGURED')),
+  get: () => Promise.reject(new AppError(500, 'STORE_NOT_CONFIGURED')),
 };

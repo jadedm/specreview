@@ -8,10 +8,15 @@ export class AppError extends Error {
   }
 }
 
+// Every JSON response, refusals included: never cached, never framed, never
+// sniffed into something active.
 const BASE_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
   'cache-control': 'no-store',
   'x-content-type-options': 'nosniff',
+  'referrer-policy': 'same-origin',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'none'",
 };
 
 export const json = (data: unknown, status = 200): Response =>
