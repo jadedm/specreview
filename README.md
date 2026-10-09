@@ -11,10 +11,11 @@ Built and tested:
 - The hub (`packages/hub`): serving sites, comments and replies, page status, ticket labels, who may see what.
 - The site build (`packages/site`): turns a repo's committed `docs/` into a site with the review UI, plus every page's earlier versions for the team to compare.
 - Publishing (`build/` and `publish/` actions): a GitHub Actions workflow builds the site and uploads it to the hub, authenticated by GitHub's own OIDC token, so a product repo holds no secret.
+- Setting up and deploying a hub (`packages/hub/deploy/`): run by a person from the organisation's own private repo, shaped like `examples/org/`. It creates the Cloudflare resources and the Access applications, then deploys the Worker on the organisation's hostname.
 
 Not built yet:
 
-- A command that creates the hub's Cloudflare resources and deploys it (#7). Until then a hub is set up by hand, and the steps are not written down yet.
+- A guided setup command (#7). Today setup and deploy are the scripts above, driven by files the organisation writes.
 - A GitHub App for ticket labels (#6). Today the hub uses GitHub tokens set as Worker secrets.
 - An admin page for readers and approvers (#12). Today they are listed in the hub's config.
 - Public sites, readable without signing in (#20).
