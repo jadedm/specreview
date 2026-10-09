@@ -1,5 +1,6 @@
 {
   "name": "@specreview/action",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {
