@@ -31,8 +31,14 @@ export const keyOf = (repo: string) => `${ORG}/${repo}`;
 export const HUB_AUD = 'aud-hub';
 export const VERSION = `${'b'.repeat(40)}-1`;
 
+// GitHub ids for the publish tests (publish.test.ts).
+export const OWNER_ID = '1001';
+export const REPO_IDS: Record<string, string> = { sidecar: '2001', web: '2002', tikiti: '2003' };
+export const WORKFLOW = '.github/workflows/docs.yml';
+
 export const CONFIG = {
   org: ORG,
+  ownerId: OWNER_ID,
   accessTeamDomain: TEAM,
   accessAud: HUB_AUD,
   admins: ['owner@inoltro.ai'],
@@ -43,6 +49,9 @@ export const CONFIG = {
       approvers: ['approver@inoltro.ai'],
       readers: ['@ariai.example'],
       ticketRepo: SIDECAR,
+      branch: 'develop',
+      repositoryId: REPO_IDS.sidecar,
+      workflow: WORKFLOW,
     },
     {
       repo: WEB,
@@ -50,6 +59,9 @@ export const CONFIG = {
       approvers: ['webpm@inoltro.ai'],
       readers: ['@ariai.example'],
       ticketRepo: SIDECAR,
+      branch: 'main',
+      repositoryId: REPO_IDS.web,
+      workflow: WORKFLOW,
     },
     {
       repo: TIKITI,
@@ -57,6 +69,10 @@ export const CONFIG = {
       approvers: ['pm@tikiti.live'],
       readers: ['@ariai.example'],
       ticketRepo: TIKITI,
+      branch: 'main',
+      repositoryId: REPO_IDS.tikiti,
+      workflow: WORKFLOW,
+      environment: 'docs',
     },
   ],
 };
@@ -187,6 +203,48 @@ export const token = async (claims: Claims = {}) => {
 
 export const tokenFor = (email: string) => token({ email, aud: HUB_AUD });
 
+// GitHub Actions OIDC, stubbed: its own key, served where GitHub serves it.
+const githubSigning = await generateKeyPair('RS256', { extractable: true });
+const githubJwk = { ...(await exportJWK(githubSigning.publicKey)), kid: 'gh1', alg: 'RS256', use: 'sig' };
+export const PUBLISH_SHA = 'c'.repeat(40);
+// A valid publish of sidecar from its docs workflow on develop. Pass a claim
+// as undefined to leave it out.
+export const oidcClaims = (): Record<string, unknown> => ({
+  repository: `${ORG}/${SIDECAR}`,
+  repository_id: REPO_IDS.sidecar,
+  repository_owner: ORG,
+  repository_owner_id: OWNER_ID,
+  workflow_ref: `${ORG}/${SIDECAR}/${WORKFLOW}@refs/heads/develop`,
+  ref: 'refs/heads/develop',
+  event_name: 'push',
+  sha: PUBLISH_SHA,
+  run_id: '100',
+  run_attempt: '1',
+  jti: crypto.randomUUID(),
+});
+export const oidcToken = async (
+  over: Record<string, unknown> = {},
+  opts: { aud?: string; iss?: string; key?: CryptoKey; expiresIn?: string } = {},
+) => {
+  const claims = Object.fromEntries(Object.entries({ ...oidcClaims(), ...over }).filter(([, v]) => v !== undefined));
+  return new SignJWT(claims)
+    .setProtectedHeader({ alg: 'RS256', kid: 'gh1' })
+    .setIssuer(opts.iss ?? 'https://token.actions.githubusercontent.com')
+    .setAudience(opts.aud ?? HOST)
+    .setIssuedAt()
+    .setExpirationTime(opts.expiresIn ?? '5m')
+    .sign(opts.key ?? githubSigning.privateKey);
+};
+
+// Publish tests use the real local R2 bucket, so conditional writes are R2's.
+export const emptySites = async () => {
+  for (let page = await env.SITES!.list(); ; page = await env.SITES!.list({ cursor: page.cursor })) {
+    if (page.objects.length > 0) await env.SITES!.delete(page.objects.map((o) => o.key));
+    if (!page.truncated) break;
+  }
+  await env.DB.prepare('DELETE FROM publish_tokens').run();
+};
+
 // A stand-in for GitHub's issues API: labels per issue, per repo.
 type StubIssue = { title: string; state: string; labels: string[] };
 const freshRepos = () =>
@@ -308,6 +366,9 @@ export const installFetch = () =>
       return Response.json({ keys: [publicJwk] });
     }
     if (url.host === 'api.github.com') return githubResponse(req, url);
+    if (url.host === 'token.actions.githubusercontent.com' && url.pathname === '/.well-known/jwks') {
+      return Response.json({ keys: [githubJwk] });
+    }
     throw new Error(`unexpected outbound fetch: ${req.url}`);
   });
 

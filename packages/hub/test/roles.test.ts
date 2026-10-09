@@ -10,6 +10,10 @@ const site: Site = {
   readers: ['@ariai.example', 'pm@partner.example'],
   ticketRepo: 'inoltrotech/sidecar',
   teamLabel: 'inoltrotech team',
+  branch: 'main',
+  repositoryId: '1',
+  workflow: '.github/workflows/docs.yml',
+  environment: null,
 };
 const other: Site = {
   ...site,

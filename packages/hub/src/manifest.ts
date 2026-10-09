@@ -5,8 +5,8 @@ import { readText, type SiteStore } from './store';
 // A publish writes <repo>/v/<version>/... and then <repo>/current.json, so a
 // request that reads the pointer once and uses that version for everything
 // (manifest, CSP, page body) never mixes two publishes. Versions are write-once:
-// <40-hex commit>-<publish run id>.
-export const VERSION = /^[0-9a-f]{40}-[0-9]{1,20}$/;
+// <40-hex commit>-<run id>, and since #5 -<run attempt>-<8 random hex>.
+export const VERSION = /^[0-9a-f]{40}-[0-9]{1,20}(?:-[0-9]{1,6}-[0-9a-f]{8})?$/;
 export const POINTER_TTL_MS = 10_000;
 
 export type Snapshot = { repo: string; version: string; manifest: Manifest };

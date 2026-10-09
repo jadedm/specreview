@@ -1,0 +1,31 @@
+name: specreview publish
+description: Publish a build made by specreview/build to a specreview hub, authenticated by the job's GitHub OIDC token.
+inputs:
+  hub:
+    description: The hub's origin, such as https://docs.example.com.
+    required: true
+  repo:
+    description: The repository's lowercase name, the site's path on the hub.
+    required: true
+  out:
+    description: The downloaded build.
+    default: .specreview
+outputs:
+  version:
+    description: The version now live.
+    value: ${{ steps.publish.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 22
+    # Runs only the committed, reviewed uploader (dist/publish.mjs, no
+    # dependencies): nothing from the product repo executes with id-token.
+    - id: publish
+      shell: bash
+      env:
+        INPUT_HUB: ${{ inputs.hub }}
+        INPUT_REPO: ${{ inputs.repo }}
+        INPUT_OUT: ${{ inputs.out }}
+      run: node "$GITHUB_ACTION_PATH/dist/publish.mjs"

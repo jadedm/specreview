@@ -9,6 +9,7 @@ import { envTokens } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf, pagesView } from './manifest';
 import { protectedHeaders, servePage } from './pages';
+import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
@@ -79,6 +80,15 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   // Config first: an invalid config refuses everything, / included.
   const config: HubConfig = configOf(env.SPECREVIEW_CONFIG);
   const url = new URL(request.url);
+  // Publishing authenticates with GitHub's OIDC token, not Access: Access
+  // bypasses exactly /_publish/* (set up at deploy) and the hub checks the
+  // token itself. Repo names never start with _, so this cannot shadow a site.
+  const publishing = /^\/_publish\/([^/]+)$/.exec(url.pathname);
+  if (publishing) {
+    const site = config.sites.get(publishing[1]);
+    if (!site) throw new AppError(404, 'NOT_FOUND');
+    return publish(request, env, config, site);
+  }
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.
   if (!route) throw new AppError(404, 'NOT_FOUND');
