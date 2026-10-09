@@ -9,6 +9,7 @@
 // Miniflare 4 is pinned: the 5.x alpha under wrangler takes a different
 // options shape, and its workerd predates the deploy compatibility date.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
@@ -25,6 +26,7 @@ const config = {
   accessTeamDomain: TEAM,
   accessAud: AUD,
   admins: ['owner@acme.dev'],
+  ownerId: '1001',
   sites: [
     {
       repo: 'sidecar',
@@ -32,8 +34,20 @@ const config = {
       approvers: ['pm@acme.dev'],
       readers: ['@initech.example'],
       ticketRepo: 'sidecar',
+      branch: 'develop',
+      repositoryId: '2001',
+      workflow: '.github/workflows/docs.yml',
     },
-    { repo: 'globex', teamDomains: ['globex.dev'], approvers: [], readers: [], ticketRepo: 'globex' },
+    {
+      repo: 'globex',
+      teamDomains: ['globex.dev'],
+      approvers: [],
+      readers: [],
+      ticketRepo: 'globex',
+      branch: 'main',
+      repositoryId: '2003',
+      workflow: '.github/workflows/docs.yml',
+    },
   ],
 };
 
@@ -89,6 +103,9 @@ const mf = new Miniflare({
         const url = new URL(req.url);
         if (url.host === TEAM && url.pathname === '/cdn-cgi/access/certs') return Response.json({ keys: [jwk] });
         if (url.host === 'api.github.com') return github(req, url);
+        if (url.host === 'token.actions.githubusercontent.com' && url.pathname === '/.well-known/jwks') {
+          return Response.json({ keys: [jwk] });
+        }
         return new Response(`smoke: outbound call to ${url.host} refused`, { status: 599 });
       },
     },
@@ -191,6 +208,42 @@ http
     res.end();
   })
   .listen(PORT + 1, '127.0.0.1');
+
+// A stand-in for the GitHub Actions token endpoint, for the publish smoke:
+// GET /token?...&audience=<origin> with "Authorization: bearer smoke" answers
+// a token for sidecar's docs workflow on develop, as a push. The commit comes
+// from the file in SMOKE_SHA_FILE, read on every request; run ids count up.
+let runId = 500;
+http
+  .createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    if (url.pathname !== '/token' || req.headers.authorization !== 'bearer smoke') {
+      res.writeHead(401);
+      return res.end();
+    }
+    const sha = readFileSync(process.env.SMOKE_SHA_FILE ?? '/dev/null', 'utf8').trim();
+    const value = await new SignJWT({
+      repository: 'acme/sidecar',
+      repository_id: '2001',
+      repository_owner_id: '1001',
+      workflow_ref: 'acme/sidecar/.github/workflows/docs.yml@refs/heads/develop',
+      ref: 'refs/heads/develop',
+      event_name: 'push',
+      sha,
+      run_id: String(++runId),
+      run_attempt: '1',
+      jti: randomUUID(),
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'smoke' })
+      .setIssuer('https://token.actions.githubusercontent.com')
+      .setAudience(url.searchParams.get('audience') ?? '')
+      .setIssuedAt()
+      .setExpirationTime('5m')
+      .sign(keys.privateKey);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ value }));
+  })
+  .listen(PORT + 2, '127.0.0.1');
 
 // A stand-in for Access in front of the Worker, for a browser: /__smoke/login?email=
 // sets a cookie, and every other request is forwarded with a token for that

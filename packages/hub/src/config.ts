@@ -21,6 +21,13 @@ export type Site = {
   readers: string[];
   // How a reader sees this site's team in place of their emails.
   teamLabel: string;
+  // Who may publish (publish.ts): GitHub's numeric repository id (names can
+  // be renamed or reused, ids cannot), the branch, the publishing workflow's
+  // path, and optionally a GitHub environment the publish job must run in.
+  branch: string;
+  repositoryId: string;
+  workflow: string;
+  environment: string | null;
 };
 
 export type HubConfig = {
@@ -28,6 +35,8 @@ export type HubConfig = {
   accessTeamDomain: string;
   accessAud: string;
   admins: string[];
+  // GitHub's numeric id of the org: publish tokens must carry it.
+  ownerId: string;
   sites: Map<string, Site>;
 };
 
@@ -103,8 +112,34 @@ const PUBLIC_MAIL_BRANDS =
   /^(yahoo|ymail|hotmail|outlook|live|msn|windowslive|aol|gmx|yandex|mail|web|protonmail|proton|rediffmail|rediff|tutanota|tuta|zoho|icloud|me|mac|gmail|googlemail|fastmail|hey|pm|qq|163|126|sina|naver|daum|rambler|libero|orange|laposte|t-online|seznam|wp|o2|interia|rocketmail|lycos)\.(?:[a-z]{2}|(?:co|com|net|org)\.[a-z]{2})$/;
 const isPublicMail = (domain: string) => PUBLIC_MAIL.has(domain) || PUBLIC_MAIL_BRANDS.test(domain);
 
-const TOP_KEYS = new Set(['$schema', 'org', 'accessTeamDomain', 'accessAud', 'admins', 'teamLabel', 'sites']);
-const SITE_KEYS = new Set(['repo', 'teamDomains', 'approvers', 'readers', 'ticketRepo', 'teamLabel']);
+const TOP_KEYS = new Set([
+  '$schema',
+  'org',
+  'ownerId',
+  'accessTeamDomain',
+  'accessAud',
+  'admins',
+  'teamLabel',
+  'sites',
+]);
+const SITE_KEYS = new Set([
+  'repo',
+  'teamDomains',
+  'approvers',
+  'readers',
+  'ticketRepo',
+  'teamLabel',
+  'branch',
+  'repositoryId',
+  'workflow',
+  'environment',
+]);
+// GitHub's numeric ids, as its tokens carry them: decimal strings.
+const GITHUB_ID = /^[1-9][0-9]{0,19}$/;
+// A plain branch name; no refs/ prefix, no .., no trailing dot or slash.
+const BRANCH = /^(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/;
+const ENVIRONMENT = /^[A-Za-z0-9 ._-]{1,255}$/;
 
 // Control, unassigned, private-use and lone surrogate characters, line and
 // paragraph separators, interlinear annotations, and the bidi overrides and
@@ -157,6 +192,25 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   for (const key of Object.keys(site)) if (!SITE_KEYS.has(key)) problems.push(`${at} has unknown key ${key}`);
   const repo = site.repo;
   if (typeof repo !== 'string' || !isRepoName(repo)) problems.push(`${at}.repo must be a lowercase repo name`);
+  // /_publish is the hub's own; a repo starting with _ could collide.
+  if (typeof repo === 'string' && repo.startsWith('_')) problems.push(`${at}.repo may not start with _`);
+  const branchOk =
+    typeof site.branch === 'string' &&
+    BRANCH.test(site.branch) &&
+    !site.branch.endsWith('.') &&
+    !site.branch.startsWith('refs/');
+  if (!branchOk) {
+    problems.push(`${at}.branch must be a branch name`);
+  }
+  if (typeof site.repositoryId !== 'string' || !GITHUB_ID.test(site.repositoryId)) {
+    problems.push(`${at}.repositoryId must be GitHub's numeric repository id, as a string`);
+  }
+  if (typeof site.workflow !== 'string' || !WORKFLOW.test(site.workflow)) {
+    problems.push(`${at}.workflow must be .github/workflows/<file>.yml`);
+  }
+  if (site.environment !== undefined && (typeof site.environment !== 'string' || !ENVIRONMENT.test(site.environment))) {
+    problems.push(`${at}.environment must be a GitHub environment name`);
+  }
   const ticketRepo = site.ticketRepo;
   if (typeof ticketRepo !== 'string' || !isRepoName(ticketRepo)) {
     problems.push(`${at}.ticketRepo must be a lowercase repo name of the org`);
@@ -202,6 +256,9 @@ export const problemsIn = (raw: unknown): string[] => {
   // A misspelt key would silently drop whatever it was meant to restrict.
   for (const key of Object.keys(cfg)) if (!TOP_KEYS.has(key)) problems.push(`unknown key ${key}`);
   if (typeof cfg.org !== 'string' || !isOwner(cfg.org)) problems.push('org must be a lowercase GitHub owner name');
+  if (typeof cfg.ownerId !== 'string' || !GITHUB_ID.test(cfg.ownerId)) {
+    problems.push("ownerId must be GitHub's numeric id of the org, as a string");
+  }
   if (typeof cfg.accessTeamDomain !== 'string' || !ACCESS_TEAM.test(cfg.accessTeamDomain)) {
     problems.push('accessTeamDomain must be <team>.cloudflareaccess.com');
   }
@@ -252,6 +309,7 @@ export const configOf = (text: string | undefined): HubConfig => {
     accessTeamDomain: string;
     accessAud: string;
     admins: string[];
+    ownerId: string;
     teamLabel?: string;
     sites: {
       repo: string;
@@ -260,6 +318,10 @@ export const configOf = (text: string | undefined): HubConfig => {
       readers: string[];
       ticketRepo: string;
       teamLabel?: string;
+      branch: string;
+      repositoryId: string;
+      workflow: string;
+      environment?: string;
     }[];
   };
   const config: HubConfig = {
@@ -267,6 +329,7 @@ export const configOf = (text: string | undefined): HubConfig => {
     accessTeamDomain: cfg.accessTeamDomain,
     accessAud: cfg.accessAud,
     admins: cfg.admins,
+    ownerId: cfg.ownerId,
     sites: new Map(
       cfg.sites.map((s) => [
         s.repo,
@@ -278,6 +341,10 @@ export const configOf = (text: string | undefined): HubConfig => {
           approvers: s.approvers,
           readers: s.readers,
           teamLabel: s.teamLabel ?? cfg.teamLabel ?? `${cfg.org} team`,
+          branch: s.branch,
+          repositoryId: s.repositoryId,
+          workflow: s.workflow,
+          environment: s.environment ?? null,
         },
       ]),
     ),

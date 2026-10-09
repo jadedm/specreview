@@ -5,6 +5,9 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json && esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=../../publish/dist/publish.mjs --legal-comments=none"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

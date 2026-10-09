@@ -10,6 +10,7 @@ import { reconcileLabels } from '../src/github';
 import { envTokens } from '../src/github-auth';
 import { createHub } from '../src/index';
 import { forgetLabelSetup } from '../src/github';
+import { forgetGithubKeys } from '../src/github-oidc';
 import { forgetManifests } from '../src/manifest';
 import { memoryStore, type SiteStore } from '../src/store';
 
@@ -31,8 +32,14 @@ export const keyOf = (repo: string) => `${ORG}/${repo}`;
 export const HUB_AUD = 'aud-hub';
 export const VERSION = `${'b'.repeat(40)}-1`;
 
+// GitHub ids for the publish tests (publish.test.ts).
+export const OWNER_ID = '1001';
+export const REPO_IDS: Record<string, string> = { sidecar: '2001', web: '2002', globex: '2003' };
+export const WORKFLOW = '.github/workflows/docs.yml';
+
 export const CONFIG = {
   org: ORG,
+  ownerId: OWNER_ID,
   accessTeamDomain: TEAM,
   accessAud: HUB_AUD,
   admins: ['owner@acme.dev'],
@@ -43,6 +50,9 @@ export const CONFIG = {
       approvers: ['approver@acme.dev'],
       readers: ['@initech.example'],
       ticketRepo: SIDECAR,
+      branch: 'develop',
+      repositoryId: REPO_IDS.sidecar,
+      workflow: WORKFLOW,
     },
     {
       repo: WEB,
@@ -50,6 +60,9 @@ export const CONFIG = {
       approvers: ['webpm@acme.dev'],
       readers: ['@initech.example'],
       ticketRepo: SIDECAR,
+      branch: 'main',
+      repositoryId: REPO_IDS.web,
+      workflow: WORKFLOW,
     },
     {
       repo: GLOBEX,
@@ -57,11 +70,30 @@ export const CONFIG = {
       approvers: ['pm@globex.dev'],
       readers: ['@initech.example'],
       ticketRepo: GLOBEX,
+      branch: 'main',
+      repositoryId: REPO_IDS.globex,
+      workflow: WORKFLOW,
+      environment: 'docs',
     },
   ],
 };
 
-const signupPage = (hash: string, issues: number[]) => ({
+// The old version of the signup page, per site, and its real hash: history
+// is served only when the live manifest records the file's hash.
+export const OLD_TEXT: Record<string, string> = {
+  sidecar: '# Company signup\n\nAnyone with the join link can join.\n',
+  globex: '# Globex signup\n\nGlobex only.\n',
+};
+const hex = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+const OLD_HASH: Record<string, string> = {
+  sidecar: await hex(OLD_TEXT.sidecar),
+  globex: await hex(OLD_TEXT.globex),
+};
+
+const signupPage = (hash: string, issues: number[], oldHash = OLD_HASH.sidecar) => ({
   title: 'Company signup',
   hash,
   issues,
@@ -92,7 +124,7 @@ const signupPage = (hash: string, issues: number[]) => ({
       author: 'Manish Jadhav',
       pr: 51,
       path: `${PAGE}.md`,
-      hash: 'hash-old',
+      hash: oldHash,
     },
   ],
 });
@@ -122,13 +154,13 @@ export const manifests = (webIssues: number[] = []): Record<string, Manifest> =>
   [GLOBEX]: {
     commit: COMMIT_LIVE,
     builtAt: '2026-10-07T00:00:00.000Z',
-    pages: { [PAGE]: signupPage('hash-globex', [52]) },
+    pages: { [PAGE]: signupPage('hash-globex', [52], OLD_HASH.globex) },
   },
 });
 
 export const historyFiles = (): Record<string, string> => ({
-  [`${SIDECAR}/history/${COMMIT_OLD}/${PAGE}.md`]: '# Company signup\n\nAnyone with the join link can join.\n',
-  [`${GLOBEX}/history/${COMMIT_OLD}/${PAGE}.md`]: '# Globex signup\n\nGlobex only.\n',
+  [`${SIDECAR}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.sidecar,
+  [`${GLOBEX}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.globex,
 });
 
 // Every site published at VERSION: pointer, manifest, pages and history.
@@ -186,6 +218,51 @@ export const token = async (claims: Claims = {}) => {
 };
 
 export const tokenFor = (email: string) => token({ email, aud: HUB_AUD });
+
+// GitHub Actions OIDC, stubbed: its own key, served where GitHub serves it.
+const githubSigning = await generateKeyPair('RS256', { extractable: true });
+const githubJwk = { ...(await exportJWK(githubSigning.publicKey)), kid: 'gh1', alg: 'RS256', use: 'sig' };
+export const PUBLISH_SHA = 'c'.repeat(40);
+export const githubKeys = { down: false };
+// A valid publish of sidecar from its docs workflow on develop. Pass a claim
+// as undefined to leave it out.
+export const oidcClaims = (): Record<string, unknown> => ({
+  repository: `${ORG}/${SIDECAR}`,
+  repository_id: REPO_IDS.sidecar,
+  repository_owner: ORG,
+  repository_owner_id: OWNER_ID,
+  workflow_ref: `${ORG}/${SIDECAR}/${WORKFLOW}@refs/heads/develop`,
+  ref: 'refs/heads/develop',
+  event_name: 'push',
+  sha: PUBLISH_SHA,
+  run_id: '100',
+  run_attempt: '1',
+  jti: crypto.randomUUID(),
+});
+export const oidcToken = async (
+  over: Record<string, unknown> = {},
+  opts: { aud?: string; iss?: string; key?: CryptoKey; expiresIn?: string } = {},
+) => {
+  const claims = Object.fromEntries(Object.entries({ ...oidcClaims(), ...over }).filter(([, v]) => v !== undefined));
+  return new SignJWT(claims)
+    .setProtectedHeader({ alg: 'RS256', kid: 'gh1' })
+    .setIssuer(opts.iss ?? 'https://token.actions.githubusercontent.com')
+    .setAudience(opts.aud ?? HOST)
+    .setIssuedAt()
+    .setExpirationTime(opts.expiresIn ?? '5m')
+    .sign(opts.key ?? githubSigning.privateKey);
+};
+
+// Publish tests use the real local R2 bucket, so conditional writes are R2's.
+export const emptySites = async () => {
+  for (let page = await env.SITES!.list(); ; page = await env.SITES!.list({ cursor: page.cursor })) {
+    if (page.objects.length > 0) await env.SITES!.delete(page.objects.map((o) => o.key));
+    if (!page.truncated) break;
+  }
+  await env.DB.prepare('DELETE FROM publish_tokens').run();
+  githubKeys.down = false;
+  forgetGithubKeys();
+};
 
 // A stand-in for GitHub's issues API: labels per issue, per repo.
 type StubIssue = { title: string; state: string; labels: string[] };
@@ -308,6 +385,10 @@ export const installFetch = () =>
       return Response.json({ keys: [publicJwk] });
     }
     if (url.host === 'api.github.com') return githubResponse(req, url);
+    if (url.host === 'token.actions.githubusercontent.com' && url.pathname === '/.well-known/jwks') {
+      if (githubKeys.down) return new Response('down', { status: 503 });
+      return Response.json({ keys: [githubJwk] });
+    }
     throw new Error(`unexpected outbound fetch: ${req.url}`);
   });
 
