@@ -95,11 +95,7 @@ describe('config rules, one at a time', () => {
       (c) => ({ ...c, teamLabel: 'Acme\u2028team' }),
       /^teamLabel must have no control/,
     ],
-    [
-      'team label with a C1 control',
-      (c) => ({ ...c, teamLabel: 'Acme\u0085team' }),
-      /^teamLabel must have no control/,
-    ],
+    ['team label with a C1 control', (c) => ({ ...c, teamLabel: 'Acme\u0085team' }), /^teamLabel must have no control/],
     [
       'team label with a fullwidth at sign',
       (c) => ({ ...c, teamLabel: 'team\uff20acme.dev' }),
@@ -111,11 +107,7 @@ describe('config rules, one at a time', () => {
     ['fullwidth You', (c) => ({ ...c, teamLabel: '\uff39\uff4f\uff55' }), /^teamLabel must not be You or Reader/],
     ['team label of Hangul filler', (c) => ({ ...c, teamLabel: '\u3164' }), /^teamLabel must show something/],
     ['team label of marks only', (c) => ({ ...c, teamLabel: '\u0336'.repeat(3) }), /^teamLabel must show something/],
-    [
-      'team label with an isolate',
-      (c) => ({ ...c, teamLabel: 'Acme \u2067team' }),
-      /^teamLabel must have no control/,
-    ],
+    ['team label with an isolate', (c) => ({ ...c, teamLabel: 'Acme \u2067team' }), /^teamLabel must have no control/],
     ['team label of 41 emoji', (c) => ({ ...c, teamLabel: '\u{1f600}'.repeat(41) }), /^teamLabel must be 1 to 40/],
     ['You with a zero-width space', (c) => ({ ...c, teamLabel: 'You\u200b' }), /^teamLabel must not be You or Reader/],
     ['You with a joiner inside', (c) => ({ ...c, teamLabel: 'Y\u200dou' }), /^teamLabel must not be You or Reader/],

@@ -30,7 +30,7 @@ describe('35: roles', () => {
     expect(roleOf('x@evil-acme.dev', site)).toBe('none');
     expect(roleOf('x@sub.acme.dev', site)).toBe('none');
     expect(roleOf('x@acme.dev', site)).toBe('team');
-    expect(roleOf('x@аcme.dev', site)).toBe('none'); // Cyrillic і
+    expect(roleOf('x@\u0430cme.dev', site)).toBe('none'); // Cyrillic а in the team's domain
     expect(roleOf('approver@acme.dev', site)).toBe('approver');
   });
 
