@@ -23,8 +23,8 @@ Not built yet:
 
 - **One hub per organisation.** A Cloudflare Worker with one D1 database (comments, status) and one R2 bucket (built sites), behind one Cloudflare Access application on the organisation's own domain. Each repo is a site at `/<repo>/`. Organisations are kept apart by being separate deployments.
 - **Who sees what.** Cloudflare Access signs people in. Someone at one of a site's team domains is team; listed approvers can mark pages ready; listed readers (an exact email or a whole domain) can read and comment. Readers never see other people's email addresses or ticket titles.
-- **Publishing.** On a push to the docs branch, the product repo's workflow runs the `build` action, then the `publish` action uploads the build to `POST /_publish/<repo>`. The hub accepts it only from that repository's configured workflow and branch, checks the build whole, and makes it live by moving one pointer, so readers see the old build or the new one, never a mix. `examples/publish-docs.yml` is the workflow to copy.
-- **The site build keeps code out of the site.** It refuses scripts and styles in pages, includes, symlinks, and front matter other than `title`, `order` and `issues`, and strips any rendered HTML outside an allowlist.
+- **Publishing.** On a push to the docs branch, the product repo's workflow runs the `build` action, then the `publish` action uploads the build to `POST /_publish/<repo>`. The hub accepts it only from that repository's configured workflow and branch, checks the build whole, and makes it live by moving one pointer, so a build goes live whole. `examples/publish-docs.yml` is the workflow to copy.
+- **The site build keeps code out of Markdown.** It refuses scripts and styles in pages, includes, symlinks, and front matter other than `title`, `order` and `issues`, and strips any rendered HTML outside an allowlist, so approving a docs pull request never means reading it for code. The hub does not re-check what a build contains: anyone who can push to a site's configured branch can change its workflow and publish anything, so treat that access as access to every site on the hub.
 
 ## Packages
 
