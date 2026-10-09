@@ -414,7 +414,7 @@ describe('9: team label', () => {
     expect(await author({})).toBe('inoltrotech team');
     expect(await author(configWith((c) => ({ ...c, teamLabel: 'Inoltro team' })))).toBe('Inoltro team');
     const both = configWith((c) => {
-      c.sites[0] = { ...c.sites[0], teamLabel: 'Sidecar crew' } as (typeof c.sites)[0];
+      (c.sites[0] as Record<string, unknown>).teamLabel = 'Sidecar crew';
       return { ...c, teamLabel: 'Inoltro team' };
     });
     expect(await author(both)).toBe('Sidecar crew');

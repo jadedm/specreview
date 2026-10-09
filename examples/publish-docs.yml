@@ -1,0 +1,52 @@
+# .github/workflows/docs.yml in a product repo. The hub's config names this
+# file (site.workflow), the branch, and the repo's numeric id; replace
+# <specreview-commit> with a full commit SHA of jadedm/specreview.
+name: docs
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+# One publish at a time, in order; a newer run never races an older one.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # page history needs every commit
+          persist-credentials: false
+      - uses: jadedm/specreview/build@<specreview-commit>
+        with:
+          repo: sidecar
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docs-site
+          path: .specreview
+          include-hidden-files: true
+
+  # Pushes to the branch only; pull requests stop after the build.
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    # environment: docs   # if the hub's config names an environment
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docs-site
+          path: .specreview
+      - uses: jadedm/specreview/publish@<specreview-commit>
+        with:
+          hub: https://docs.example.com
+          repo: sidecar

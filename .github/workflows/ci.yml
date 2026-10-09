@@ -52,3 +52,7 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+      # publish/dist is committed (an action runs it without installing), so
+      # it must match its source.
+      - name: The publish action's bundle is current
+        run: test -z "$(git status --porcelain -- publish/dist)" || { git status --porcelain -- publish/dist; echo "run pnpm build and commit publish/dist"; exit 1; }

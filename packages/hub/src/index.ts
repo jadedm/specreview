@@ -9,10 +9,11 @@ import { envTokens } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf, pagesView } from './manifest';
 import { protectedHeaders, servePage } from './pages';
+import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
-import { readText, unconfiguredStore } from './store';
+import { read, unconfiguredStore } from './store';
 
 type Req = { request: Request; url: URL; ctx: Ctx; caller: Caller; params: string[] };
 type Handler = (req: Req) => Promise<Response>;
@@ -63,14 +64,33 @@ const routeApi = (req: Omit<Req, 'params'>, path: string): Promise<Response> => 
   throw new AppError(404, 'NOT_FOUND');
 };
 
+const sha256Hex = async (bytes: ArrayBuffer) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
 // Old versions are served only to the site's team: they can hold text removed
 // before an outside reader was given access.
 const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: string) => {
   if (!isTeam(req.caller.role)) throw new AppError(403, 'FORBIDDEN');
   if (req.request.method !== 'GET') throw new AppError(405, 'METHOD_NOT_ALLOWED');
-  const text = await readText(req.ctx.deps.store, `${req.ctx.site.repo}/history/${commit}/${path}`);
-  if (text === null) throw new AppError(404, 'NOT_FOUND');
-  return new Response(text, {
+  const obj = await read(req.ctx.deps.store, `${req.ctx.site.repo}/history/${commit}/${path}`);
+  if (obj === null) throw new AppError(404, 'NOT_FOUND');
+  // The bytes as stored, as publish hashed them: decoding as text would drop
+  // a leading byte-order mark and the hash would no longer match.
+  const bytes = await new Response(obj.body).arrayBuffer().catch((e: unknown) => {
+    console.error('store read failed', e instanceof Error ? e.message : String(e));
+    throw new AppError(503, 'STORAGE_UNAVAILABLE', 'Storage is unavailable; try again shortly.');
+  });
+  // Only an old version the live manifest lists, with the hash it records:
+  // history keys are shared across publishes, so nothing a publish that never
+  // went live wrote can be shown.
+  const { manifest } = await req.ctx.snapshot();
+  const entry = Object.values(manifest.pages)
+    .flatMap((p) => p.history)
+    .find((h) => h.commit === commit && h.path === path);
+  if (!entry || entry.hash !== (await sha256Hex(bytes))) throw new AppError(404, 'NOT_FOUND');
+  return new Response(bytes, {
     headers: { ...protectedHeaders("default-src 'none'"), 'content-type': 'text/plain; charset=utf-8' },
   });
 };
@@ -79,6 +99,15 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   // Config first: an invalid config refuses everything, / included.
   const config: HubConfig = configOf(env.SPECREVIEW_CONFIG);
   const url = new URL(request.url);
+  // Publishing authenticates with GitHub's OIDC token, not Access: Access
+  // bypasses exactly /_publish/* (set up at deploy) and the hub checks the
+  // token itself. Repo names never start with _, so this cannot shadow a site.
+  const publishing = /^\/_publish\/([^/]+)$/.exec(url.pathname);
+  if (publishing) {
+    const site = config.sites.get(publishing[1]);
+    if (!site) throw new AppError(404, 'NOT_FOUND');
+    return publish(request, env, config, site);
+  }
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.
   if (!route) throw new AppError(404, 'NOT_FOUND');
