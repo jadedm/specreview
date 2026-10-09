@@ -182,7 +182,7 @@ describe('14: publishing', () => {
   it('refuses a bad repo name or a missing build before asking for a token', async () => {
     const { calls, fetchImpl } = stub([]);
     await expect(
-      publishBuild({ hub: 'https://h.example', repo: 'Inoltro/Sidecar', out, env: ENV, fetch: fetchImpl }),
+      publishBuild({ hub: 'https://h.example', repo: 'Acme/Sidecar', out, env: ENV, fetch: fetchImpl }),
     ).rejects.toThrow('repo must be');
     rmSync(path.join(out, 'site', 'manifest.json'));
     await expect(

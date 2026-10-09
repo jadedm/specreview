@@ -9,9 +9,9 @@ beforeEach(async () => {
 });
 afterEach(() => spy.mockRestore());
 
-const READER = 'riya@ariai.example';
-const OTHER = 'kabir@ariai.example';
-const TEAM = 'manish@inoltro.ai';
+const READER = 'riya@initech.example';
+const OTHER = 'kabir@initech.example';
+const TEAM = 'manish@acme.dev';
 
 type Thread = {
   id: string;
@@ -37,7 +37,7 @@ describe('posting', () => {
 
   it('6, 43: fields the server derives are refused', async () => {
     for (const extra of [
-      { author: 'boss@inoltro.ai' },
+      { author: 'boss@acme.dev' },
       { state: 'resolved' },
       { createdAt: '2020' },
       { pageHash: 'x' },
@@ -199,7 +199,7 @@ const fill = (count: number, state: 'open' | 'resolved', author = 'filler@x.exam
   env.DB.prepare(
     `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
      INSERT INTO threads (site, id, page, heading, quote, page_hash, author, body, state, resolved_at, created_at)
-     SELECT 'inoltrotech/sidecar', ? || '-0000-4000-8000-' || printf('%012d', i), ?, 'limits', 'x', 'h', ?, 'b', ?, CASE WHEN ? = 'resolved' THEN '2026-01-01' END,
+     SELECT 'acme/sidecar', ? || '-0000-4000-8000-' || printf('%012d', i), ?, 'limits', 'x', 'h', ?, 'b', ?, CASE WHEN ? = 'resolved' THEN '2026-01-01' END,
             printf('2026-01-01T00:%04d', i)
      FROM n`,
   )
@@ -251,7 +251,7 @@ describe('caps', () => {
       env.DB.prepare(
         `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
          INSERT INTO replies (site, id, thread_id, author, body, created_at)
-         SELECT 'inoltrotech/sidecar', ? || i, ?, ?, 'b', '2026-01-01' FROM n`,
+         SELECT 'acme/sidecar', ? || i, ?, ?, 'b', '2026-01-01' FROM n`,
       )
         .bind(count, prefix, first.body.id, author)
         .run();

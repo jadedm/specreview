@@ -19,7 +19,7 @@ import {
   reset,
   runCron,
   SIDECAR,
-  TIKITI,
+  GLOBEX,
   token,
   WEB,
 } from './helpers';
@@ -31,9 +31,9 @@ beforeEach(async () => {
 });
 afterEach(() => spy.mockRestore());
 
-const READER = 'riya@ariai.example';
-const TEAM = 'dev@inoltro.ai';
-const APPROVER = 'approver@inoltro.ai';
+const READER = 'riya@initech.example';
+const TEAM = 'dev@acme.dev';
+const APPROVER = 'approver@acme.dev';
 const configWith = (patch: (c: typeof CONFIG) => unknown) => JSON.stringify(patch(structuredClone(CONFIG)));
 const docsLabels = (repo: string, n: number) =>
   github.repos
@@ -42,7 +42,7 @@ const docsLabels = (repo: string, n: number) =>
     .labels.filter((l) => l.startsWith('docs:'));
 const setStatus = (site: string, email: string, status: string, expectedVersion: number, hash: string) =>
   call('/api/status', { site, email, body: { page: PAGE, status, expectedVersion, hash } });
-const hashOf: Record<string, string> = { [SIDECAR]: LIVE_HASH, [WEB]: 'hash-web', [TIKITI]: 'hash-tikiti' };
+const hashOf: Record<string, string> = { [SIDECAR]: LIVE_HASH, [WEB]: 'hash-web', [GLOBEX]: 'hash-globex' };
 
 describe('identity is per site', () => {
   it("7: a token for another hub's Access application is refused everywhere", async () => {
@@ -53,7 +53,7 @@ describe('identity is per site', () => {
 
   it('M3, 6: team on one site may not read another site at all', async () => {
     expect((await call('/api/me', { site: SIDECAR, email: TEAM })).body).toMatchObject({ role: 'team' });
-    const r = await call('/api/me', { site: TIKITI, email: TEAM });
+    const r = await call('/api/me', { site: GLOBEX, email: TEAM });
     expect(r.status).toBe(403);
     expect(errorCode(r)).toBe('FORBIDDEN');
   });
@@ -69,12 +69,12 @@ describe('paths', () => {
       '/sidecar%2F_api/me',
       '/sidecar/_api',
       '//sidecar/_api/me',
-      '/inoltrotech/sidecar/_api/me',
+      '/acme/sidecar/_api/me',
     ];
     for (const path of bad) {
       const r = await call(path, { email: TEAM });
       expect(r.status, path).toBe(404);
-      expect(JSON.stringify(r.body), path).not.toMatch(/tikiti|sidecar|web/);
+      expect(JSON.stringify(r.body), path).not.toMatch(/globex|sidecar|web/);
     }
     expect((await call('/sidecar', { email: TEAM })).status).toBe(404);
     expect((await call('/sidecar/', { email: TEAM })).status).toBe(200);
@@ -96,15 +96,15 @@ describe('paths', () => {
     expect((await call(traversal, { email: TEAM })).body).toMatchObject({ email: TEAM });
     // A traversal cannot reach another site's history.
     // A traversal that lands on another site's history meets that site's
-    // read rule: sidecar's team may not read tikiti.
-    const across = `/sidecar/_history/${COMMIT_OLD}/../../../tikiti/_history/${COMMIT_OLD}/${PAGE}.md`;
+    // read rule: sidecar's team may not read globex.
+    const across = `/sidecar/_history/${COMMIT_OLD}/../../../globex/_history/${COMMIT_OLD}/${PAGE}.md`;
     const r = await call(across, { raw: true, email: TEAM });
     expect(r.status).toBe(403);
-    expect(String(r.body)).not.toContain('Tikiti only');
+    expect(String(r.body)).not.toContain('Globex only');
   });
 
   it('M11: the old paths are gone', async () => {
-    for (const path of ['/api/me', '/_api/me', `/_history/${COMMIT_OLD}/${PAGE}.md`, '/inoltrotech/sidecar/_api/me']) {
+    for (const path of ['/api/me', '/_api/me', `/_history/${COMMIT_OLD}/${PAGE}.md`, '/acme/sidecar/_api/me']) {
       const r = await call(path, { raw: true, email: TEAM });
       expect(r.status, path).toBe(404);
     }
@@ -134,15 +134,15 @@ describe('data is per site', () => {
     const web = await call(`/api/comments?page=${encodeURIComponent(PAGE)}`, { site: WEB, email: TEAM });
     const webThread = (web.body as unknown as { id: string }[])[0];
     await call(`/api/comments/${webThread.id}/resolve`, { site: WEB, email: TEAM, body: {} });
-    const r = await setStatus(WEB, 'webpm@inoltro.ai', 'ready', 0, hashOf[WEB]);
+    const r = await setStatus(WEB, 'webpm@acme.dev', 'ready', 0, hashOf[WEB]);
     expect(r.status).toBe(200);
   });
 
   it('M14: each site has its own manifest; one missing does not affect another', async () => {
     const all = manifests();
-    delete all[TIKITI];
+    delete all[GLOBEX];
     deps.store = memoryStore(publishedFiles(all));
-    const missing = await call('/api/status', { site: TIKITI, email: 'x@tikiti.live' });
+    const missing = await call('/api/status', { site: GLOBEX, email: 'x@globex.dev' });
     expect(missing.status).toBe(503);
     expect(errorCode(missing)).toBe('SITE_NOT_PUBLISHED');
     const ok = await call('/api/status', { site: SIDECAR, email: READER });
@@ -179,7 +179,7 @@ describe('data is per site', () => {
 });
 
 describe('labels across sites', () => {
-  // web links #52 too, in the same ticket repo as sidecar; tikiti has its own #52.
+  // web links #52 too, in the same ticket repo as sidecar; globex has its own #52.
   beforeEach(() => {
     deps.store = memoryStore(publishedFiles(manifests([52])));
   });
@@ -188,12 +188,12 @@ describe('labels across sites', () => {
     const approval = { page: 'onboarding/approval', hash: 'hash-approval' };
     await call('/api/status', { email: APPROVER, body: { ...approval, status: 'ready', expectedVersion: 0 } });
     await setStatus(SIDECAR, APPROVER, 'ready', 0, LIVE_HASH);
-    expect(docsLabels('inoltrotech/sidecar', 52)).toEqual(['docs: pending']);
-    await setStatus(WEB, 'webpm@inoltro.ai', 'ready', 0, hashOf[WEB]);
-    expect(docsLabels('inoltrotech/sidecar', 52)).toEqual(['docs: ready to build']);
+    expect(docsLabels('acme/sidecar', 52)).toEqual(['docs: pending']);
+    await setStatus(WEB, 'webpm@acme.dev', 'ready', 0, hashOf[WEB]);
+    expect(docsLabels('acme/sidecar', 52)).toEqual(['docs: ready to build']);
     // A late comment on web demotes it and the shared ticket at once.
     expect((await comment(READER, {}, WEB)).status).toBe(201);
-    expect(docsLabels('inoltrotech/sidecar', 52)).toEqual(['docs: in review']);
+    expect(docsLabels('acme/sidecar', 52)).toEqual(['docs: in review']);
     // Only web's page was demoted; sidecar's page with the same key stays ready.
     const statuses = await env.DB.prepare('SELECT site, status FROM page_status WHERE page = ? ORDER BY site')
       .bind(PAGE)
@@ -202,24 +202,24 @@ describe('labels across sites', () => {
       { site: keyOf(SIDECAR), status: 'ready' },
       { site: keyOf(WEB), status: 'in_review' },
     ]);
-    // tikiti's #52 is a different ticket and was never touched.
-    expect(docsLabels('inoltrotech/tikiti', 52)).toEqual([]);
+    // globex's #52 is a different ticket and was never touched.
+    expect(docsLabels('acme/globex', 52)).toEqual([]);
   });
 
   it('M8, M20: the cron reconciles every ticket repo, and one failing repo stops nothing else', async () => {
-    await setStatus(TIKITI, 'pm@tikiti.live', 'ready', 0, hashOf[TIKITI]);
-    github.repos.get('inoltrotech/sidecar')!.set(99, { title: 'stray', state: 'open', labels: ['docs: in review'] });
-    github.repos.get('inoltrotech/tikiti')!.set(7, { title: 'stray', state: 'open', labels: ['docs: pending'] });
-    github.downRepos.add('inoltrotech/sidecar');
+    await setStatus(GLOBEX, 'pm@globex.dev', 'ready', 0, hashOf[GLOBEX]);
+    github.repos.get('acme/sidecar')!.set(99, { title: 'stray', state: 'open', labels: ['docs: in review'] });
+    github.repos.get('acme/globex')!.set(7, { title: 'stray', state: 'open', labels: ['docs: pending'] });
+    github.downRepos.add('acme/sidecar');
     const results = await reconcile();
-    expect(results).toEqual({ 'inoltrotech/sidecar': 'failed', 'inoltrotech/tikiti': 'updated' });
-    expect(docsLabels('inoltrotech/tikiti', 52)).toEqual(['docs: ready to build']);
-    expect(docsLabels('inoltrotech/tikiti', 7)).toEqual([]);
+    expect(results).toEqual({ 'acme/sidecar': 'failed', 'acme/globex': 'updated' });
+    expect(docsLabels('acme/globex', 52)).toEqual(['docs: ready to build']);
+    expect(docsLabels('acme/globex', 7)).toEqual([]);
     // Nothing was cleared in the repo that could not be read.
-    expect(docsLabels('inoltrotech/sidecar', 99)).toEqual(['docs: in review']);
+    expect(docsLabels('acme/sidecar', 99)).toEqual(['docs: in review']);
     github.downRepos.clear();
     await runCron();
-    expect(docsLabels('inoltrotech/sidecar', 99)).toEqual([]);
+    expect(docsLabels('acme/sidecar', 99)).toEqual([]);
   });
 
   it('M21: a site files tickets in its ticketRepo, not its own repo', async () => {
@@ -228,7 +228,7 @@ describe('labels across sites', () => {
       number: 52,
       title: 'Company approval',
     });
-    expect(github.calls.every((c) => !c.includes('/repos/inoltrotech/web/'))).toBe(true);
+    expect(github.calls.every((c) => !c.includes('/repos/acme/web/'))).toBe(true);
   });
 
   it('M9, M22: no token gives "unavailable", or the stale copy when one is cached', async () => {
@@ -268,15 +268,15 @@ describe('config', () => {
 
 describe('review fixes', () => {
   it('labels are created in a repo that has none, once', async () => {
-    expect(github.labelDefs.get('inoltrotech/sidecar')).toBeUndefined();
+    expect(github.labelDefs.get('acme/sidecar')).toBeUndefined();
     await setStatus(SIDECAR, TEAM, 'in_review', 0, LIVE_HASH);
-    expect([...github.labelDefs.get('inoltrotech/sidecar')!].sort()).toEqual([
+    expect([...github.labelDefs.get('acme/sidecar')!].sort()).toEqual([
       'docs: in review',
       'docs: pending',
       'docs: ready to build',
     ]);
     // Checked once per isolate: the next sync asks GitHub about labels not at all.
-    const labelCalls = () => github.calls.filter((c) => c.includes('/repos/inoltrotech/sidecar/labels')).length;
+    const labelCalls = () => github.calls.filter((c) => c.includes('/repos/acme/sidecar/labels')).length;
     const before = labelCalls();
     await setStatus(SIDECAR, TEAM, 'pending', 1, LIVE_HASH);
     expect(labelCalls()).toBe(before);

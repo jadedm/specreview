@@ -31,11 +31,11 @@ beforeEach(async () => {
 });
 afterEach(() => spy.mockRestore());
 
-const READER = 'riya@ariai.example';
-const OTHER = 'kabir@ariai.example';
-const TEAM = 'dev@inoltro.ai';
-const APPROVER = 'approver@inoltro.ai';
-const LABEL = 'inoltrotech team';
+const READER = 'riya@initech.example';
+const OTHER = 'kabir@initech.example';
+const TEAM = 'dev@acme.dev';
+const APPROVER = 'approver@acme.dev';
+const LABEL = 'acme team';
 const IDENTITIES = [TEAM, APPROVER, OTHER];
 const TITLES = ['SENTINEL-TITLE-52', 'SENTINEL-TITLE-23'];
 
@@ -128,9 +128,9 @@ describe('1-3, 8, 16, 24: comments', () => {
   it('8: the label follows the current config: a team member no longer on a team domain is a Reader', async () => {
     await comment(TEAM, { body: 'from the team' });
     const moved = configWith((c) => {
-      c.sites[0].teamDomains = ['inoltro.example'];
+      c.sites[0].teamDomains = ['acme.example'];
       c.sites[0].approvers = [];
-      c.sites[1].teamDomains = ['inoltro.example'];
+      c.sites[1].teamDomains = ['acme.example'];
       c.sites[1].approvers = [];
       return c;
     });
@@ -140,7 +140,7 @@ describe('1-3, 8, 16, 24: comments', () => {
 
   it('16, 23: readers by exact email and by domain see each other as Reader; team listed as readers stays team', async () => {
     const listed = configWith((c) => {
-      c.sites[0].readers = ['@ariai.example', 'pm@partner.example', TEAM, '@inoltro.ai'];
+      c.sites[0].readers = ['@initech.example', 'pm@partner.example', TEAM, '@acme.dev'];
       return c;
     });
     for (const email of [READER, 'pm@partner.example']) {
@@ -271,7 +271,7 @@ describe('11-14, 26-29: page data', () => {
   it('11: sections carry only id, title and text, whatever else the build wrote', async () => {
     const all = manifests();
     const sections = all[SIDECAR].pages[PAGE].sections as unknown as Record<string, unknown>[];
-    sections[0].lastEditedBy = 'leak@inoltro.ai';
+    sections[0].lastEditedBy = 'leak@acme.dev';
     deps.store = memoryStore(publishedFiles(all));
     for (const email of [READER, TEAM]) {
       const body = (await pagesAs(email)).body as unknown as PagesBody;
@@ -380,7 +380,7 @@ describe('15, 25, 30: whole responses', () => {
     await env.DB.batch(Array.from({ length: 20 }, (_, n) => insertThread(READER, n)));
     record('own open cap', await comment(READER), 'TOO_MANY_OPEN');
     await env.DB.batch(Array.from({ length: 200 }, (_, n) => insertThread(OTHER, n)));
-    record('page cap', await comment('new@ariai.example'), 'PAGE_FULL');
+    record('page cap', await comment('new@initech.example'), 'PAGE_FULL');
     const insertReply = (author: string, n: number) =>
       env.DB.prepare(
         `INSERT INTO replies (site, id, thread_id, author, body, created_at) VALUES (?, ?, ?, ?, 'seeded', ?)`,
@@ -388,7 +388,7 @@ describe('15, 25, 30: whole responses', () => {
     await env.DB.batch(Array.from({ length: 20 }, (_, n) => insertReply(READER, n)));
     record('own reply cap', await reply(ids.approver, READER), 'TOO_MANY_REPLIES');
     await env.DB.batch(Array.from({ length: 200 }, (_, n) => insertReply(TEAM, n)));
-    record('thread cap', await reply(ids.approver, 'new@ariai.example'), 'THREAD_FULL');
+    record('thread cap', await reply(ids.approver, 'new@initech.example'), 'THREAD_FULL');
     await env.DB.batch(
       Array.from({ length: 30 }, () =>
         env.DB.prepare('INSERT INTO write_log (site, email, at) VALUES (?, ?, ?)').bind(site, READER, Date.now()),
@@ -411,11 +411,11 @@ describe('9: team label', () => {
     const author = async (override: Record<string, string>) =>
       ((await call(`/api/comments?${q}`, { email: READER, envOverride: override })).body as unknown as Thread[])[0]
         .author;
-    expect(await author({})).toBe('inoltrotech team');
-    expect(await author(configWith((c) => ({ ...c, teamLabel: 'Inoltro team' })))).toBe('Inoltro team');
+    expect(await author({})).toBe('acme team');
+    expect(await author(configWith((c) => ({ ...c, teamLabel: 'Acme team' })))).toBe('Acme team');
     const both = configWith((c) => {
       (c.sites[0] as Record<string, unknown>).teamLabel = 'Sidecar crew';
-      return { ...c, teamLabel: 'Inoltro team' };
+      return { ...c, teamLabel: 'Acme team' };
     });
     expect(await author(both)).toBe('Sidecar crew');
   });

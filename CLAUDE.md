@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # specreview
 
-Review specs where they are rendered. Teams keep Markdown in each repo's `docs/`; specreview publishes each repo as a site on one hub the org hosts on its own Cloudflare account and domain, where readers comment on selected text and product signs pages off; the sign-off shows on linked GitHub issues as a label. Open source and self-hosted: the hub (`packages/hub`) is AGPL-3.0-only with its own `LICENSE`, everything else MIT under the root `LICENSE`; `pnpm check:packages` enforces each package's `license` field (decided 9 Oct 2026, sandbox#56). Plan and domain model: issue #1.
+Review specs where they are rendered. Teams keep Markdown in each repo's `docs/`; specreview publishes each repo as a site on one hub the org hosts on its own Cloudflare account and domain, where readers comment on selected text and product signs pages off; the sign-off shows on linked GitHub issues as a label. Open source and self-hosted: the hub (`packages/hub`) is AGPL-3.0-only with its own `LICENSE`, everything else MIT under the root `LICENSE`; `pnpm check:packages` enforces each package's `license` field (decided 9 Oct 2026, #21). Plan and domain model: issue #1.
 
 Every change: an issue first, then a test plan on the issue before code, a branch, a PR, the full local gate before each push, and review before merge.
 
@@ -54,7 +54,7 @@ Library packages build with `tsconfig.build.json`, which leaves tests out of `di
 - Output: `<out>/site/` (base `/<repo>/`, clean URLs, raw HTML off, sidebar from the folder tree, `manifest.json` with the CSP hashing every inline script of every page, validated by `@specreview/shared` and at most 5 MB) and `<out>/history/<commit>/<path>.md`. History follows renames and first-parent merges, keeps only versions inside the docs folder and drops old names the hub cannot serve. A repo using SHA-256 object names is refused (the hub takes 40-hex commits).
 - Review UI (`src/theme/review/`): every call under `<base>_api/` and `<base>_history/`; page data from `_api/pages`; `/folder/` is `folder/index`, `/folder` is `folder` when that page exists; authors, `mine`, ticket titles and history rendered only as the hub sends them; a write that finishes after navigation redraws nothing; the status board under the index page.
 - Tests: `pnpm --filter @specreview/site test` builds the shared package and this one, then runs unit tests and `test/build.test.ts`, which runs the built command on throwaway git repos.
-- Browser smoke: `pnpm build`, then `OUT=$(packages/site/scripts/smoke-fixture.sh)` (builds `test/smoke-docs` as site `sidecar` from a fresh repo), then `SMOKE_SITE=$OUT node packages/hub/scripts/smoke-server.mjs`, and open `http://127.0.0.1:8796/__smoke/login?email=riya@ariai.example` (a stand-in for Access that signs a token from a cookie).
+- Browser smoke: `pnpm build`, then `OUT=$(packages/site/scripts/smoke-fixture.sh)` (builds `test/smoke-docs` as site `sidecar` from a fresh repo), then `SMOKE_SITE=$OUT node packages/hub/scripts/smoke-server.mjs`, and open `http://127.0.0.1:8796/__smoke/login?email=riya@initech.example` (a stand-in for Access that signs a token from a cookie).
 
 ## Publishing (#5)
 

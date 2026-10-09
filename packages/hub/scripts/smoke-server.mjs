@@ -22,28 +22,28 @@ const TEAM = 'smoke.cloudflareaccess.com';
 const AUD = 'aud-smoke';
 const PORT = 8797;
 const config = {
-  org: 'inoltrotech',
+  org: 'acme',
   accessTeamDomain: TEAM,
   accessAud: AUD,
-  admins: ['owner@inoltro.ai'],
+  admins: ['owner@acme.dev'],
   ownerId: '1001',
   sites: [
     {
       repo: 'sidecar',
-      teamDomains: ['inoltro.ai'],
-      approvers: ['pm@inoltro.ai'],
-      readers: ['@ariai.example'],
+      teamDomains: ['acme.dev'],
+      approvers: ['pm@acme.dev'],
+      readers: ['@initech.example'],
       ticketRepo: 'sidecar',
       branch: 'develop',
       repositoryId: '2001',
       workflow: '.github/workflows/docs.yml',
     },
     {
-      repo: 'tikiti',
-      teamDomains: ['tikiti.live'],
+      repo: 'globex',
+      teamDomains: ['globex.dev'],
       approvers: [],
       readers: [],
-      ticketRepo: 'tikiti',
+      ticketRepo: 'globex',
       branch: 'main',
       repositoryId: '2003',
       workflow: '.github/workflows/docs.yml',
@@ -64,9 +64,9 @@ const sign = (email, aud = AUD) =>
 
 const issues = new Map([[52, { title: 'Company approval', state: 'open', labels: [] }]]);
 const github = async (req, url) => {
-  if (/^\/repos\/inoltrotech\/sidecar\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
+  if (/^\/repos\/acme\/sidecar\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
   if (url.pathname.startsWith('/search/issues')) return Response.json({ total_count: 0, items: [] });
-  const m = /^\/repos\/inoltrotech\/sidecar\/issues\/(\d+)(\/labels(?:\/(.+))?)?$/.exec(url.pathname);
+  const m = /^\/repos\/acme\/sidecar\/issues\/(\d+)(\/labels(?:\/(.+))?)?$/.exec(url.pathname);
   const issue = m && issues.get(Number(m[1]));
   if (!issue) return Response.json({ message: 'Not Found' }, { status: 404 });
   if (req.method === 'PUT' && m[2]) issue.labels = (await req.json()).labels;
@@ -77,7 +77,7 @@ const github = async (req, url) => {
     number: Number(m[1]),
     title: issue.title,
     state: issue.state,
-    html_url: `https://github.com/inoltrotech/sidecar/issues/${m[1]}`,
+    html_url: `https://github.com/acme/sidecar/issues/${m[1]}`,
     labels: issue.labels.map((name) => ({ name })),
   });
 };
@@ -177,9 +177,9 @@ if (process.env.SMOKE_SITE) {
 }
 
 const tokens = {};
-for (const e of ['riya@ariai.example', 'dev@inoltro.ai', 'pm@inoltro.ai', 'x@stranger.example', 'Riya@ARIAI.example'])
+for (const e of ['riya@initech.example', 'dev@acme.dev', 'pm@acme.dev', 'x@stranger.example', 'Riya@INITECH.example'])
   tokens[e] = await sign(e);
-tokens.otherApp = await sign('dev@inoltro.ai', 'aud-other');
+tokens.otherApp = await sign('dev@acme.dev', 'aud-other');
 writeFileSync(path.join(here, 'tokens.json'), JSON.stringify(tokens));
 
 // A tiny control port for the smoke: publish V2, read R2/D1/labels.
@@ -223,10 +223,10 @@ http
     }
     const sha = readFileSync(process.env.SMOKE_SHA_FILE ?? '/dev/null', 'utf8').trim();
     const value = await new SignJWT({
-      repository: 'inoltrotech/sidecar',
+      repository: 'acme/sidecar',
       repository_id: '2001',
       repository_owner_id: '1001',
-      workflow_ref: 'inoltrotech/sidecar/.github/workflows/docs.yml@refs/heads/develop',
+      workflow_ref: 'acme/sidecar/.github/workflows/docs.yml@refs/heads/develop',
       ref: 'refs/heads/develop',
       event_name: 'push',
       sha,

@@ -20,7 +20,7 @@ import {
   SIDECAR,
   testEnv,
   tokenFor,
-  TIKITI,
+  GLOBEX,
   WORKFLOW,
 } from './helpers';
 
@@ -120,7 +120,7 @@ describe('1, 8, 9: a publish', () => {
     expect(await (await env.SITES!.get(`${SIDECAR}/history/${OLD}/onboarding/signup.md`))!.text()).toBe(OLD_TEXT);
     // The deployed Worker reads the SITES bucket and serves the new version.
     const live = await send(`/${SIDECAR}/onboarding/signup`, {
-      headers: { 'cf-access-jwt-assertion': await (await import('./helpers')).tokenFor('dev@inoltro.ai') },
+      headers: { 'cf-access-jwt-assertion': await (await import('./helpers')).tokenFor('dev@acme.dev') },
     });
     expect(live.status).toBe(200);
     expect(String(live.body)).toContain('Signup');
@@ -152,7 +152,7 @@ describe('1, 8, 9: a publish', () => {
     expect((await publishWith(await oidcToken({ run_id: '200' }))).status).toBe(200);
     const history = async () => {
       const r = await send(`/${SIDECAR}/_history/${OLD}/onboarding/signup.md`, {
-        headers: { 'cf-access-jwt-assertion': await tokenFor('dev@inoltro.ai') },
+        headers: { 'cf-access-jwt-assertion': await tokenFor('dev@acme.dev') },
       });
       return [r.status, r.body];
     };
@@ -179,7 +179,7 @@ describe('1, 8, 9: a publish', () => {
     const ctx = createExecutionContext();
     const res = await worker.fetch(
       new Request(`${HOST}/${SIDECAR}/_history/${OLD}/onboarding/signup.md`, {
-        headers: { 'cf-access-jwt-assertion': await tokenFor('dev@inoltro.ai') },
+        headers: { 'cf-access-jwt-assertion': await tokenFor('dev@acme.dev') },
       }) as Request<unknown, IncomingRequestCfProperties>,
       testEnv(),
       ctx,
@@ -262,8 +262,8 @@ describe('2, 3, 13: who may publish', () => {
     expect(r.status).toBe(403);
     const cased = await publishWith(
       await oidcToken({
-        repository: 'Inoltrotech/Sidecar',
-        workflow_ref: `Inoltrotech/Sidecar/${WORKFLOW}@refs/heads/develop`,
+        repository: 'Acme/Sidecar',
+        workflow_ref: `Acme/Sidecar/${WORKFLOW}@refs/heads/develop`,
       }),
     );
     expect(cased.status).toBe(200);
@@ -290,17 +290,17 @@ describe('2, 3, 13: who may publish', () => {
   });
 
   it('3: a site that requires an environment refuses a token without it or from another', async () => {
-    const tikiti = {
-      repository: `${ORG}/${TIKITI}`,
+    const globex = {
+      repository: `${ORG}/${GLOBEX}`,
       repository_id: '2003',
-      workflow_ref: `${ORG}/${TIKITI}/${WORKFLOW}@refs/heads/main`,
+      workflow_ref: `${ORG}/${GLOBEX}/${WORKFLOW}@refs/heads/main`,
       ref: 'refs/heads/main',
     };
-    expect((await publishWith(await oidcToken(tikiti), undefined, TIKITI)).status).toBe(403);
-    expect((await publishWith(await oidcToken({ ...tikiti, environment: 'prod' }), undefined, TIKITI)).status).toBe(
+    expect((await publishWith(await oidcToken(globex), undefined, GLOBEX)).status).toBe(403);
+    expect((await publishWith(await oidcToken({ ...globex, environment: 'prod' }), undefined, GLOBEX)).status).toBe(
       403,
     );
-    expect((await publishWith(await oidcToken({ ...tikiti, environment: 'docs' }), undefined, TIKITI)).status).toBe(
+    expect((await publishWith(await oidcToken({ ...globex, environment: 'docs' }), undefined, GLOBEX)).status).toBe(
       200,
     );
   });
@@ -315,7 +315,7 @@ describe('2, 3, 13: who may publish', () => {
   });
 
   it('13: an Access token is not a publish token; readers are unaffected', async () => {
-    const access = await (await import('./helpers')).tokenFor('dev@inoltro.ai');
+    const access = await (await import('./helpers')).tokenFor('dev@acme.dev');
     expect(
       (
         await send(`/_publish/${SIDECAR}`, {
@@ -325,7 +325,7 @@ describe('2, 3, 13: who may publish', () => {
         })
       ).status,
     ).toBe(401);
-    expect((await call('/api/me', { email: 'dev@inoltro.ai' })).status).toBe(200);
+    expect((await call('/api/me', { email: 'dev@acme.dev' })).status).toBe(200);
   });
 });
 

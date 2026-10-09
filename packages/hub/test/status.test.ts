@@ -9,9 +9,9 @@ beforeEach(async () => {
 });
 afterEach(() => spy.mockRestore());
 
-const READER = 'riya@ariai.example';
-const TEAM = 'dev@inoltro.ai';
-const APPROVER = 'approver@inoltro.ai';
+const READER = 'riya@initech.example';
+const TEAM = 'dev@acme.dev';
+const APPROVER = 'approver@acme.dev';
 
 type Row = { page: string; status: string; version: number; wasReadyAt: string | null };
 const statuses = async () => (await call('/api/status', { email: READER })).body as unknown as Row[];
@@ -210,7 +210,7 @@ describe('a page full of resolved threads', () => {
     await env.DB.prepare(
       `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500)
        INSERT INTO threads (site, id, page, heading, quote, page_hash, author, body, state, created_at)
-       SELECT 'inoltrotech/sidecar', 'done-' || i, ?, 'limits', 'x', 'h', 'f@x', 'b', 'resolved', '2026-01-01' FROM n`,
+       SELECT 'acme/sidecar', 'done-' || i, ?, 'limits', 'x', 'h', 'f@x', 'b', 'resolved', '2026-01-01' FROM n`,
     )
       .bind(PAGE)
       .run();

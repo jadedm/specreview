@@ -22,19 +22,19 @@ export const COMMIT_OLD = 'a'.repeat(40);
 export const COMMIT_LIVE = 'b'.repeat(40);
 
 // One org's hub with three sites. sidecar and web share a team and a ticket
-// repo; tikiti has its own team and ticket repo. Readers at ariai.example
+// repo; globex has its own team and ticket repo. Readers at initech.example
 // may read every site.
-export const ORG = 'inoltrotech';
+export const ORG = 'acme';
 export const SIDECAR = 'sidecar';
 export const WEB = 'web';
-export const TIKITI = 'tikiti';
+export const GLOBEX = 'globex';
 export const keyOf = (repo: string) => `${ORG}/${repo}`;
 export const HUB_AUD = 'aud-hub';
 export const VERSION = `${'b'.repeat(40)}-1`;
 
 // GitHub ids for the publish tests (publish.test.ts).
 export const OWNER_ID = '1001';
-export const REPO_IDS: Record<string, string> = { sidecar: '2001', web: '2002', tikiti: '2003' };
+export const REPO_IDS: Record<string, string> = { sidecar: '2001', web: '2002', globex: '2003' };
 export const WORKFLOW = '.github/workflows/docs.yml';
 
 export const CONFIG = {
@@ -42,13 +42,13 @@ export const CONFIG = {
   ownerId: OWNER_ID,
   accessTeamDomain: TEAM,
   accessAud: HUB_AUD,
-  admins: ['owner@inoltro.ai'],
+  admins: ['owner@acme.dev'],
   sites: [
     {
       repo: SIDECAR,
-      teamDomains: ['inoltro.ai'],
-      approvers: ['approver@inoltro.ai'],
-      readers: ['@ariai.example'],
+      teamDomains: ['acme.dev'],
+      approvers: ['approver@acme.dev'],
+      readers: ['@initech.example'],
       ticketRepo: SIDECAR,
       branch: 'develop',
       repositoryId: REPO_IDS.sidecar,
@@ -56,22 +56,22 @@ export const CONFIG = {
     },
     {
       repo: WEB,
-      teamDomains: ['inoltro.ai'],
-      approvers: ['webpm@inoltro.ai'],
-      readers: ['@ariai.example'],
+      teamDomains: ['acme.dev'],
+      approvers: ['webpm@acme.dev'],
+      readers: ['@initech.example'],
       ticketRepo: SIDECAR,
       branch: 'main',
       repositoryId: REPO_IDS.web,
       workflow: WORKFLOW,
     },
     {
-      repo: TIKITI,
-      teamDomains: ['tikiti.live'],
-      approvers: ['pm@tikiti.live'],
-      readers: ['@ariai.example'],
-      ticketRepo: TIKITI,
+      repo: GLOBEX,
+      teamDomains: ['globex.dev'],
+      approvers: ['pm@globex.dev'],
+      readers: ['@initech.example'],
+      ticketRepo: GLOBEX,
       branch: 'main',
-      repositoryId: REPO_IDS.tikiti,
+      repositoryId: REPO_IDS.globex,
       workflow: WORKFLOW,
       environment: 'docs',
     },
@@ -82,7 +82,7 @@ export const CONFIG = {
 // is served only when the live manifest records the file's hash.
 export const OLD_TEXT: Record<string, string> = {
   sidecar: '# Company signup\n\nAnyone with the join link can join.\n',
-  tikiti: '# Tikiti signup\n\nTikiti only.\n',
+  globex: '# Globex signup\n\nGlobex only.\n',
 };
 const hex = async (text: string) =>
   [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
@@ -90,7 +90,7 @@ const hex = async (text: string) =>
     .join('');
 const OLD_HASH: Record<string, string> = {
   sidecar: await hex(OLD_TEXT.sidecar),
-  tikiti: await hex(OLD_TEXT.tikiti),
+  globex: await hex(OLD_TEXT.globex),
 };
 
 const signupPage = (hash: string, issues: number[], oldHash = OLD_HASH.sidecar) => ({
@@ -139,7 +139,7 @@ export const manifests = (webIssues: number[] = []): Record<string, Manifest> =>
         title: 'Company approval',
         hash: 'hash-approval',
         issues: [52],
-        sections: [{ id: 'why', title: 'Why', text: 'Every new company waits until an Inoltro admin approves it.' }],
+        sections: [{ id: 'why', title: 'Why', text: 'Every new company waits until an Acme admin approves it.' }],
         history: [],
       },
       index: { title: 'sidecar docs', hash: 'hash-index', issues: [], sections: [], history: [] },
@@ -151,16 +151,16 @@ export const manifests = (webIssues: number[] = []): Record<string, Manifest> =>
     builtAt: '2026-10-07T00:00:00.000Z',
     pages: { [PAGE]: signupPage('hash-web', webIssues) },
   },
-  [TIKITI]: {
+  [GLOBEX]: {
     commit: COMMIT_LIVE,
     builtAt: '2026-10-07T00:00:00.000Z',
-    pages: { [PAGE]: signupPage('hash-tikiti', [52], OLD_HASH.tikiti) },
+    pages: { [PAGE]: signupPage('hash-globex', [52], OLD_HASH.globex) },
   },
 });
 
 export const historyFiles = (): Record<string, string> => ({
   [`${SIDECAR}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.sidecar,
-  [`${TIKITI}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.tikiti,
+  [`${GLOBEX}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.globex,
 });
 
 // Every site published at VERSION: pointer, manifest, pages and history.
@@ -269,19 +269,19 @@ type StubIssue = { title: string; state: string; labels: string[] };
 const freshRepos = () =>
   new Map<string, Map<number, StubIssue>>([
     [
-      'inoltrotech/sidecar',
+      'acme/sidecar',
       new Map([
         [52, { title: 'Company approval', state: 'open', labels: ['enhancement'] }],
         [23, { title: 'Join links', state: 'open', labels: [] }],
       ]),
     ],
-    ['inoltrotech/tikiti', new Map([[52, { title: 'Tikiti queue', state: 'open', labels: [] }]])],
+    ['acme/globex', new Map([[52, { title: 'Globex queue', state: 'open', labels: [] }]])],
   ]);
 export const github = {
   repos: freshRepos(),
   // The default site's ticket repo, as most tests use it.
   get issues() {
-    return this.repos.get('inoltrotech/sidecar')!;
+    return this.repos.get('acme/sidecar')!;
   },
   calls: [] as string[],
   // Label definitions per repo; repos start with ours missing.

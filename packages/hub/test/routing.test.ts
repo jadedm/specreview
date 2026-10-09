@@ -8,8 +8,8 @@ beforeEach(async () => {
 });
 afterEach(() => spy.mockRestore());
 
-const READER = 'riya@ariai.example';
-const TEAM = 'dev@inoltro.ai';
+const READER = 'riya@initech.example';
+const TEAM = 'dev@acme.dev';
 
 describe('46: state-changing requests', () => {
   it('must be JSON', async () => {
@@ -52,7 +52,7 @@ describe('46: state-changing requests', () => {
 });
 
 describe('48: old versions', () => {
-  it('only the Inoltro team can read them', async () => {
+  it('only the Acme team can read them', async () => {
     const path = `/_history/${COMMIT_OLD}/onboarding/signup.md`;
     expect((await call(path)).status).toBe(401);
     expect((await call(path, { email: READER })).status).toBe(403);

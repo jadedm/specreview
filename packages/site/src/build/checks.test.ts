@@ -103,7 +103,7 @@ describe('24: arguments', () => {
     expect(() => checkArguments('sidecar', paths())).not.toThrow();
   });
 
-  it.each([['Sidecar'], ['inoltrotech/sidecar'], ['..'], [''], ['a b']])('repo %j is refused', (repo) => {
+  it.each([['Sidecar'], ['acme/sidecar'], ['..'], [''], ['a b']])('repo %j is refused', (repo) => {
     expect(() => checkArguments(repo, paths())).toThrow('--repo');
   });
 

@@ -28,7 +28,7 @@ it('/ is 404 with no-store', async () => {
 });
 
 it('serves a page and the site API from the SITES bucket', async () => {
-  const auth = { 'cf-access-jwt-assertion': await tokenFor('dev@inoltro.ai') };
+  const auth = { 'cf-access-jwt-assertion': await tokenFor('dev@acme.dev') };
   const page = await send(`/${SIDECAR}/onboarding/signup`, auth);
   expect(page.status).toBe(200);
   expect(await page.text()).toContain(`${SIDECAR} signup`);
@@ -38,7 +38,7 @@ it('serves a page and the site API from the SITES bucket', async () => {
 it('without the bucket bound, a site answers STORE_NOT_CONFIGURED', async () => {
   const res = await send(
     `/${SIDECAR}/_api/status`,
-    { 'cf-access-jwt-assertion': await tokenFor('dev@inoltro.ai') },
+    { 'cf-access-jwt-assertion': await tokenFor('dev@acme.dev') },
     { SITES: undefined },
   );
   expect(res.status).toBe(500);
@@ -48,7 +48,7 @@ it('without the bucket bound, a site answers STORE_NOT_CONFIGURED', async () => 
 it('28: page data without the bucket bound answers STORE_NOT_CONFIGURED', async () => {
   const res = await send(
     `/${SIDECAR}/_api/pages`,
-    { 'cf-access-jwt-assertion': await tokenFor('riya@ariai.example') },
+    { 'cf-access-jwt-assertion': await tokenFor('riya@initech.example') },
     { SITES: undefined },
   );
   expect(res.status).toBe(500);

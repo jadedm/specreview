@@ -1,7 +1,7 @@
 // pnpm -r skips a package that has no matching script, so a package without
 // typecheck, test or build would pass every gate unchecked. This fails instead.
 //
-// Licences (decided 9 Oct 2026, sandbox#56): the hub, the part a hosted
+// Licences (decided 9 Oct 2026, #21): the hub, the part a hosted
 // version would run, is AGPL-3.0 with the official GNU text as its LICENSE;
 // every other package is MIT under the root LICENSE. Each package says which.
 import { createHash } from 'node:crypto';

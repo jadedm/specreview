@@ -5,8 +5,8 @@ import { canSettle, commentsBlock, hrefOf, statusBar, statusBoard, ticketBox } f
 import { oldVersionView } from './render-history';
 import { keyIn, pageKeyOf, pathOf } from './start';
 
-const reader: Me = { email: 'riya@ariai.example', role: 'reader' };
-const approver: Me = { email: 'pm@inoltro.ai', role: 'approver' };
+const reader: Me = { email: 'riya@initech.example', role: 'reader' };
+const approver: Me = { email: 'pm@acme.dev', role: 'approver' };
 const noop = { reply: () => {}, resolve: () => {}, reopen: () => {}, viewOld: () => {} };
 const HOSTILE = '<script>window.hit=1</script><img src=x onerror="window.hit=1"><svg onload="window.hit=1"></svg>';
 
@@ -24,7 +24,7 @@ const thread = (over: Partial<Thread> = {}): Thread => ({
   resolvedAt: null,
   createdAt: '2026-10-07T00:00:00Z',
   outdated: false,
-  replies: [{ id: 'r1', author: 'Inoltro team', mine: false, body: HOSTILE, createdAt: '2026-10-07T00:00:00Z' }],
+  replies: [{ id: 'r1', author: 'Acme team', mine: false, body: HOSTILE, createdAt: '2026-10-07T00:00:00Z' }],
   ...over,
 });
 
@@ -45,7 +45,7 @@ describe('47: untrusted text is shown as text', () => {
         number: 52,
         title: HOSTILE,
         state: 'open',
-        url: 'https://github.com/inoltrotech/sidecar/issues/52',
+        url: 'https://github.com/acme/sidecar/issues/52',
         labels: [],
         fetchedAt: '2026-10-07T00:00:00Z',
         stale: false,
@@ -56,7 +56,7 @@ describe('47: untrusted text is shown as text', () => {
   });
 
   it('old Markdown: raw HTML and javascript links do not become active', () => {
-    const md = `# Old\n\n${HOSTILE}\n\n[click](javascript:alert(1)) [ok](https://inoltro.ai)\n\n<a href="javascript:alert(1)">x</a>`;
+    const md = `# Old\n\n${HOSTILE}\n\n[click](javascript:alert(1)) [ok](https://acme.dev)\n\n<a href="javascript:alert(1)">x</a>`;
     const view = oldVersionView(
       { commit: 'c', date: '2026-10-03T00:00:00Z', author: 'm', pr: 51, path: 'p.md', hash: 'h' },
       md,
@@ -64,14 +64,14 @@ describe('47: untrusted text is shown as text', () => {
     );
     noActiveContent(view);
     const hrefs = [...view.querySelectorAll('a')].map((a) => a.getAttribute('href'));
-    expect(hrefs).toEqual(['https://inoltro.ai']);
+    expect(hrefs).toEqual(['https://acme.dev']);
     const withImage = oldVersionView(
       { commit: 'c', date: '2026-10-03T00:00:00Z', author: 'm', pr: 51, path: 'p.md', hash: 'h' },
-      '![x](data:image/png;base64,AAAA) ![y](https://inoltro.ai/a.png)',
+      '![x](data:image/png;base64,AAAA) ![y](https://acme.dev/a.png)',
       () => {},
     );
     expect([...withImage.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([
-      'https://inoltro.ai/a.png',
+      'https://acme.dev/a.png',
     ]);
     expect(view.querySelector('h1')?.textContent).toBe('Old');
   });
@@ -84,7 +84,7 @@ describe('status controls follow the role', () => {
     hash: 'h',
     status: 'in_review' as const,
     version: 1,
-    changedBy: 'dev@inoltro.ai',
+    changedBy: 'dev@acme.dev',
     changedAt: '2026-10-07T00:00:00Z',
     wasReadyAt: null,
   };
@@ -134,7 +134,7 @@ describe('9, 22: page keys under the base', () => {
 
 describe('old versions are offered to the team only', () => {
   it('an outdated thread shows the link to the team, not to a reader', () => {
-    const team: Me = { email: 'dev@inoltro.ai', role: 'team' };
+    const team: Me = { email: 'dev@acme.dev', role: 'team' };
     const t = thread({ outdated: true, body: 'x', quote: 'q', replies: [] });
     const has = (me: Me) =>
       [...commentsBlock([], [t], me, noop).querySelectorAll('button')].some(
@@ -156,14 +156,14 @@ describe('a hidden quote', () => {
 describe('10, 25: what a reader sees is what the hub sends', () => {
   const readerThreads = [
     thread({ id: 'a', author: 'You', mine: true, body: 'mine', quote: 'q', replies: [] }),
-    thread({ id: 'b', author: 'Inoltro team', body: 'team', quote: 'q', replies: [] }),
+    thread({ id: 'b', author: 'Acme team', body: 'team', quote: 'q', replies: [] }),
     thread({
       id: 'c',
       author: 'Reader',
       body: 'other',
       quote: 'q',
       state: 'resolved',
-      resolvedBy: 'Inoltro team',
+      resolvedBy: 'Acme team',
       replies: [{ id: 'r', author: 'You', mine: true, body: 'r', createdAt: '2026-10-07T00:00:00Z' }],
     }),
   ];
@@ -171,13 +171,13 @@ describe('10, 25: what a reader sees is what the hub sends', () => {
   it('labels are shown as sent, and no email appears', () => {
     const block = commentsBlock([], readerThreads, reader, noop);
     const text = block.textContent ?? '';
-    for (const label of ['You,', 'Inoltro team,', 'Reader,', 'Resolved by Inoltro team']) expect(text).toContain(label);
+    for (const label of ['You,', 'Acme team,', 'Reader,', 'Resolved by Acme team']) expect(text).toContain(label);
     expect(text).not.toMatch(/@/);
   });
 
   it('resolve is offered on their own threads only; the team may settle any', () => {
     expect(readerThreads.map((t) => canSettle(t, reader))).toEqual([true, false, false]);
-    const team: Me = { email: 'dev@inoltro.ai', role: 'team' };
+    const team: Me = { email: 'dev@acme.dev', role: 'team' };
     expect(readerThreads.map((t) => canSettle(t, team))).toEqual([true, true, true]);
     const resolveButtons = (id: string) =>
       [...commentsBlock([], readerThreads, reader, noop).querySelectorAll(`[data-id="${id}"] button`)].map(
@@ -219,7 +219,7 @@ describe('10, 25: what a reader sees is what the hub sends', () => {
           hash: 'h',
           status: 'ready',
           version: 1,
-          changedBy: 'Inoltro team',
+          changedBy: 'Acme team',
           changedAt: '2026-10-07T00:00:00Z',
           wasReadyAt: null,
         },
@@ -227,6 +227,6 @@ describe('10, 25: what a reader sees is what the hub sends', () => {
       '/fixture/',
     );
     expect(board.querySelector('a')?.getAttribute('href')).toBe('/fixture/guide/');
-    expect(board.textContent).toContain('Inoltro team');
+    expect(board.textContent).toContain('Acme team');
   });
 });

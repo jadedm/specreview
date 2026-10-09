@@ -29,7 +29,7 @@ describe('front matter tickets', () => {
 
 describe('section text', () => {
   const html = `<html><main><div style="x" class="vp-doc _p" data-v-1><div>
-    <h1 id="t">Title</h1><p>Intro <code>ariai</code>: text.</p>
+    <h1 id="t">Title</h1><p>Intro <code>initech</code>: text.</p>
     <h2 id="one" tabindex="-1">One <a class="header-anchor" href="#one">&#8203;</a></h2>
     <ul><li>first item.</li><li>second &amp; <strong>bold</strong></li></ul>
     <h3 id="two">Two</h3><p>a&nbsp;b &lt;tag&gt;</p>
@@ -43,7 +43,7 @@ describe('section text', () => {
 
   it('splits at h2 and h3, keeps text before the first as the top, separates blocks', () => {
     expect(sectionsOf(docBodyOf(html))).toEqual([
-      { id: '_top', title: '', text: 'Intro ariai: text.' },
+      { id: '_top', title: '', text: 'Intro initech: text.' },
       { id: 'one', title: 'One', text: 'first item. second & bold' },
       { id: 'two', title: 'Two', text: 'a b <tag>' },
     ]);

@@ -20,7 +20,7 @@ import {
   reconcile,
   reset,
   SIDECAR,
-  TIKITI,
+  GLOBEX,
   token,
   VERSION,
   WEB,
@@ -39,9 +39,9 @@ afterEach(() => {
   setClockForTests(() => Date.now());
 });
 
-const READER = 'riya@ariai.example';
-const TEAM = 'dev@inoltro.ai';
-const APPROVER = 'approver@inoltro.ai';
+const READER = 'riya@initech.example';
+const TEAM = 'dev@acme.dev';
+const APPROVER = 'approver@acme.dev';
 const STRANGER = 'x@stranger.example';
 const V2 = `${'c'.repeat(40)}-2`;
 
@@ -124,17 +124,17 @@ describe('3-5: pages and assets of the current version', () => {
 
   it('31: two repos at the same version string each serve their own files', async () => {
     expect(String((await page(`/${SIDECAR}/${PAGE}`)).body)).toContain('sidecar signup');
-    expect(String((await page(`/${TIKITI}/${PAGE}`)).body)).toContain('tikiti signup');
+    expect(String((await page(`/${GLOBEX}/${PAGE}`)).body)).toContain('globex signup');
   });
 });
 
 describe('6, 7, 18: who is refused, before anything is read', () => {
   it('18: someone who may not read the site gets 403 everywhere, with no store or database read', async () => {
     const { files, reads } = spyStore(publishedFiles());
-    files.set(`${TIKITI}/current.json`, 'not json');
+    files.set(`${GLOBEX}/current.json`, 'not json');
     files.delete(`${WEB}/current.json`);
     const noDb = { DB: undefined as unknown as Env['DB'] };
-    // sidecar is published, web is not, tikiti's pointer is broken.
+    // sidecar is published, web is not, globex's pointer is broken.
     const paths = [
       `/${SIDECAR}/${PAGE}`,
       `/${SIDECAR}/missing`,
@@ -142,7 +142,7 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
       `/${SIDECAR}/_api/status`,
       `/${SIDECAR}/_api/me`,
       `/${SIDECAR}/_history/${'a'.repeat(40)}/${PAGE}.md`,
-      `/${TIKITI}/${PAGE}`,
+      `/${GLOBEX}/${PAGE}`,
     ];
     for (const path of paths) {
       const r = await call(path, { raw: true, email: STRANGER, envOverride: noDb });
@@ -161,10 +161,10 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
   it('8, 19: token emails are trimmed and lowercased; two @ is refused', async () => {
     const as = async (email: string) =>
       (await call(`/${SIDECAR}/${PAGE}`, { raw: true, token: await token({ email, aud: HUB_AUD }) })).status;
-    expect(await as('Riya@ARIAI.example')).toBe(200);
-    expect(await as('  riya@ariai.example ')).toBe(200);
-    expect(await as('riya@x@ariai.example')).toBe(401);
-    expect(await as('riya@ariai.example.evil')).toBe(403);
+    expect(await as('Riya@INITECH.example')).toBe(200);
+    expect(await as('  riya@initech.example ')).toBe(200);
+    expect(await as('riya@x@initech.example')).toBe(401);
+    expect(await as('riya@initech.example.evil')).toBe(403);
   });
 
   it('8, 19: an exact reader entry admits that address only', async () => {
@@ -182,7 +182,7 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
 
   it('20: team and approvers listed as readers stay team and approver', async () => {
     const override = configWith((c) => {
-      c.sites[0].readers = [TEAM, APPROVER, '@inoltro.ai'];
+      c.sites[0].readers = [TEAM, APPROVER, '@acme.dev'];
       return c;
     });
     expect((await call('/api/me', { email: TEAM, envOverride: override })).body).toMatchObject({ role: 'team' });
@@ -379,8 +379,8 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
     const { files } = spyStore(publishedFiles());
     github.issues.get(52)!.labels.push('docs: in review');
     files.delete(`${SIDECAR}/current.json`);
-    expect((await reconcile())['inoltrotech/sidecar']).not.toBe('failed');
-    expect(docsLabels('inoltrotech/sidecar', 52)).toEqual([]);
+    expect((await reconcile())['acme/sidecar']).not.toBe('failed');
+    expect(docsLabels('acme/sidecar', 52)).toEqual([]);
   });
 
   it('14, 29: a broken pointer is 503 SITE_BROKEN and fails the label sync without clearing anything', async () => {
@@ -410,8 +410,8 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
         reads.filter((k) => k.startsWith(`${SIDECAR}/v/`)),
         text,
       ).toEqual([]);
-      expect((await reconcile())['inoltrotech/sidecar'], text).toBe('failed');
-      expect(docsLabels('inoltrotech/sidecar', 52), text).toEqual(['docs: in review']);
+      expect((await reconcile())['acme/sidecar'], text).toBe('failed');
+      expect(docsLabels('acme/sidecar', 52), text).toEqual(['docs: in review']);
     }
   });
 
@@ -466,8 +466,8 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
       github.issues.get(52)!.labels.push('docs: in review');
       const r = await page(`/${SIDECAR}/${PAGE}`);
       expect([r.status, errorCode(r)], name).toEqual([503, 'SITE_BROKEN']);
-      expect((await reconcile())['inoltrotech/sidecar'], name).toBe('failed');
-      expect(docsLabels('inoltrotech/sidecar', 52), name).toEqual(['docs: in review']);
+      expect((await reconcile())['acme/sidecar'], name).toBe('failed');
+      expect(docsLabels('acme/sidecar', 52), name).toEqual(['docs: in review']);
     }
   });
 
@@ -519,13 +519,13 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
     });
     expect(r.status).toBe(200);
     expect(pointerReads(reads, SIDECAR)).toBe(1);
-    expect(docsLabels('inoltrotech/sidecar', 23)).toEqual(['docs: ready to build']);
+    expect(docsLabels('acme/sidecar', 23)).toEqual(['docs: ready to build']);
     reads.length = 0;
     publishV2(files);
-    expect((await reconcile())['inoltrotech/sidecar']).toBe('updated');
-    for (const repo of [SIDECAR, 'web', TIKITI]) expect(pointerReads(reads, repo), repo).toBe(1);
+    expect((await reconcile())['acme/sidecar']).toBe('updated');
+    for (const repo of [SIDECAR, 'web', GLOBEX]) expect(pointerReads(reads, repo), repo).toBe(1);
     // The reconcile used V2 throughout: #23 is no longer linked.
-    expect(docsLabels('inoltrotech/sidecar', 23)).toEqual([]);
+    expect(docsLabels('acme/sidecar', 23)).toEqual([]);
   });
 });
 

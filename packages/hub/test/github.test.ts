@@ -9,8 +9,8 @@ beforeEach(async () => {
 });
 afterEach(() => spy.mockRestore());
 
-const READER = 'riya@ariai.example';
-const TEAM = 'dev@inoltro.ai';
+const READER = 'riya@initech.example';
+const TEAM = 'dev@acme.dev';
 type Ticket = { number: number; title?: string; stale?: boolean; unavailable?: true; notFound?: true };
 const tickets = async () =>
   (await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: TEAM })).body as unknown as Ticket[];
@@ -56,7 +56,7 @@ describe('40: label reconciliation', () => {
 
   it('one ticket failing is repaired by the next cron run', async () => {
     github.failWritesFor.add(23);
-    const r = await setStatus('dev@inoltro.ai', 'in_review', 0);
+    const r = await setStatus('dev@acme.dev', 'in_review', 0);
     expect(r.body).toMatchObject({ labels: 'failed' });
     expect(docsLabels(23)).toEqual([]);
     github.failWritesFor.clear();
@@ -65,10 +65,10 @@ describe('40: label reconciliation', () => {
   });
 
   it('an older sync finishing late is overwritten by the next run; tickets end on the newest status', async () => {
-    await setStatus('dev@inoltro.ai', 'in_review', 0);
+    await setStatus('dev@acme.dev', 'in_review', 0);
     // Labels left in a stale state, as a late older sync would leave them.
     github.issues.get(23)!.labels = ['docs: pending', 'docs: in review', 'enhancement'];
-    await setStatus('approver@inoltro.ai', 'ready', 1);
+    await setStatus('approver@acme.dev', 'ready', 1);
     expect(docsLabels(23)).toEqual(['docs: ready to build']);
     github.issues.get(23)!.labels = ['docs: pending'];
     await runCron();
@@ -76,7 +76,7 @@ describe('40: label reconciliation', () => {
   });
 
   it('a page changed after ready is relabelled in review by the cron', async () => {
-    await setStatus('approver@inoltro.ai', 'ready', 0);
+    await setStatus('approver@acme.dev', 'ready', 0);
     await env.DB.prepare("UPDATE page_status SET ready_hash = 'older'").run();
     await runCron();
     expect(docsLabels(23)).toEqual(['docs: in review']);
@@ -86,7 +86,7 @@ describe('40: label reconciliation', () => {
 describe('reconcile is stable', () => {
   it('a second cron run with nothing changed writes nothing', async () => {
     await call('/api/status', {
-      email: 'approver@inoltro.ai',
+      email: 'approver@acme.dev',
       body: { page: PAGE, status: 'ready', expectedVersion: 0, hash: LIVE_HASH },
     });
     await runCron();
@@ -107,14 +107,14 @@ describe('tickets no page links any more', () => {
 
   it('a failure listing labelled tickets is reported as failed', async () => {
     github.down = true;
-    expect((await reconcile())['inoltrotech/sidecar']).toBe('failed');
+    expect((await reconcile())['acme/sidecar']).toBe('failed');
   });
 });
 
 describe('readers see only our labels', () => {
   it("a ticket's other labels are not sent", async () => {
     github.issues.get(52)!.labels = ['security', 'docs: pending'];
-    const res = await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: 'riya@ariai.example' });
+    const res = await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, { email: 'riya@initech.example' });
     const [t] = res.body as unknown as { labels: string[] }[];
     expect(t.labels).toEqual(['docs: pending']);
   });

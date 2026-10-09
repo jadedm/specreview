@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 it('34: key set unreachable fails closed', async () => {
-  const r = await call('/api/me', { email: 'a@inoltro.ai' });
+  const r = await call('/api/me', { email: 'a@acme.dev' });
   expect(r.status).toBe(401);
   expect(certs.served).toBeGreaterThan(0);
 });
