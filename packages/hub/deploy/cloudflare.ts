@@ -76,6 +76,7 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
   };
   const list = async <T>(path: string): Promise<T[]> => {
     const items: T[] = [];
+    let firstOfPrevious = '';
     const sep = path.includes('?') ? '&' : '?';
     for (let page = 1; ; page++) {
       const { res, envelope } = await request('GET', `${path}${sep}page=${page}&per_page=${PER_PAGE}`);
@@ -84,6 +85,12 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
       if (!res.ok || envelope.success !== true)
         throw new CloudflareError(res.status, envelope.errors ?? [], `GET ${path}`);
       const batch = Array.isArray(envelope.result) ? (envelope.result as T[]) : [];
+      // A list that ignores page would hand back page 1 forever.
+      const key = JSON.stringify(batch[0] ?? null);
+      if (page > 1 && batch.length > 0 && key === firstOfPrevious) {
+        throw new DeployError(`Cloudflare returned the same page twice for GET ${path}; refusing to loop`);
+      }
+      firstOfPrevious = key;
       items.push(...batch);
       // Not every list reports its page count; without one, a short page is the last.
       const total = envelope.result_info?.total_pages;

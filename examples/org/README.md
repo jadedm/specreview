@@ -9,7 +9,7 @@ The shape of the private repo an organisation keeps for its specreview hub. Copy
 | `specreview.commit`      | the full specreview commit to run                                                      | you             |
 | `run.sh`                 | checks out that commit, builds the hub, runs a command                                 | copied          |
 
-In a new repo, `hub.json` starts without ids: leave out `database.id`, `bucket.created` and `access`. setup records each one as soon as it creates the resource, so a run that fails between creates resumes on the next run. If a create's answer is lost (a timeout), the resource exists without an id; setup then refuses it as not its own, and you add its id to `hub.json` yourself. The `hub.json` in this folder is a finished example with made-up ids; do not copy those.
+In a new repo, `hub.json` starts without ids: leave out `database.id`, `bucket.created` and `access`. setup records each one as soon as it creates the resource, so a run that fails between creates resumes on the next run. If a create's answer is lost (a timeout), the resource exists without an id; setup then refuses it as not its own and says how to record it: its id in `hub.json`, or `bucket.created: true` for the bucket. The `hub.json` in this folder is a finished example with made-up ids; do not copy those.
 
 ## Cloudflare token
 

@@ -25,6 +25,8 @@ type App = {
   name: string;
   allowed_idps?: string[];
   policies: { id: string; precedence?: number }[];
+  destinations?: { type: string; uri: string }[];
+  self_hosted_domains?: string[];
 };
 
 export type FakeState = {
@@ -63,6 +65,8 @@ export type FakeOptions = {
   raw?: (r: Request) => Response | null;
   // Lists that report no page count, as some Cloudflare lists do.
   noPageCount?: boolean;
+  // Lists that ignore the page parameter and always answer page 1.
+  ignorePage?: boolean;
 };
 
 export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
@@ -74,7 +78,7 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
   const refuse = (status: number, message: string, code = 1000) =>
     Response.json({ success: false, errors: [{ code, message }], result: null }, { status });
   const page = (items: unknown[], url: URL) => {
-    const n = Number(url.searchParams.get('page') ?? '1');
+    const n = opts.ignorePage ? 1 : Number(url.searchParams.get('page') ?? '1');
     const size = opts.noPageCount ? Number(url.searchParams.get('per_page') ?? PAGE) : PAGE;
     const slice = items.slice((n - 1) * size, n * size);
     const info = opts.noPageCount
@@ -94,6 +98,9 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
       auth: new Headers(init.headers).get('authorization'),
     };
     requests.push(req);
+    // Yield like a real network call, so a runaway loop can time out instead
+    // of starving the event loop.
+    await new Promise((r) => setImmediate(r));
     const raw = opts.raw?.(req);
     if (raw) return raw;
     if (opts.failOn?.(req)) return refuse(500, 'injected failure');
@@ -150,7 +157,12 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
       state.r2.push({ name: String(body?.name) });
       return ok({ name: body?.name });
     }
-    if (p === `${a}/access/policies` && method === 'GET') return page(state.policies, url);
+    // Reusable policies report how many apps use them.
+    const counted = (x: Policy) => ({
+      ...x,
+      app_count: state.apps.filter((app) => app.policies.some((r) => r.id === x.id)).length,
+    });
+    if (p === `${a}/access/policies` && method === 'GET') return page(state.policies.map(counted), url);
     if (p === `${a}/access/policies` && method === 'POST') {
       const policy = { ...(body as Omit<Policy, 'id'>), id: id('pol') };
       state.policies.push(policy);
@@ -160,7 +172,7 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
       const i = state.policies.findIndex((x) => x.id === m![1]);
       if (i < 0) return refuse(404, 'not found');
       if (method === 'PUT') state.policies[i] = { ...(body as Omit<Policy, 'id'>), id: m[1] };
-      return ok(state.policies[i]);
+      return ok(counted(state.policies[i]));
     }
     if (p === `${a}/access/apps` && method === 'GET') {
       return page(
@@ -180,6 +192,8 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
         name: String(body?.name),
         allowed_idps: body?.allowed_idps as string[] | undefined,
         policies: refs as { id: string }[],
+        destinations: [{ type: 'public', uri: String(body?.domain) }],
+        self_hosted_domains: [String(body?.domain)],
       };
       state.apps.push(app);
       return ok({ id: app.id, aud: app.aud });

@@ -168,6 +168,10 @@ describe('9: deploy', () => {
         Promise.resolve(new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/login' } })),
       () =>
         Promise.resolve(
+          new Response(null, { status: 302, headers: { location: 'https://another-team.cloudflareaccess.com/login' } }),
+        ),
+      () =>
+        Promise.resolve(
           new Response(null, {
             status: 302,
             headers: { location: 'https://acme.cloudflareaccess.com/cdn-cgi/access/login/specs.acme.dev' },
@@ -176,14 +180,18 @@ describe('9: deploy', () => {
     ];
     let n = 0;
     const provisioning = (() => answers[n++]()) as typeof fetch;
-    await waitForHost('specs.acme.dev', { fetchImpl: provisioning, tries: 10, delayMs: 1 });
-    expect(n).toBe(5);
+    await waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+      fetchImpl: provisioning,
+      tries: 10,
+      delayMs: 1,
+    });
+    expect(n).toBe(6);
     const never = (async () => {
       throw new Error('ENOTFOUND');
     }) as typeof fetch;
-    await expect(waitForHost('specs.acme.dev', { fetchImpl: never, tries: 3, delayMs: 1 })).rejects.toThrow(
-      /did not answer within 0 s; DNS or the certificate/,
-    );
+    await expect(
+      waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', { fetchImpl: never, tries: 3, delayMs: 1 }),
+    ).rejects.toThrow(/did not answer within 0 s; DNS or the certificate/);
   });
 
   it(

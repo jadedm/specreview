@@ -61,7 +61,7 @@ const step = async (run: Run, args: string[], env: NodeJS.ProcessEnv, what: stri
 // The hostname is ready once it redirects to the Access login, since nobody
 // is signed in. Cloudflare's own error pages (522, 530) while DNS and the
 // certificate provision are not ready.
-const accessLogin = (location: string | null) => {
+const accessLogin = (location: string | null, teamDomain: string) => {
   const host = (() => {
     try {
       return location ? new URL(location).hostname : '';
@@ -69,10 +69,11 @@ const accessLogin = (location: string | null) => {
       return '';
     }
   })();
-  return host.endsWith('.cloudflareaccess.com');
+  return host === teamDomain;
 };
 export const waitForHost = async (
   hostname: string,
+  teamDomain: string,
   {
     fetchImpl = fetch,
     tries = 30,
@@ -81,7 +82,7 @@ export const waitForHost = async (
 ) => {
   for (let i = 0; i < tries; i++) {
     const answered = await fetchImpl(`https://${hostname}/`, { redirect: 'manual' }).then(
-      (r) => r.status >= 300 && r.status < 400 && accessLogin(r.headers.get('location')),
+      (r) => r.status >= 300 && r.status < 400 && accessLogin(r.headers.get('location'), teamDomain),
       () => false,
     );
     if (answered) return;
@@ -125,7 +126,7 @@ export const deploy = async ({
   });
   if (dryRun) return;
   log(`waiting for https://${org.hub.hostname}/ to answer`);
-  await wait(org.hub.hostname);
+  await wait(org.hub.hostname, deployable(org.hub).access.teamDomain);
   log(`deployed: https://${org.hub.hostname}/`);
 };
 

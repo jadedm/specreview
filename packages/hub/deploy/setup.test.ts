@@ -185,14 +185,37 @@ describe('9: setup', () => {
         /not a plain allow policy/,
       ],
       ['a block decision', (s) => (s.policies[0].decision = 'deny'), /not a plain allow policy/],
-      ['another domain', (s) => (s.apps[0].domain = 'other.acme.dev'), /is for other.acme.dev/],
+      ['another domain', (s) => (s.apps[0].domain = 'other.acme.dev'), /covers other.acme.dev/],
       ['another login method', (s) => (s.apps[0].allowed_idps = []), /login methods other than the one-time PIN/],
       [
         'a bypass not for everyone',
         (s) => (s.policies[1].include = [{ email_domain: { domain: 'acme.dev' } }]),
         /not a single bypass-everyone/,
       ],
-      ['a bypass on another path', (s) => (s.apps[1].domain = 'specs.acme.dev/*'), /is for specs.acme.dev\/\*, not/],
+      ['a bypass on another path', (s) => (s.apps[1].domain = 'specs.acme.dev/*'), /covers specs.acme.dev\/\*/],
+      [
+        'a bypass with a second destination',
+        (s) => s.apps[1].destinations?.push({ type: 'public', uri: 'specs.acme.dev/*' }),
+        /not only specs.acme.dev\/_publish\/\*/,
+      ],
+      [
+        'the main app on a second hostname',
+        (s) => s.apps[0].self_hosted_domains?.push('old.acme.dev'),
+        /not only specs.acme.dev/,
+      ],
+      [
+        'the allow policy shared with another app',
+        (s) => s.apps.push({ ...s.apps[0], id: 'other', domain: 'other.acme.dev', aud: 'o' }),
+        /used by one app/,
+      ],
+      [
+        'the PIN login deleted and the app open to every method',
+        (s) => {
+          s.idps = [];
+          s.apps[0].allowed_idps = [];
+        },
+        /login methods other than the one-time PIN/,
+      ],
     ];
     for (const [name, change, why] of cases) {
       const { state, dir } = await applied();
@@ -323,6 +346,44 @@ describe('9: setup', () => {
     deployed.dns.z1.push({ name: 'specs.acme.dev' });
     deployed.workerDomains.push({ hostname: 'specs.acme.dev', service: 'specreview-hub' });
     expect((await run(deployed, { apply: true })).error).toBeNull();
+  });
+
+  it('adopting an app by its id records its audience, and deploy can proceed', async () => {
+    const { state, dir } = await applied();
+    const file = path.join(dir.dir, 'hub.json');
+    const hub = JSON.parse(readFileSync(file, 'utf8')) as HubJson;
+    delete hub.access?.aud;
+    writeFileSync(file, JSON.stringify(hub));
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.hubJson.access?.aud).toBe(state.apps[0].aud);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it('a bucket found unrecorded says to set bucket.created', async () => {
+    const state = emptyAccount();
+    state.r2.push({ name: 'specreview-sites' });
+    const r = await run(state, { apply: true });
+    expect(r.error?.message).toMatch(
+      /R2 bucket named specreview-sites exists .* set bucket.created to true in hub.json/,
+    );
+  });
+
+  it('a list that ignores the page parameter is refused rather than looped', async () => {
+    const state = emptyAccount();
+    for (let i = 0; i < 60; i++) {
+      state.apps.push({
+        id: `filler-${i}`,
+        domain: `x${i}.acme.dev`,
+        type: 'self_hosted',
+        aud: 'a',
+        name: 'f',
+        policies: [],
+      });
+    }
+    const r = await run(state, { apply: true, fake: { noPageCount: true, ignorePage: true } });
+    expect(r.error?.message).toMatch(/returned the same page twice/);
+    expect(r.writes()).toEqual([]);
   });
 
   it('6: the token goes only in the authorization header and never into output', async () => {

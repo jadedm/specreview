@@ -16,6 +16,7 @@ import { DeployError, saveHub, type Org } from './org';
 type Rule = { email?: { email: string }; email_domain?: { domain: string }; everyone?: Record<string, never> };
 type Policy = {
   id: string;
+  app_count?: number;
   name?: string;
   decision?: string;
   include?: unknown[];
@@ -23,7 +24,22 @@ type Policy = {
   require?: unknown[];
 };
 type AppSummary = { id: string; domain?: string };
-type App = AppSummary & { type?: string; aud?: string; allowed_idps?: string[]; policies?: { id: string }[] };
+type App = AppSummary & {
+  type?: string;
+  aud?: string;
+  allowed_idps?: string[];
+  policies?: { id: string }[];
+  destinations?: { type?: string; uri?: string }[];
+  self_hosted_domains?: string[];
+};
+
+// Every hostname or path an app covers: since destinations, an app protects
+// (or, for a bypass, opens) each of them, not only its domain.
+const coveredBy = (app: App) =>
+  [...new Set([app.domain, ...(app.self_hosted_domains ?? []), ...(app.destinations ?? []).map((d) => d.uri)])].filter(
+    (d): d is string => typeof d === 'string',
+  );
+const coversOnly = (app: App, domain: string) => coveredBy(app).length === 1 && coveredBy(app)[0] === domain;
 type Zone = { id: string; name: string; status: string };
 
 const ruleKey = (r: unknown) => JSON.stringify(r);
@@ -57,8 +73,8 @@ const sameIds = (a: string[] | undefined, b: string[]) =>
   JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...b].sort());
 // The first check that fails names what is wrong; null when none does.
 const firstProblem = (checks: [boolean, string][]) => checks.find(([failed]) => failed)?.[1] ?? null;
-const notRecorded = (what: string) =>
-  `${what} exists but is not recorded in hub.json; it is not adopted. If it is this hub's (a create whose answer was lost), add its id to hub.json and rerun`;
+const notRecorded = (what: string, adopt = 'add its id to hub.json') =>
+  `${what} exists but is not recorded in hub.json; it is not adopted. If it is this hub's (a create whose answer was lost), ${adopt} and rerun`;
 
 type Step = { say: string; run: () => Promise<void> };
 
@@ -174,7 +190,9 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   if (hub.bucket.created && !bucketThere)
     refusals.push(`R2 bucket ${hub.bucket.name} recorded in hub.json is not in the account`);
   if (hub.bucket.created && bucketThere) log(`R2 ${hub.bucket.name}: exists`);
-  if (!hub.bucket.created && bucketThere) refusals.push(notRecorded(`an R2 bucket named ${hub.bucket.name}`));
+  if (!hub.bucket.created && bucketThere) {
+    refusals.push(notRecorded(`an R2 bucket named ${hub.bucket.name}`, 'set bucket.created to true in hub.json'));
+  }
   if (!hub.bucket.created && !bucketThere)
     steps.push({
       say: `R2 ${hub.bucket.name}: create`,
@@ -198,13 +216,14 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     refusals.push(`Access policy ${access.policyId} recorded in hub.json is not in the account`);
   const mainPolicyHandEdited =
     mainPolicy &&
-    (mainPolicy.decision !== 'allow' ||
+    ((mainPolicy.app_count ?? 0) > 1 ||
+      mainPolicy.decision !== 'allow' ||
       !empty(mainPolicy.require) ||
       !empty(mainPolicy.exclude) ||
       !onlyEmailRules(mainPolicy.include));
   if (mainPolicyHandEdited) {
     refusals.push(
-      `Access policy ${mainPolicy.id} is not a plain allow policy of email rules; setup will not change it`,
+      `Access policy ${mainPolicy.id} is not a plain allow policy of email rules used by one app; setup will not change it`,
     );
   }
   if (mainPolicy && !mainPolicyHandEdited && sameRules(mainPolicy.include, include))
@@ -252,12 +271,15 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     refusals.push(`Access policy ${access.publishPolicyId} recorded in hub.json is not in the account`);
   }
   const bypassAll =
+    (publishPolicy?.app_count ?? 0) <= 1 &&
     publishPolicy?.decision === 'bypass' &&
     sameRules(publishPolicy.include, EVERYONE) &&
     empty(publishPolicy.require) &&
     empty(publishPolicy.exclude);
   if (publishPolicy && !bypassAll)
-    refusals.push(`Access policy ${publishPolicy.id} is not a single bypass-everyone rule; setup will not change it`);
+    refusals.push(
+      `Access policy ${publishPolicy.id} is not a single bypass-everyone rule used by one app; setup will not change it`,
+    );
   if (publishPolicy && bypassAll) log(`Access policy ${publishPolicyName}: exists`);
   const publishPolicyNamed = !access.publishPolicyId && policies.some((p) => p.name === publishPolicyName);
   if (publishPolicyNamed) refusals.push(notRecorded(`an Access policy named "${publishPolicyName}"`));
@@ -283,8 +305,8 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     mainApp &&
     firstProblem([
       [
-        mainApp.domain !== host || mainApp.type !== 'self_hosted',
-        `is for ${mainApp.domain} (${mainApp.type}), not ${host}`,
+        !coversOnly(mainApp, host) || mainApp.type !== 'self_hosted',
+        `covers ${coveredBy(mainApp).join(', ')} (${mainApp.type}), not only ${host}`,
       ],
       [
         Boolean(access.aud) && mainApp.aud !== access.aud,
@@ -297,13 +319,21 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
         ),
         'has policies other than the one setup recorded',
       ],
-      [
-        Boolean(otp) && !sameIds(mainApp.allowed_idps, otp ? [otp] : []),
-        'allows login methods other than the one-time PIN',
-      ],
+      // Without the PIN login there is nothing to compare against, and an
+      // empty list means every login method: refuse rather than guess.
+      [!otp || !sameIds(mainApp.allowed_idps, otp ? [otp] : []), 'allows login methods other than the one-time PIN'],
     ]);
   if (mainApp && mainAppProblem) refusals.push(`Access app ${mainApp.id} ${mainAppProblem}; setup will not change it`);
   if (mainApp && !mainAppProblem) log(`Access app for ${host}: exists`);
+  // An app adopted by its id (after a lost create) has no audience recorded yet.
+  if (mainApp && !mainAppProblem && !access.aud)
+    steps.push({
+      say: `Access app for ${host}: record its audience`,
+      run: async () => {
+        access.aud = mainApp.aud;
+        saveHub(org);
+      },
+    });
   const mainAppNamed = !access.appId && apps.some((x) => x.domain === host);
   if (mainAppNamed) refusals.push(notRecorded(`an Access app for ${host}`));
   if (!access.appId && !mainAppNamed)
@@ -334,7 +364,10 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   const publishAppProblem =
     publishApp &&
     firstProblem([
-      [publishApp.domain !== publishDomain, `is for ${publishApp.domain}, not ${publishDomain}`],
+      [
+        !coversOnly(publishApp, publishDomain) || publishApp.type !== 'self_hosted',
+        `covers ${coveredBy(publishApp).join(', ')} (${publishApp.type}), not only ${publishDomain}`,
+      ],
       [
         !sameIds(
           publishApp.policies?.map((p) => p.id),
