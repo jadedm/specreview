@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # specreview
 
-Review specs where they are rendered. Teams keep Markdown in each repo's `docs/`; specreview publishes each repo as a site on one hub the org hosts on its own Cloudflare account and domain, where readers comment on selected text and product signs pages off; the sign-off shows on linked GitHub issues as a label. Open source (MIT), self-hosted only. Plan and domain model: issue #1.
+Review specs where they are rendered. Teams keep Markdown in each repo's `docs/`; specreview publishes each repo as a site on one hub the org hosts on its own Cloudflare account and domain, where readers comment on selected text and product signs pages off; the sign-off shows on linked GitHub issues as a label. Open source and self-hosted: the hub (`packages/hub`) is AGPL-3.0-only with its own `LICENSE`, everything else MIT under the root `LICENSE`; `pnpm check:packages` enforces each package's `license` field (decided 9 Oct 2026, #21). Plan and domain model: issue #1.
 
 Every change: an issue first, then a test plan on the issue before code, a branch, a PR, the full local gate before each push, and review before merge.
 

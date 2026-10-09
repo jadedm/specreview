@@ -1,5 +1,6 @@
 {
   "name": "@specreview/site",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "bin": {

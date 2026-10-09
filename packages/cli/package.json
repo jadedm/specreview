@@ -1,5 +1,6 @@
 {
   "name": "@jadedm/specreview",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "scripts": {

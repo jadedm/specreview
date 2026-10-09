@@ -4,6 +4,7 @@ pnpm-lock.yaml
 **/.vitepress/cache
 **/.wrangler
 LICENSE
+packages/hub/LICENSE
 # Test input: its exact Markdown is what the browser smoke selects.
 packages/site/test/smoke-docs/
 packages/site/test/features.md
