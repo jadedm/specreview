@@ -1,5 +1,7 @@
 // node packages/hub/dist/deploy.mjs <setup|deploy|secret> --org <dir> --token-file <file> [...]
+import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cloudflare, readToken } from './cloudflare';
 import { deploy, runWrangler, secret } from './deploy';
 import { DeployError, loadOrg } from './org';
@@ -57,7 +59,13 @@ export const main = async (
   });
 };
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+// Compared as real paths: a URL keeps spaces escaped and a symlinked folder
+// resolves differently, and either would make the script exit without running.
+export const isEntry = (argv1: string | undefined, moduleUrl: string) => {
+  const real = (p: string) => (existsSync(p) ? realpathSync(p) : path.resolve(p));
+  return Boolean(argv1) && real(argv1 as string) === real(fileURLToPath(moduleUrl));
+};
+const invoked = isEntry(process.argv[1], import.meta.url);
 if (invoked) {
   main(process.argv.slice(2)).catch((e: unknown) => {
     console.error(e instanceof DeployError ? e.message : e);

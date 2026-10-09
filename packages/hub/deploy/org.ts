@@ -2,7 +2,7 @@
 // which repos publish) and hub.json (where the hub runs). Each fact lives in
 // one file: the Access team domain and audience are written into hub.json by
 // setup, and deploy adds them to the config before validating it.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { problemsIn } from '../src/config';
 
@@ -12,7 +12,14 @@ export type HubJson = {
   worker: string;
   database: { name: string; id?: string };
   bucket: { name: string; created?: boolean };
-  access?: { teamDomain?: string; appId?: string; aud?: string; publishAppId?: string };
+  access?: {
+    teamDomain?: string;
+    policyId?: string;
+    appId?: string;
+    aud?: string;
+    publishPolicyId?: string;
+    publishAppId?: string;
+  };
 };
 
 export type Org = {
@@ -32,7 +39,7 @@ const D1_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 // R2 bucket names: 3 to 63 lowercase letters, digits and dashes.
 const BUCKET = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const HUB_KEYS = new Set(['$schema', 'accountId', 'hostname', 'worker', 'database', 'bucket', 'access']);
-const ACCESS_KEYS = new Set(['teamDomain', 'appId', 'aud', 'publishAppId']);
+const ACCESS_KEYS = new Set(['teamDomain', 'policyId', 'appId', 'aud', 'publishPolicyId', 'publishAppId']);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -95,8 +102,12 @@ export const loadOrg = (dir: string): Org => {
 };
 
 // setup records each resource as soon as it exists, so a failed run resumes.
+// Written beside the file, then renamed over it: hub.json is the only record
+// of the ids, so a crash mid-write must not leave half of it.
 export const saveHub = (org: Org) => {
-  writeFileSync(path.join(org.dir, 'hub.json'), `${JSON.stringify(org.hub, null, 2)}\n`);
+  const file = path.join(org.dir, 'hub.json');
+  writeFileSync(`${file}.tmp`, `${JSON.stringify(org.hub, null, 2)}\n`);
+  renameSync(`${file}.tmp`, file);
 };
 
 // What setup must have recorded before the hub can be deployed.
@@ -106,7 +117,9 @@ export const deployable = (hub: HubJson) => {
     !hub.bucket.created && 'bucket.created',
     !hub.access?.teamDomain && 'access.teamDomain',
     !hub.access?.aud && 'access.aud',
+    !hub.access?.policyId && 'access.policyId',
     !hub.access?.appId && 'access.appId',
+    !hub.access?.publishPolicyId && 'access.publishPolicyId',
     !hub.access?.publishAppId && 'access.publishAppId',
   ].filter(Boolean);
   if (missing.length > 0) throw new DeployError(`run setup with --apply first; hub.json lacks ${missing.join(', ')}`);

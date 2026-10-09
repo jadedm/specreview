@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { DeployError } from './org';
 
 const API = 'https://api.cloudflare.com/client/v4';
+const PER_PAGE = 50;
 
 export type CfError = { code?: number; message?: string };
 
@@ -42,6 +43,8 @@ export type Cloudflare = {
   call: <T = unknown>(method: string, path: string, body?: unknown) => Promise<T>;
   // Every item of a page-numbered list.
   list: <T = unknown>(path: string) => Promise<T[]>;
+  // One call, with the cursor for the next page when the list is cursored.
+  page: <T = unknown>(method: string, path: string) => Promise<{ result: T; cursor?: string }>;
   // 404 is an answer here (the thing does not exist), not a failure.
   exists: (path: string) => Promise<boolean>;
 };
@@ -75,15 +78,17 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
     const items: T[] = [];
     const sep = path.includes('?') ? '&' : '?';
     for (let page = 1; ; page++) {
-      const { res, envelope } = await request('GET', `${path}${sep}page=${page}&per_page=50`);
+      const { res, envelope } = await request('GET', `${path}${sep}page=${page}&per_page=${PER_PAGE}`);
       if (!envelope)
         throw new DeployError(`Cloudflare sent a response that is not JSON for GET ${path} (${res.status})`);
       if (!res.ok || envelope.success !== true)
         throw new CloudflareError(res.status, envelope.errors ?? [], `GET ${path}`);
       const batch = Array.isArray(envelope.result) ? (envelope.result as T[]) : [];
       items.push(...batch);
-      const total = envelope.result_info?.total_pages ?? 1;
-      if (page >= total || batch.length === 0) return items;
+      // Not every list reports its page count; without one, a short page is the last.
+      const total = envelope.result_info?.total_pages;
+      const last = total === undefined ? batch.length < PER_PAGE : page >= total;
+      if (last || batch.length === 0) return items;
     }
   };
   const exists = async (path: string) => {
@@ -94,5 +99,13 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
       throw new CloudflareError(res.status, envelope.errors ?? [], `GET ${path}`);
     return true;
   };
-  return { call, list, exists };
+  const page = async <T>(method: string, path: string) => {
+    const { res, envelope } = await request(method, path);
+    if (!envelope)
+      throw new DeployError(`Cloudflare sent a response that is not JSON for ${method} ${path} (${res.status})`);
+    if (!res.ok || envelope.success !== true)
+      throw new CloudflareError(res.status, envelope.errors ?? [], `${method} ${path}`);
+    return { result: envelope.result as T, cursor: envelope.result_info?.cursor || undefined };
+  };
+  return { call, list, exists, page };
 };

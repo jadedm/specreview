@@ -58,8 +58,19 @@ const step = async (run: Run, args: string[], env: NodeJS.ProcessEnv, what: stri
   if (code !== 0) throw new DeployError(`${what} failed (wrangler exit ${code}); nothing after it ran`);
 };
 
-// The hostname answers once DNS and the certificate are ready: an Access
-// redirect for a page, since nobody is signed in.
+// The hostname is ready once it redirects to the Access login, since nobody
+// is signed in. Cloudflare's own error pages (522, 530) while DNS and the
+// certificate provision are not ready.
+const accessLogin = (location: string | null) => {
+  const host = (() => {
+    try {
+      return location ? new URL(location).hostname : '';
+    } catch {
+      return '';
+    }
+  })();
+  return host.endsWith('.cloudflareaccess.com');
+};
 export const waitForHost = async (
   hostname: string,
   {
@@ -70,7 +81,7 @@ export const waitForHost = async (
 ) => {
   for (let i = 0; i < tries; i++) {
     const answered = await fetchImpl(`https://${hostname}/`, { redirect: 'manual' }).then(
-      (r) => r.status > 0,
+      (r) => r.status >= 300 && r.status < 400 && accessLogin(r.headers.get('location')),
       () => false,
     );
     if (answered) return;

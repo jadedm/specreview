@@ -159,14 +159,25 @@ describe('9: deploy', () => {
     expect(calls).toEqual([]);
   });
 
-  it('29: waits for the hostname to answer, and times out with a reason', async () => {
+  it('29: waits for the Access redirect, through DNS failures and Cloudflare error pages, and times out with a reason', async () => {
+    const answers = [
+      () => Promise.reject(new Error('ENOTFOUND')),
+      () => Promise.resolve(new Response('origin unreachable', { status: 530 })),
+      () => Promise.resolve(new Response('not routed', { status: 404 })),
+      () =>
+        Promise.resolve(new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/login' } })),
+      () =>
+        Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://acme.cloudflareaccess.com/cdn-cgi/access/login/specs.acme.dev' },
+          }),
+        ),
+    ];
     let n = 0;
-    const flaky = (async () => {
-      if (++n < 3) throw new Error('ENOTFOUND');
-      return new Response(null, { status: 302 });
-    }) as typeof fetch;
-    await waitForHost('specs.acme.dev', { fetchImpl: flaky, tries: 5, delayMs: 1 });
-    expect(n).toBe(3);
+    const provisioning = (() => answers[n++]()) as typeof fetch;
+    await waitForHost('specs.acme.dev', { fetchImpl: provisioning, tries: 10, delayMs: 1 });
+    expect(n).toBe(5);
     const never = (async () => {
       throw new Error('ENOTFOUND');
     }) as typeof fetch;

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cloudflare } from './cloudflare';
@@ -16,19 +16,24 @@ import {
   type FakeState,
 } from './test-helpers';
 
+type HubJson = typeof BARE_HUB & {
+  database: { id?: string };
+  bucket: { created?: boolean };
+  access?: Record<string, string>;
+};
+
 const run = async (
   state: FakeState,
   {
     apply = false,
     hub = BARE_HUB as unknown,
     config = CONFIG as unknown,
-    failOn = undefined as FakeOptions['failOn'],
-    raw = undefined as FakeOptions['raw'],
+    fake: fakeOpts = {} as FakeOptions,
     dir = undefined as ReturnType<typeof orgDir> | undefined,
   } = {},
 ) => {
   const o = dir ?? orgDir(hub, config);
-  const fake = fakeCloudflare(state, { failOn, raw });
+  const fake = fakeCloudflare(state, fakeOpts);
   const lines: string[] = [];
   const error = await setup(loadOrg(o.dir), cloudflare(o.tokenFile, fake.fetchImpl), {
     apply,
@@ -37,11 +42,7 @@ const run = async (
     () => null,
     (e: Error) => e,
   );
-  const hubJson = JSON.parse(readFileSync(path.join(o.dir, 'hub.json'), 'utf8')) as typeof BARE_HUB & {
-    database: { id?: string };
-    bucket: { created?: boolean };
-    access?: Record<string, string>;
-  };
+  const hubJson = JSON.parse(readFileSync(path.join(o.dir, 'hub.json'), 'utf8')) as HubJson;
   return { ...fake, lines, error, hubJson, o };
 };
 
@@ -52,6 +53,13 @@ const applied = async () => {
   return { state, dir: first.o, hub: first.hubJson };
 };
 
+const WANT = [
+  { email: { email: 'owner@acme.dev' } },
+  { email: { email: 'riya@partner.example' } },
+  { email_domain: { domain: 'acme.dev' } },
+  { email_domain: { domain: 'initech.example' } },
+];
+
 describe('9: setup', () => {
   it('8: plan mode only reads, says what it would do, and leaves hub.json alone', async () => {
     const r = await run(emptyAccount());
@@ -61,6 +69,8 @@ describe('9: setup', () => {
       'plan: one-time PIN login: create',
       'plan: D1 specreview: create',
       'plan: R2 specreview-sites: create',
+      'plan: Access policy specreview specs.acme.dev: create',
+      'plan: Access policy specreview specs.acme.dev publish: create',
       'plan: Access app for specs.acme.dev: create',
       'plan: Access bypass for specs.acme.dev/_publish/*: create',
       'plan: Access team domain: record acme.cloudflareaccess.com',
@@ -68,37 +78,31 @@ describe('9: setup', () => {
     expect(r.hubJson).toEqual(BARE_HUB);
   });
 
-  it('9: apply on an empty account creates everything and records every id', async () => {
+  it('9: apply on an empty account creates everything with reusable policies and records every id', async () => {
     const state = emptyAccount();
     const r = await run(state, { apply: true });
     expect(r.error).toBeNull();
     expect(r.hubJson.database.id).toBe(state.d1[0].uuid);
     expect(r.hubJson.bucket.created).toBe(true);
     expect(state.r2).toEqual([{ name: 'specreview-sites' }]);
+    const [allow, bypass] = state.policies;
     const [main, publish] = state.apps;
     expect(r.hubJson.access).toEqual({
+      policyId: allow.id,
+      publishPolicyId: bypass.id,
       appId: main.id,
       aud: main.aud,
       publishAppId: publish.id,
       teamDomain: 'acme.cloudflareaccess.com',
     });
-    expect(main.domain).toBe('specs.acme.dev');
-    expect(main.policies.map((p) => [p.name, p.decision])).toEqual([['specreview', 'allow']]);
-    expect(main.policies[0].include).toEqual([
-      { email: { email: 'owner@acme.dev' } },
-      { email: { email: 'riya@partner.example' } },
-      { email_domain: { domain: 'acme.dev' } },
-      { email_domain: { domain: 'initech.example' } },
+    expect([allow.decision, allow.include]).toEqual(['allow', WANT]);
+    expect([bypass.decision, bypass.include]).toEqual(['bypass', [{ everyone: {} }]]);
+    expect([main.domain, main.policies.map((p) => p.id), main.allowed_idps]).toEqual([
+      'specs.acme.dev',
+      [allow.id],
+      [state.idps[0].id],
     ]);
-    const createApp = r.requests.find(
-      (q) =>
-        q.method === 'POST' &&
-        q.path.endsWith('/access/apps') &&
-        (q.body as { domain: string }).domain === 'specs.acme.dev',
-    );
-    expect((createApp?.body as { allowed_idps: string[] }).allowed_idps).toEqual([state.idps[0].id]);
-    expect(publish.domain).toBe('specs.acme.dev/_publish/*');
-    expect(publish.policies.map((p) => [p.decision, p.include])).toEqual([['bypass', [{ everyone: {} }]]]);
+    expect([publish.domain, publish.policies.map((p) => p.id)]).toEqual(['specs.acme.dev/_publish/*', [bypass.id]]);
     expect(r.lines.at(-1)).toBe('hub.json updated; commit it');
   });
 
@@ -115,26 +119,27 @@ describe('9: setup', () => {
     const config = structuredClone(CONFIG);
     config.sites[0].readers = ['new@partner.example'];
     config.admins = ['boss@acme.dev'];
-    const { writeFileSync } = await import('node:fs');
     writeFileSync(path.join(dir.dir, 'specreview.config.json'), JSON.stringify(config));
     const plan = await run(state, { dir });
     expect(plan.writes()).toEqual([]);
-    expect(plan.lines).toContain('plan: Access app for specs.acme.dev: update its policy');
+    expect(plan.lines).toContain('plan: Access policy specreview specs.acme.dev: update');
     const r = await run(state, { apply: true, dir });
     expect(r.error).toBeNull();
-    expect(r.writes().map((w) => w.method)).toEqual(['PUT']);
+    expect(r.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
+      ['PUT', `/access/policies/${state.policies[0].id}`],
+    ]);
     const want = [
       { email: { email: 'boss@acme.dev' } },
       { email: { email: 'new@partner.example' } },
       { email_domain: { domain: 'acme.dev' } },
     ];
-    expect(state.apps[0].policies[0].include).toEqual(want);
+    expect(state.policies[0].include).toEqual(want);
     expect(r.lines.some((l) => l.startsWith('policy before: ') && l.includes('initech.example'))).toBe(true);
     expect(r.lines).toContain(`policy wanted: ${JSON.stringify(want)}`);
     expect(r.lines).toContain(`policy after: ${JSON.stringify(want)}`);
   });
 
-  it('12 and 16: Zero Trust off, an account the token cannot read, a non-JSON answer, or success false stop it', async () => {
+  it('12 and 16: Zero Trust off, an unreadable account, a non-JSON answer, or a refusal stop it', async () => {
     const off = emptyAccount();
     off.accessEnabled = false;
     expect((await run(off, { apply: true })).error?.message).toMatch(/Zero Trust is not enabled/);
@@ -145,38 +150,49 @@ describe('9: setup', () => {
     expect(denied.requests).toHaveLength(1);
     const html = await run(emptyAccount(), {
       apply: true,
-      raw: (q) => (q.path.startsWith('/zones') ? new Response('<html>oops</html>', { status: 502 }) : null),
+      fake: { raw: (q) => (q.path.startsWith('/zones') ? new Response('<html>oops</html>', { status: 502 }) : null) },
     });
     expect(html.error?.message).toMatch(/not JSON/);
-    const refused = await run(emptyAccount(), { apply: true, failOn: (q) => q.path.includes('/identity_providers') });
+    const refused = await run(emptyAccount(), {
+      apply: true,
+      fake: { failOn: (q) => q.path.includes('/identity_providers') },
+    });
     expect(refused.error?.message).toMatch(/Cloudflare refused GET .*identity_providers.*injected failure/);
-    for (const r of [denied, html, refused]) expect(r.writes()).toEqual([]);
+    const d1Down = await run(emptyAccount(), {
+      apply: true,
+      hub: { ...BARE_HUB, database: { name: 'specreview', id: '00000000-0000-0000-0000-000000000000' } },
+      fake: { failOn: (q) => q.path.includes('/d1/database/') },
+    });
+    expect(d1Down.error?.message).toMatch(/Cloudflare refused GET .*d1\/database.*injected failure/);
+    for (const r of [denied, html, refused, d1Down]) expect(r.writes()).toEqual([]);
   });
 
-  it('13 and 20: apps changed by hand are refused and nothing is written', async () => {
+  it('13 and 20: policies and apps changed by hand are refused and nothing is written', async () => {
     const cases: [string, (s: FakeState) => void, RegExp][] = [
       [
-        'a second policy',
-        (s) => s.apps[0].policies.push({ id: 'x', name: 'mine', decision: 'allow', include: [{ everyone: {} }] }),
-        /policies other than/,
+        'a second policy on the app',
+        (s) => s.apps[0].policies.push({ id: 'theirs' }),
+        /policies other than the one setup recorded/,
       ],
       [
         'a require rule',
-        (s) => (s.apps[0].policies[0].require = [{ email_domain: { domain: 'acme.dev' } }]),
-        /require, exclude or non-email/,
+        (s) => (s.policies[0].require = [{ email_domain: { domain: 'acme.dev' } }]),
+        /not a plain allow policy/,
       ],
       [
         'a service token rule',
-        (s) => s.apps[0].policies[0].include.push({ any_valid_service_token: {} }),
-        /require, exclude or non-email/,
+        (s) => s.policies[0].include.push({ any_valid_service_token: {} }),
+        /not a plain allow policy/,
       ],
-      ['another domain', (s) => (s.apps[0].domain = 'other.acme.dev'), /changed by hand/],
+      ['a block decision', (s) => (s.policies[0].decision = 'deny'), /not a plain allow policy/],
+      ['another domain', (s) => (s.apps[0].domain = 'other.acme.dev'), /is for other.acme.dev/],
+      ['another login method', (s) => (s.apps[0].allowed_idps = []), /login methods other than the one-time PIN/],
       [
-        'a bypass that is not for everyone',
-        (s) => (s.apps[1].policies[0].include = [{ email_domain: { domain: 'acme.dev' } }]),
+        'a bypass not for everyone',
+        (s) => (s.policies[1].include = [{ email_domain: { domain: 'acme.dev' } }]),
         /not a single bypass-everyone/,
       ],
-      ['a bypass on another path', (s) => (s.apps[1].domain = 'specs.acme.dev/*'), /changed by hand/],
+      ['a bypass on another path', (s) => (s.apps[1].domain = 'specs.acme.dev/*'), /is for specs.acme.dev\/\*, not/],
     ];
     for (const [name, change, why] of cases) {
       const { state, dir } = await applied();
@@ -188,15 +204,21 @@ describe('9: setup', () => {
     }
   });
 
-  it('17: a database, bucket or app with the wanted name but no recorded id is refused, not adopted', async () => {
+  it('17: resources with the wanted name but no recorded id are refused, not adopted, saying how to adopt one', async () => {
     const state = emptyAccount();
     state.d1.push({ uuid: 'someone-elses', name: 'specreview' });
     state.r2.push({ name: 'specreview-sites' });
+    state.policies.push({ id: 'p', name: 'specreview specs.acme.dev', decision: 'allow', include: [] });
     state.apps.push({ id: 'theirs', domain: 'specs.acme.dev', type: 'self_hosted', aud: 'a', name: 'x', policies: [] });
     const r = await run(state, { apply: true });
-    expect(r.error?.message).toMatch(/D1 database named specreview exists but is not recorded/);
-    expect(r.error?.message).toMatch(/R2 bucket named specreview-sites exists but is not recorded/);
-    expect(r.error?.message).toMatch(/Access app for specs.acme.dev exists but is not recorded/);
+    const found = [
+      /D1 database named specreview/,
+      /R2 bucket named specreview-sites/,
+      /Access policy named "specreview specs.acme.dev"/,
+      /Access app for specs.acme.dev exists/,
+    ];
+    for (const what of found) expect(r.error?.message).toMatch(what);
+    expect(r.error?.message).toMatch(/add its id to hub.json and rerun/);
     expect(r.writes()).toEqual([]);
   });
 
@@ -204,7 +226,7 @@ describe('9: setup', () => {
     const state = emptyAccount();
     const first = await run(state, {
       apply: true,
-      failOn: (q) => q.method === 'POST' && q.path.endsWith('/r2/buckets'),
+      fake: { failOn: (q) => q.method === 'POST' && q.path.endsWith('/r2/buckets') },
     });
     expect(first.error?.message).toMatch(/injected failure/);
     expect(first.hubJson.database.id).toBe(state.d1[0].uuid);
@@ -215,6 +237,8 @@ describe('9: setup', () => {
     expect(state.idps).toHaveLength(1);
     expect(second.writes().map((w) => w.path.replace(`/accounts/${ACCOUNT}`, ''))).toEqual([
       '/r2/buckets',
+      '/access/policies',
+      '/access/policies',
       '/access/apps',
       '/access/apps',
     ]);
@@ -224,7 +248,7 @@ describe('9: setup', () => {
     const { state, dir } = await applied();
     state.apps[0].aud = 'recreated';
     const r = await run(state, { apply: true, dir });
-    expect(r.error?.message).toMatch(/audience differs/);
+    expect(r.error?.message).toMatch(/different audience/);
   });
 
   it('22: an existing one-time PIN login is reused; other login methods are left alone; rules are email only', async () => {
@@ -234,38 +258,43 @@ describe('9: setup', () => {
     expect(r.error).toBeNull();
     expect(r.writes().some((w) => w.path.includes('identity_providers'))).toBe(false);
     expect(state.idps.map((p) => p.id)).toEqual(['google', 'otp-1']);
-    const kinds = new Set(state.apps[0].policies[0].include.flatMap((rule) => Object.keys(rule as object)));
+    expect(state.apps[0].allowed_idps).toEqual(['otp-1']);
+    const kinds = new Set(state.policies[0].include.flatMap((rule) => Object.keys(rule as object)));
     expect([...kinds].sort()).toEqual(['email', 'email_domain']);
   });
 
-  it('23: lists are read to the last page', async () => {
-    const state = emptyAccount();
-    for (let i = 0; i < 5; i++)
+  it('23: lists are read to the last page, with or without a page count, and R2 by cursor', async () => {
+    const fill = () => {
+      const state = emptyAccount();
+      for (let i = 0; i < 60; i++) {
+        state.apps.push({
+          id: `filler-${i}`,
+          domain: `x${i}.acme.dev`,
+          type: 'self_hosted',
+          aud: 'a',
+          name: 'f',
+          policies: [],
+        });
+      }
       state.apps.push({
-        id: `filler-${i}`,
-        domain: `x${i}.acme.dev`,
+        id: 'late',
+        domain: 'specs.acme.dev',
         type: 'self_hosted',
         aud: 'a',
-        name: 'f',
+        name: 'theirs',
         policies: [],
       });
-    state.apps.push({
-      id: 'late',
-      domain: 'specs.acme.dev',
-      type: 'self_hosted',
-      aud: 'a',
-      name: 'theirs',
-      policies: [],
-    });
-    for (let i = 0; i < 4; i++) state.zones.unshift({ id: `zz${i}`, name: `other${i}.dev`, status: 'active' });
-    const r = await run(state, { apply: true });
-    expect(r.error?.message).toMatch(/Access app for specs.acme.dev exists but is not recorded/);
-    expect(r.error?.message).not.toMatch(/no zone/);
-    expect(
-      r.requests
-        .filter((q) => q.path.includes('/access/apps?'))
-        .map((q) => new URL(`http://x${q.path}`).searchParams.get('page')),
-    ).toEqual(['1', '2', '3']);
+      for (let i = 0; i < 4; i++) state.zones.unshift({ id: `zz${i}`, name: `other${i}.dev`, status: 'active' });
+      for (let i = 0; i < 4; i++) state.r2.push({ name: `specreview-sites-old${i}` });
+      state.r2.push({ name: 'specreview-sites' });
+      return state;
+    };
+    for (const noPageCount of [false, true]) {
+      const r = await run(fill(), { apply: true, fake: { noPageCount } });
+      expect(r.error?.message, String(noPageCount)).toMatch(/Access app for specs.acme.dev exists but is not recorded/);
+      expect(r.error?.message, String(noPageCount)).toMatch(/R2 bucket named specreview-sites exists/);
+      expect(r.error?.message, String(noPageCount)).not.toMatch(/no zone/);
+    }
   });
 
   it('24: a hostname without an active zone, with a DNS record, or on another Worker is refused before anything is created', async () => {
@@ -314,6 +343,6 @@ describe('9: setup', () => {
   it('wantedInclude merges team domains, readers and admins without duplicates', () => {
     const config = structuredClone(CONFIG);
     config.sites.push({ ...config.sites[0], repo: 'web', readers: ['@initech.example'] });
-    expect(wantedInclude(config)).toHaveLength(4);
+    expect(wantedInclude(config)).toEqual(WANT);
   });
 });

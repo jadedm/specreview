@@ -1,5 +1,6 @@
 // A stand-in for the parts of the Cloudflare API setup and secret use, with
-// two items per page so every list exercises pagination.
+// two items per page so every list exercises pagination. Like the real API,
+// a new Access application takes only references to reusable policies.
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,7 +17,15 @@ type Policy = {
   exclude?: unknown[];
   require?: unknown[];
 };
-type App = { id: string; domain: string; type: string; aud: string; name: string; policies: Policy[] };
+type App = {
+  id: string;
+  domain: string;
+  type: string;
+  aud: string;
+  name: string;
+  allowed_idps?: string[];
+  policies: { id: string; precedence?: number }[];
+};
 
 export type FakeState = {
   accounts: string[];
@@ -28,6 +37,7 @@ export type FakeState = {
   idps: { id: string; type: string }[];
   d1: { uuid: string; name: string }[];
   r2: { name: string }[];
+  policies: Policy[];
   apps: App[];
   scripts: string[];
 };
@@ -42,13 +52,18 @@ export const emptyAccount = (): FakeState => ({
   idps: [],
   d1: [],
   r2: [],
+  policies: [],
   apps: [],
   scripts: [],
 });
 
 export type Request = { method: string; path: string; body?: unknown; auth: string | null };
-
-export type FakeOptions = { failOn?: (r: Request) => boolean; raw?: (r: Request) => Response | null };
+export type FakeOptions = {
+  failOn?: (r: Request) => boolean;
+  raw?: (r: Request) => Response | null;
+  // Lists that report no page count, as some Cloudflare lists do.
+  noPageCount?: boolean;
+};
 
 export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
   const requests: Request[] = [];
@@ -60,11 +75,12 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
     Response.json({ success: false, errors: [{ code, message }], result: null }, { status });
   const page = (items: unknown[], url: URL) => {
     const n = Number(url.searchParams.get('page') ?? '1');
-    return ok(items.slice((n - 1) * PAGE, n * PAGE), {
-      page: n,
-      per_page: PAGE,
-      total_pages: Math.max(1, Math.ceil(items.length / PAGE)),
-    });
+    const size = opts.noPageCount ? Number(url.searchParams.get('per_page') ?? PAGE) : PAGE;
+    const slice = items.slice((n - 1) * size, n * size);
+    const info = opts.noPageCount
+      ? { page: n, per_page: size, count: slice.length }
+      : { page: n, per_page: size, total_pages: Math.max(1, Math.ceil(items.length / size)) };
+    return ok(slice, info);
   };
   const fetchImpl = (async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = new URL(String(input));
@@ -83,19 +99,22 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
     if (opts.failOn?.(req)) return refuse(500, 'injected failure');
     const a = `/accounts/${ACCOUNT}`;
     let m: RegExpExecArray | null;
-    if (/^\/accounts\/[^/]+$/.test(p))
-      return state.accounts.includes(p.split('/')[2])
-        ? ok({ id: p.split('/')[2] })
-        : refuse(403, 'Authentication error', 10000);
-    if (p === `${a}/access/organizations`)
+    if (/^\/accounts\/[^/]+$/.test(p)) {
+      const ours = state.accounts.includes(p.split('/')[2]);
+      return ours ? ok({ id: p.split('/')[2] }) : refuse(403, 'Authentication error', 10000);
+    }
+    if (p === `${a}/access/organizations`) {
       return state.accessEnabled
         ? ok({ auth_domain: state.authDomain })
         : refuse(400, 'access.api.error.not_enabled', 12006);
+    }
     if (p === '/zones') return page(state.zones, url);
-    if (p === `${a}/workers/domains`)
+    if (p === `${a}/workers/domains`) {
       return ok(state.workerDomains.filter((d) => d.hostname === url.searchParams.get('hostname')));
-    if ((m = /^\/zones\/([^/]+)\/dns_records$/.exec(p)))
+    }
+    if ((m = /^\/zones\/([^/]+)\/dns_records$/.exec(p))) {
       return ok((state.dns[m[1]] ?? []).filter((r) => r.name === url.searchParams.get('name')));
+    }
     if (p === `${a}/access/identity_providers` && method === 'GET') return page(state.idps, url);
     if (p === `${a}/access/identity_providers` && method === 'POST') {
       const idp = { id: id('idp'), type: String(body?.type) };
@@ -106,11 +125,12 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
       const db = state.d1.find((d) => d.uuid === m![1]);
       return db ? ok(db) : refuse(404, 'not found', 7404);
     }
-    if (p === `${a}/d1/database` && method === 'GET')
+    if (p === `${a}/d1/database` && method === 'GET') {
       return page(
         state.d1.filter((d) => d.name.includes(url.searchParams.get('name') ?? '')),
         url,
       );
+    }
     if (p === `${a}/d1/database` && method === 'POST') {
       const db = {
         uuid: `${'d'.repeat(8)}-0000-0000-0000-${String(++seq).padStart(12, '0')}`,
@@ -119,42 +139,58 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
       state.d1.push(db);
       return ok(db);
     }
-    if (p === `${a}/r2/buckets` && method === 'GET')
-      return ok({ buckets: state.r2.filter((b) => b.name.includes(url.searchParams.get('name_contains') ?? '')) });
+    // R2 lists by cursor, two buckets at a time.
+    if (p === `${a}/r2/buckets` && method === 'GET') {
+      const all = state.r2.filter((b) => b.name.includes(url.searchParams.get('name_contains') ?? ''));
+      const from = Number(url.searchParams.get('cursor') ?? '0');
+      const next = from + PAGE < all.length ? String(from + PAGE) : undefined;
+      return ok({ buckets: all.slice(from, from + PAGE) }, { cursor: next });
+    }
     if (p === `${a}/r2/buckets` && method === 'POST') {
       state.r2.push({ name: String(body?.name) });
       return ok({ name: body?.name });
     }
-    if (p === `${a}/access/apps` && method === 'GET')
+    if (p === `${a}/access/policies` && method === 'GET') return page(state.policies, url);
+    if (p === `${a}/access/policies` && method === 'POST') {
+      const policy = { ...(body as Omit<Policy, 'id'>), id: id('pol') };
+      state.policies.push(policy);
+      return ok(policy);
+    }
+    if ((m = /\/access\/policies\/([^/]+)$/.exec(p))) {
+      const i = state.policies.findIndex((x) => x.id === m![1]);
+      if (i < 0) return refuse(404, 'not found');
+      if (method === 'PUT') state.policies[i] = { ...(body as Omit<Policy, 'id'>), id: m[1] };
+      return ok(state.policies[i]);
+    }
+    if (p === `${a}/access/apps` && method === 'GET') {
       return page(
-        state.apps.map(({ policies: _p, ...app }) => app),
+        state.apps.map(({ id: i, domain, name }) => ({ id: i, domain, name })),
         url,
       );
+    }
     if (p === `${a}/access/apps` && method === 'POST') {
+      const refs = (body?.policies as unknown[]) ?? [];
+      const legacy = refs.some((r) => typeof r !== 'object' || r === null || !('id' in r) || 'include' in r);
+      if (legacy) return refuse(400, 'legacy policies cannot be added to new applications', 12130);
       const app: App = {
         id: id('app'),
         domain: String(body?.domain),
         type: String(body?.type),
         aud: id('aud'),
         name: String(body?.name),
-        policies: ((body?.policies as Omit<Policy, 'id'>[]) ?? []).map((pol) => ({ ...pol, id: id('pol') })),
+        allowed_idps: body?.allowed_idps as string[] | undefined,
+        policies: refs as { id: string }[],
       };
       state.apps.push(app);
       return ok({ id: app.id, aud: app.aud });
     }
-    if ((m = /\/access\/apps\/([^/]+)\/policies$/.exec(p))) {
+    if ((m = /\/access\/apps\/([^/]+)$/.exec(p))) {
       const app = state.apps.find((x) => x.id === m![1]);
-      return app ? ok(app.policies) : refuse(404, 'not found');
+      return app ? ok(app) : refuse(404, 'not found');
     }
-    if ((m = /\/access\/apps\/([^/]+)\/policies\/([^/]+)$/.exec(p)) && method === 'PUT') {
-      const app = state.apps.find((x) => x.id === m![1]);
-      const i = app?.policies.findIndex((x) => x.id === m![2]) ?? -1;
-      if (!app || i < 0) return refuse(404, 'not found');
-      app.policies[i] = { ...(body as Omit<Policy, 'id'>), id: m[2] };
-      return ok(app.policies[i]);
-    }
-    if ((m = /\/workers\/scripts\/([^/]+)\/settings$/.exec(p)))
+    if ((m = /\/workers\/scripts\/([^/]+)\/settings$/.exec(p))) {
       return state.scripts.includes(m[1]) ? ok({}) : refuse(404, 'script not found', 10007);
+    }
     return refuse(404, `fake has no route for ${method} ${p}`);
   }) as typeof fetch;
   return { fetchImpl, requests, writes: () => requests.filter((r) => r.method !== 'GET') };

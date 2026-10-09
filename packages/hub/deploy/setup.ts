@@ -1,8 +1,12 @@
 // One organisation's Cloudflare resources: a D1 database, an R2 bucket, the
-// one-time PIN login, an Access application for the hostname and an Access
-// bypass for /_publish/*. Everything is read first; anything that would have
-// to be refused stops the run before a single resource is created. Resources
-// are tracked by the ids setup records in hub.json, never adopted by name: a
+// one-time PIN login, an Access application for the hostname with its allow
+// policy, and an Access application bypassing /_publish/* with its bypass
+// policy. Policies are reusable Access policies (per-app policies cannot be
+// added to new applications) referenced by the applications.
+//
+// Everything is read first; anything that would have to be refused stops the
+// run before a single resource is created. Resources are tracked by the ids
+// setup records in hub.json the moment each exists, never adopted by name: a
 // database or app with the right name but no recorded id may belong to
 // someone else.
 import { problemsIn } from '../src/config';
@@ -18,11 +22,9 @@ type Policy = {
   exclude?: unknown[];
   require?: unknown[];
 };
-type App = { id: string; domain?: string; type?: string; aud?: string; name?: string };
+type AppSummary = { id: string; domain?: string };
+type App = AppSummary & { type?: string; aud?: string; allowed_idps?: string[]; policies?: { id: string }[] };
 type Zone = { id: string; name: string; status: string };
-
-const POLICY = 'specreview';
-const PUBLISH_POLICY = 'specreview publish';
 
 const ruleKey = (r: unknown) => JSON.stringify(r);
 // Code-point order, so the result is the same on every machine and locale.
@@ -43,11 +45,22 @@ export const wantedInclude = (config: Record<string, unknown>): Rule[] => {
   return sortedRules(rules) as Rule[];
 };
 
+const EVERYONE = [{ everyone: {} }];
 const sameRules = (a: unknown[] | undefined, b: unknown[]) =>
   JSON.stringify(sortedRules(a ?? [])) === JSON.stringify(sortedRules(b));
 const empty = (v: unknown[] | undefined) => v === undefined || v.length === 0;
+const onlyEmailRules = (rules: unknown[] | undefined) =>
+  (rules ?? []).every(
+    (r) => typeof r === 'object' && r !== null && Object.keys(r).every((k) => k === 'email' || k === 'email_domain'),
+  );
+const sameIds = (a: string[] | undefined, b: string[]) =>
+  JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...b].sort());
+// The first check that fails names what is wrong; null when none does.
+const firstProblem = (checks: [boolean, string][]) => checks.find(([failed]) => failed)?.[1] ?? null;
+const notRecorded = (what: string) =>
+  `${what} exists but is not recorded in hub.json; it is not adopted. If it is this hub's (a create whose answer was lost), add its id to hub.json and rerun`;
 
-type Step = { say: string; run?: () => Promise<void> };
+type Step = { say: string; run: () => Promise<void> };
 
 export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; log: (line: string) => void }) => {
   const { hub } = org;
@@ -55,6 +68,8 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   const host = hub.hostname;
   const publishDomain = `${host}/_publish/*`;
   const log = opts.log;
+  const mainPolicyName = `specreview ${host}`;
+  const publishPolicyName = `specreview ${host} publish`;
 
   // The config must be sound before it decides who passes Access.
   const problems = problemsIn({ ...org.config, accessTeamDomain: 'check.cloudflareaccess.com', accessAud: 'check' });
@@ -119,46 +134,48 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     });
 
   // D1.
-  if (hub.database.id) {
-    const db = await cf
-      .call<{ name: string }>('GET', `/accounts/${a}/d1/database/${hub.database.id}`)
-      .catch(() => null);
-    if (!db) refusals.push(`D1 database ${hub.database.id} recorded in hub.json is not in the account`);
-    else if (db.name !== hub.database.name)
-      refusals.push(`D1 database ${hub.database.id} is named ${db.name}, not ${hub.database.name}`);
-    else log(`D1 ${hub.database.name}: exists`);
-  } else {
-    const found = (await cf.list<{ name: string }>(`/accounts/${a}/d1/database?name=${hub.database.name}`)).some(
-      (d) => d.name === hub.database.name,
-    );
-    if (found)
-      refusals.push(
-        `a D1 database named ${hub.database.name} exists but is not recorded in hub.json; it is not adopted`,
-      );
-    else
-      steps.push({
-        say: `D1 ${hub.database.name}: create`,
-        run: async () => {
-          hub.database.id = (
-            await cf.call<{ uuid: string }>('POST', `/accounts/${a}/d1/database`, { name: hub.database.name })
-          ).uuid;
-          saveHub(org);
-        },
-      });
+  const dbPath = `/accounts/${a}/d1/database/${hub.database.id}`;
+  const dbThere = hub.database.id ? await cf.exists(dbPath) : false;
+  const db = dbThere ? await cf.call<{ name: string }>('GET', dbPath) : null;
+  if (hub.database.id && !db)
+    refusals.push(`D1 database ${hub.database.id} recorded in hub.json is not in the account`);
+  if (db && db.name !== hub.database.name) {
+    refusals.push(`D1 database ${hub.database.id} is named ${db.name}, not ${hub.database.name}`);
   }
+  if (db && db.name === hub.database.name) log(`D1 ${hub.database.name}: exists`);
+  const dbNamed = hub.database.id
+    ? false
+    : (await cf.list<{ name: string }>(`/accounts/${a}/d1/database?name=${hub.database.name}`)).some(
+        (d) => d.name === hub.database.name,
+      );
+  if (dbNamed) refusals.push(notRecorded(`a D1 database named ${hub.database.name}`));
+  if (!hub.database.id && !dbNamed)
+    steps.push({
+      say: `D1 ${hub.database.name}: create`,
+      run: async () => {
+        hub.database.id = (
+          await cf.call<{ uuid: string }>('POST', `/accounts/${a}/d1/database`, { name: hub.database.name })
+        ).uuid;
+        saveHub(org);
+      },
+    });
 
-  // R2.
-  const buckets = await cf.call<{ buckets: { name: string }[] }>(
-    'GET',
-    `/accounts/${a}/r2/buckets?name_contains=${hub.bucket.name}&per_page=1000`,
-  );
-  const bucketThere = buckets.buckets.some((b) => b.name === hub.bucket.name);
+  // R2: listed by cursor, filtered to names containing ours.
+  const bucketNames: string[] = [];
+  for (let cursor: string | undefined, first = true; first || cursor; first = false) {
+    const page = await cf.page<{ buckets: { name: string }[] }>(
+      'GET',
+      `/accounts/${a}/r2/buckets?name_contains=${hub.bucket.name}&per_page=1000${cursor ? `&cursor=${cursor}` : ''}`,
+    );
+    bucketNames.push(...page.result.buckets.map((b) => b.name));
+    cursor = page.cursor;
+  }
+  const bucketThere = bucketNames.includes(hub.bucket.name);
   if (hub.bucket.created && !bucketThere)
     refusals.push(`R2 bucket ${hub.bucket.name} recorded in hub.json is not in the account`);
-  else if (hub.bucket.created) log(`R2 ${hub.bucket.name}: exists`);
-  else if (bucketThere)
-    refusals.push(`an R2 bucket named ${hub.bucket.name} exists but is not recorded in hub.json; it is not adopted`);
-  else
+  if (hub.bucket.created && bucketThere) log(`R2 ${hub.bucket.name}: exists`);
+  if (!hub.bucket.created && bucketThere) refusals.push(notRecorded(`an R2 bucket named ${hub.bucket.name}`));
+  if (!hub.bucket.created && !bucketThere)
     steps.push({
       say: `R2 ${hub.bucket.name}: create`,
       run: async () => {
@@ -168,51 +185,128 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
       },
     });
 
-  // Access applications.
-  const apps = await cf.list<App>(`/accounts/${a}/access/apps`);
+  // Access: two reusable policies and the two applications that use them.
   const access = (hub.access ??= {});
-  const policiesOf = (id: string) => cf.call<Policy[]>('GET', `/accounts/${a}/access/apps/${id}/policies`);
+  const policies = await cf.list<Policy>(`/accounts/${a}/access/policies`);
+  const apps = await cf.list<AppSummary>(`/accounts/${a}/access/apps`);
+  const appOf = async (id: string) =>
+    apps.some((x) => x.id === id) ? cf.call<App>('GET', `/accounts/${a}/access/apps/${id}`) : null;
 
-  if (access.appId) {
-    const app = apps.find((x) => x.id === access.appId);
-    const policies = app ? await policiesOf(app.id) : [];
-    const ours = policies[0];
-    const foreignRule = (ours?.include ?? []).some(
-      (r) => typeof r !== 'object' || r === null || Object.keys(r).some((k) => k !== 'email' && k !== 'email_domain'),
+  // The allow policy: kept equal to the config, removals included.
+  const mainPolicy = access.policyId ? policies.find((p) => p.id === access.policyId) : undefined;
+  if (access.policyId && !mainPolicy)
+    refusals.push(`Access policy ${access.policyId} recorded in hub.json is not in the account`);
+  const mainPolicyHandEdited =
+    mainPolicy &&
+    (mainPolicy.decision !== 'allow' ||
+      !empty(mainPolicy.require) ||
+      !empty(mainPolicy.exclude) ||
+      !onlyEmailRules(mainPolicy.include));
+  if (mainPolicyHandEdited) {
+    refusals.push(
+      `Access policy ${mainPolicy.id} is not a plain allow policy of email rules; setup will not change it`,
     );
-    if (!app) refusals.push(`Access app ${access.appId} recorded in hub.json is not in the account`);
-    else if (app.domain !== host || app.type !== 'self_hosted')
-      refusals.push(`Access app ${app.id} is for ${app.domain} (${app.type}), not ${host}; it was changed by hand`);
-    else if (access.aud && app.aud !== access.aud)
-      refusals.push(`Access app ${app.id}'s audience differs from hub.json; it was recreated or edited`);
-    else if (policies.length !== 1 || ours.name !== POLICY || ours.decision !== 'allow')
-      refusals.push(
-        `Access app ${app.id} has policies other than the one "${POLICY}" allow policy; setup will not change it`,
-      );
-    else if (!empty(ours.require) || !empty(ours.exclude) || foreignRule)
-      refusals.push(`Access app ${app.id}'s policy has require, exclude or non-email rules; setup will not change it`);
-    else if (sameRules(ours.include, include)) log(`Access app for ${host}: policy up to date`);
-    else {
-      log(`policy before: ${JSON.stringify(sortedRules(ours.include ?? []))}`);
-      log(`policy wanted: ${JSON.stringify(include)}`);
-      steps.push({
-        say: `Access app for ${host}: update its policy`,
-        run: async () => {
-          await cf.call('PUT', `/accounts/${a}/access/apps/${app.id}/policies/${ours.id}`, {
-            name: POLICY,
+  }
+  if (mainPolicy && !mainPolicyHandEdited && sameRules(mainPolicy.include, include))
+    log(`Access policy ${mainPolicyName}: up to date`);
+  if (mainPolicy && !mainPolicyHandEdited && !sameRules(mainPolicy.include, include)) {
+    log(`policy before: ${JSON.stringify(sortedRules(mainPolicy.include ?? []))}`);
+    log(`policy wanted: ${JSON.stringify(include)}`);
+    steps.push({
+      say: `Access policy ${mainPolicyName}: update`,
+      run: async () => {
+        await cf.call('PUT', `/accounts/${a}/access/policies/${mainPolicy.id}`, {
+          name: mainPolicyName,
+          decision: 'allow',
+          include,
+          exclude: [],
+          require: [],
+        });
+        const after = await cf.call<Policy>('GET', `/accounts/${a}/access/policies/${mainPolicy.id}`);
+        log(`policy after: ${JSON.stringify(sortedRules(after.include ?? []))}`);
+      },
+    });
+  }
+  const mainPolicyNamed = !access.policyId && policies.some((p) => p.name === mainPolicyName);
+  if (mainPolicyNamed) refusals.push(notRecorded(`an Access policy named "${mainPolicyName}"`));
+  if (!access.policyId && !mainPolicyNamed) {
+    log(`policy wanted: ${JSON.stringify(include)}`);
+    steps.push({
+      say: `Access policy ${mainPolicyName}: create`,
+      run: async () => {
+        access.policyId = (
+          await cf.call<{ id: string }>('POST', `/accounts/${a}/access/policies`, {
+            name: mainPolicyName,
             decision: 'allow',
             include,
-            exclude: [],
-            require: [],
-          });
-          log(`policy after: ${JSON.stringify(sortedRules((await policiesOf(app.id))[0]?.include ?? []))}`);
-        },
-      });
-    }
-  } else if (apps.some((x) => x.domain === host)) {
-    refusals.push(`an Access app for ${host} exists but is not recorded in hub.json; it is not adopted`);
-  } else {
-    log(`policy wanted: ${JSON.stringify(include)}`);
+          })
+        ).id;
+        saveHub(org);
+      },
+    });
+  }
+
+  // The bypass policy: everyone, for the publish path only.
+  const publishPolicy = access.publishPolicyId ? policies.find((p) => p.id === access.publishPolicyId) : undefined;
+  if (access.publishPolicyId && !publishPolicy) {
+    refusals.push(`Access policy ${access.publishPolicyId} recorded in hub.json is not in the account`);
+  }
+  const bypassAll =
+    publishPolicy?.decision === 'bypass' &&
+    sameRules(publishPolicy.include, EVERYONE) &&
+    empty(publishPolicy.require) &&
+    empty(publishPolicy.exclude);
+  if (publishPolicy && !bypassAll)
+    refusals.push(`Access policy ${publishPolicy.id} is not a single bypass-everyone rule; setup will not change it`);
+  if (publishPolicy && bypassAll) log(`Access policy ${publishPolicyName}: exists`);
+  const publishPolicyNamed = !access.publishPolicyId && policies.some((p) => p.name === publishPolicyName);
+  if (publishPolicyNamed) refusals.push(notRecorded(`an Access policy named "${publishPolicyName}"`));
+  if (!access.publishPolicyId && !publishPolicyNamed)
+    steps.push({
+      say: `Access policy ${publishPolicyName}: create`,
+      run: async () => {
+        access.publishPolicyId = (
+          await cf.call<{ id: string }>('POST', `/accounts/${a}/access/policies`, {
+            name: publishPolicyName,
+            decision: 'bypass',
+            include: EVERYONE,
+          })
+        ).id;
+        saveHub(org);
+      },
+    });
+
+  // The hostname's application: only the one-time PIN login, only our policy.
+  const mainApp = access.appId ? await appOf(access.appId) : null;
+  if (access.appId && !mainApp) refusals.push(`Access app ${access.appId} recorded in hub.json is not in the account`);
+  const mainAppProblem =
+    mainApp &&
+    firstProblem([
+      [
+        mainApp.domain !== host || mainApp.type !== 'self_hosted',
+        `is for ${mainApp.domain} (${mainApp.type}), not ${host}`,
+      ],
+      [
+        Boolean(access.aud) && mainApp.aud !== access.aud,
+        "has a different audience from hub.json's; it was recreated or edited",
+      ],
+      [
+        !sameIds(
+          mainApp.policies?.map((p) => p.id),
+          access.policyId ? [access.policyId] : [],
+        ),
+        'has policies other than the one setup recorded',
+      ],
+      [
+        Boolean(otp) && !sameIds(mainApp.allowed_idps, otp ? [otp] : []),
+        'allows login methods other than the one-time PIN',
+      ],
+    ]);
+  if (mainApp && mainAppProblem) refusals.push(`Access app ${mainApp.id} ${mainAppProblem}; setup will not change it`);
+  if (mainApp && !mainAppProblem) log(`Access app for ${host}: exists`);
+  const mainAppNamed = !access.appId && apps.some((x) => x.domain === host);
+  if (mainAppNamed) refusals.push(notRecorded(`an Access app for ${host}`));
+  if (!access.appId && !mainAppNamed)
     steps.push({
       say: `Access app for ${host}: create`,
       run: async () => {
@@ -221,40 +315,40 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
           type: 'self_hosted',
           domain: host,
           session_duration: '24h',
-          allowed_idps: otp ? [otp] : undefined,
-          auto_redirect_to_identity: false,
-          policies: [{ name: POLICY, decision: 'allow', include }],
+          allowed_idps: [otp],
+          auto_redirect_to_identity: true,
+          policies: [{ id: access.policyId, precedence: 1 }],
         });
         access.appId = app.id;
         access.aud = app.aud;
         saveHub(org);
       },
     });
-  }
 
   // The publish path is authenticated by GitHub's token in the hub, so Access
   // lets it through, and only it.
-  if (access.publishAppId) {
-    const app = apps.find((x) => x.id === access.publishAppId);
-    const policies = app ? await policiesOf(app.id) : [];
-    const p = policies[0];
-    const bypassAll =
-      policies.length === 1 &&
-      p.decision === 'bypass' &&
-      sameRules(p.include, [{ everyone: {} }]) &&
-      empty(p.require) &&
-      empty(p.exclude);
-    if (!app) refusals.push(`Access app ${access.publishAppId} recorded in hub.json is not in the account`);
-    else if (app.domain !== publishDomain)
-      refusals.push(`Access app ${app.id} is for ${app.domain}, not ${publishDomain}; it was changed by hand`);
-    else if (!bypassAll)
-      refusals.push(
-        `Access app ${app.id} for ${publishDomain} is not a single bypass-everyone policy; setup will not change it`,
-      );
-    else log(`Access bypass for ${publishDomain}: exists`);
-  } else if (apps.some((x) => x.domain === publishDomain)) {
-    refusals.push(`an Access app for ${publishDomain} exists but is not recorded in hub.json; it is not adopted`);
-  } else {
+  const publishApp = access.publishAppId ? await appOf(access.publishAppId) : null;
+  if (access.publishAppId && !publishApp) {
+    refusals.push(`Access app ${access.publishAppId} recorded in hub.json is not in the account`);
+  }
+  const publishAppProblem =
+    publishApp &&
+    firstProblem([
+      [publishApp.domain !== publishDomain, `is for ${publishApp.domain}, not ${publishDomain}`],
+      [
+        !sameIds(
+          publishApp.policies?.map((p) => p.id),
+          access.publishPolicyId ? [access.publishPolicyId] : [],
+        ),
+        'has policies other than the one setup recorded',
+      ],
+    ]);
+  if (publishApp && publishAppProblem)
+    refusals.push(`Access app ${publishApp.id} ${publishAppProblem}; setup will not change it`);
+  if (publishApp && !publishAppProblem) log(`Access bypass for ${publishDomain}: exists`);
+  const publishAppNamed = !access.publishAppId && apps.some((x) => x.domain === publishDomain);
+  if (publishAppNamed) refusals.push(notRecorded(`an Access app for ${publishDomain}`));
+  if (!access.publishAppId && !publishAppNamed)
     steps.push({
       say: `Access bypass for ${publishDomain}: create`,
       run: async () => {
@@ -262,13 +356,12 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
           name: `specreview ${host} publish`,
           type: 'self_hosted',
           domain: publishDomain,
-          policies: [{ name: PUBLISH_POLICY, decision: 'bypass', include: [{ everyone: {} }] }],
+          policies: [{ id: access.publishPolicyId, precedence: 1 }],
         });
         access.publishAppId = app.id;
         saveHub(org);
       },
     });
-  }
 
   if (refusals.length > 0) throw new DeployError(`setup stopped before changing anything:\n  ${refusals.join('\n  ')}`);
 
@@ -291,7 +384,7 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
       log(`plan: ${step.say}`);
       continue;
     }
-    await step.run?.();
+    await step.run();
     log(`done: ${step.say}`);
   }
   if (!opts.apply) log('plan only; rerun with --apply to make these changes');

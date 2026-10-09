@@ -38,23 +38,28 @@ export const parseJsonc = (text: string): unknown => {
   return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
 };
 
-type Pinned = { compatibility_date: string; triggers: { crons: string[] } };
+type Pinned = { compatibility_date: string; compatibility_flags?: string[]; triggers: { crons: string[] } };
 
 export const pinned = (hubDir = HUB_DIR): Pinned => {
   const raw = parseJsonc(readFileSync(path.join(hubDir, 'wrangler.jsonc'), 'utf8')) as Partial<Pinned>;
   if (typeof raw.compatibility_date !== 'string' || !Array.isArray(raw.triggers?.crons)) {
     throw new Error('wrangler.jsonc lacks compatibility_date or triggers.crons');
   }
-  return { compatibility_date: raw.compatibility_date, triggers: { crons: raw.triggers.crons } };
+  return {
+    compatibility_date: raw.compatibility_date,
+    ...(raw.compatibility_flags ? { compatibility_flags: raw.compatibility_flags } : {}),
+    triggers: { crons: raw.triggers.crons },
+  };
 };
 
 export const wranglerConfig = (org: Org, hubDir = HUB_DIR) => {
   const hub = deployable(org.hub);
-  const { compatibility_date, triggers } = pinned(hubDir);
+  const { compatibility_date, compatibility_flags, triggers } = pinned(hubDir);
   return {
     name: hub.worker,
     main: path.join(hubDir, 'src', 'index.ts'),
     compatibility_date,
+    ...(compatibility_flags ? { compatibility_flags } : {}),
     account_id: hub.accountId,
     // Only the organisation's hostname, behind Access; no workers.dev address
     // and no per-version preview URLs, which Access would not cover.
