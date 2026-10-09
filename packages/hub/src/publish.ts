@@ -8,7 +8,9 @@ import type { Env } from './env';
 import { verifyPublishToken } from './github-oidc';
 import { AppError, json } from './http';
 
-export const MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
+// The body, its parts and the parsed form are all in memory at once; three
+// copies must fit in a Worker's 128 MB.
+export const MAX_BUNDLE_BYTES = 25 * 1024 * 1024;
 export const MAX_FILES = 5_000;
 const SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -158,6 +160,11 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
   // A token publishes once, recorded before anything else is written. Only a
   // duplicate means "used"; any other failure stops the publish, since going
   // on unrecorded would let the token be replayed.
+  // A token lives minutes; rows older than a day can go.
+  await env.DB.prepare('DELETE FROM publish_tokens WHERE used_at < ?')
+    .bind(Date.now() - 24 * 60 * 60 * 1000)
+    .run()
+    .catch(() => undefined);
   const recorded = await env.DB.prepare('INSERT INTO publish_tokens (jti, site, used_at) VALUES (?, ?, ?)')
     .bind(claims.jti, site.key, Date.now())
     .run()
@@ -181,7 +188,6 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
   const own = new Set([...bundle.site.keys()].filter((p) => p.startsWith('assets/')));
   try {
     for (const [path, bytes] of bundle.site) await bucket.put(`${repo}/v/${version}/${path}`, bytes);
-    for (const [path, bytes] of bundle.history) await bucket.put(`${repo}/history/${path}`, bytes);
     await bucket.put(`${repo}/meta/${version}/assets.json`, JSON.stringify([...own]));
   } catch (e) {
     throw storage(e);
@@ -202,7 +208,15 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
     const written = await bucket.put(`${repo}/current.json`, pointer, { onlyIf: condition }).catch((e: unknown) => {
       throw storage(e);
     });
-    if (written) return json({ version });
+    if (!written) continue;
+    // History keys are shared across versions, so they are written only once
+    // this version is live; the reader checks each against the live manifest.
+    try {
+      for (const [path, bytes] of bundle.history) await bucket.put(`${repo}/history/${path}`, bytes);
+    } catch (e) {
+      throw storage(e);
+    }
+    return json({ version });
   }
   throw new AppError(409, 'BUSY', 'Another publish kept changing the site; run again.');
 };

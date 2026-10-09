@@ -39,7 +39,8 @@ const stub = (hubAnswers: (() => Response | Promise<Response>)[]) => {
   }) as typeof fetch;
   return { calls, fetchImpl };
 };
-const ok = () => Response.json({ version: 'v1' });
+const V1 = `${'c'.repeat(40)}-100-1-abcdef01`;
+const ok = () => Response.json({ version: V1 });
 const noWait = async () => {};
 
 describe('15: the hub origin and the token', () => {
@@ -89,7 +90,7 @@ describe('14: publishing', () => {
     const { calls, fetchImpl } = stub([ok]);
     expect(
       await publishBuild({ hub: 'https://docs.example.com', repo: 'sidecar', out, env: ENV, fetch: fetchImpl }),
-    ).toEqual({ version: 'v1' });
+    ).toEqual({ version: V1 });
     const post = calls.find((c) => c.url === 'https://docs.example.com/_publish/sidecar')!;
     expect(post.init.method).toBe('POST');
     expect(post.init.redirect).toBe('error');
@@ -106,7 +107,7 @@ describe('14: publishing', () => {
     ]);
     expect(
       await publishBuild({ hub: 'https://h.example', repo: 'sidecar', out, env: ENV, fetch: fetchImpl, wait: noWait }),
-    ).toEqual({ version: 'v1' });
+    ).toEqual({ version: V1 });
     const tokensUsed = calls
       .filter((c) => c.url.includes('/_publish/'))
       .map((c) => new Headers(c.init.headers).get('authorization'));
@@ -127,7 +128,7 @@ describe('14: publishing', () => {
     }) as typeof fetch;
     expect(
       await publishBuild({ hub: 'https://h.example', repo: 'sidecar', out, env: ENV, fetch: fetchImpl, wait: noWait }),
-    ).toEqual({ version: 'v1' });
+    ).toEqual({ version: V1 });
     expect(tokenCalls).toBe(3);
   });
 
@@ -155,6 +156,13 @@ describe('14: publishing', () => {
     await expect(
       publishBuild({ hub: 'https://h.example', repo: 'sidecar', out, env: ENV, fetch: fetchImpl, wait: noWait }),
     ).rejects.toThrow('503 STORAGE_UNAVAILABLE');
+  });
+
+  it("a version not of the hub's shape is refused, so nothing odd reaches GITHUB_OUTPUT", async () => {
+    const { fetchImpl } = stub([() => Response.json({ version: 'v1\nversion=other' })]);
+    await expect(
+      publishBuild({ hub: 'https://h.example', repo: 'sidecar', out, env: ENV, fetch: fetchImpl }),
+    ).rejects.toThrow('malformed version');
   });
 
   it('a later run already published: done, not an error', async () => {

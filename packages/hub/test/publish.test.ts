@@ -10,6 +10,7 @@ import {
   call,
   CONFIG,
   emptySites,
+  githubKeys,
   HOST,
   installFetch,
   ORG,
@@ -18,6 +19,7 @@ import {
   reset,
   SIDECAR,
   testEnv,
+  tokenFor,
   TIKITI,
   WORKFLOW,
 } from './helpers';
@@ -146,9 +148,39 @@ describe('1, 8, 9: a publish', () => {
     expect(await env.SITES!.get(`${SIDECAR}/v/${v3}/assets/a.js`)).toBeNull();
   });
 
-  it('keeps history that is already there', async () => {
-    await env.SITES!.put(`${SIDECAR}/history/${OLD}/onboarding/signup.md`, OLD_TEXT);
-    expect((await publishWith(await oidcToken())).status).toBe(200);
+  it('history is served only as the live manifest records it', async () => {
+    expect((await publishWith(await oidcToken({ run_id: '200' }))).status).toBe(200);
+    const history = async () => {
+      const r = await send(`/${SIDECAR}/_history/${OLD}/onboarding/signup.md`, {
+        headers: { 'cf-access-jwt-assertion': await tokenFor('dev@inoltro.ai') },
+      });
+      return [r.status, r.body];
+    };
+    expect(await history()).toEqual([200, OLD_TEXT]);
+    // An older run with other text for the same commit and path, and a
+    // manifest hash to match, is refused and changes nothing readers see.
+    const other = 'different text';
+    const manifest = await manifestFor();
+    manifest.pages['onboarding/signup'].history[0].hash = await sha256(other);
+    const parts = { ...(await bundleParts(manifest)), [`history/${OLD}/onboarding/signup.md`]: other };
+    expect(code(await publishWith(await oidcToken({ run_id: '199' }), parts))).toBe('SUPERSEDED');
+    expect(await history()).toEqual([200, OLD_TEXT]);
+    // A history object that does not hash to the live manifest's entry is not served.
+    await env.SITES!.put(`${SIDECAR}/history/${OLD}/onboarding/signup.md`, 'tampered');
+    expect((await history())[0]).toBe(404);
+  });
+
+  it("a build's own asset is never replaced by the previous version's file of the same name", async () => {
+    await publishWith(
+      await oidcToken({ run_id: '100' }),
+      await bundleParts(undefined, { 'site/assets/app.js': 'OLD' }),
+    );
+    const r = await publishWith(
+      await oidcToken({ run_id: '101' }),
+      await bundleParts(undefined, { 'site/assets/app.js': 'NEW' }),
+    );
+    const version = (r.body as { version: string }).version;
+    expect(await (await env.SITES!.get(`${SIDECAR}/v/${version}/assets/app.js`))!.text()).toBe('NEW');
   });
 });
 
@@ -194,6 +226,8 @@ describe('2, 3, 13: who may publish', () => {
       ].map((e) => ({ event_name: e })),
       { sha: 'short' },
       { run_id: 'x' },
+      { jti: undefined },
+      { jti: '' },
     ];
     for (const over of wrong) {
       const r = await publishWith(await oidcToken(over));
@@ -323,11 +357,11 @@ describe('4, 6, 10: the bundle is checked whole', () => {
     expect((await env.SITES!.list({ prefix: `${SIDECAR}/v/` })).objects).toEqual([]);
   });
 
-  it('10: a body over 50 MB is 413, counted as it arrives', async () => {
+  it('10: a body over 25 MB is 413, counted as it arrives', async () => {
     const big = new ReadableStream({
       start(controller) {
         const chunk = new Uint8Array(1024 * 1024);
-        for (let i = 0; i < 51; i++) controller.enqueue(chunk);
+        for (let i = 0; i < 26; i++) controller.enqueue(chunk);
         controller.close();
       },
     });
@@ -339,6 +373,13 @@ describe('4, 6, 10: the bundle is checked whole', () => {
       duplex: 'half',
     });
     expect(r.status).toBe(413);
+  });
+
+  it('more than 5000 files is 413', async () => {
+    const parts = await bundleParts();
+    for (let i = 0; i < 5000; i++) parts[`site/f/${i}.txt`] = 'x';
+    const r = await publishWith(await oidcToken(), parts);
+    expect([r.status, code(r)]).toEqual([413, 'TOO_MANY_FILES']);
   });
 
   it('a body that is not multipart is 415', async () => {
@@ -410,6 +451,51 @@ describe('7, 11: the pointer', () => {
     // The first conditional write failed against the moved pointer and was retried.
     expect(pointerWrites).toBe(2);
     expect((await pointer())!.runId).toBe('402');
+  });
+
+  it('the first publish is created only if no pointer exists meanwhile', async () => {
+    const real = env.SITES!;
+    let pointerWrites = 0;
+    let interfered = false;
+    const racing = new Proxy(real, {
+      get(target, prop) {
+        if (prop !== 'put') {
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return async (key: string, value: unknown, options?: R2PutOptions) => {
+          if (key.endsWith('/current.json')) {
+            pointerWrites++;
+            if (!interfered) {
+              interfered = true;
+              await target.put(key, JSON.stringify({ version: 'first', publishedAt: 'x', runId: '1' }));
+            }
+          }
+          return target.put(key, value as string, options);
+        };
+      },
+    }) as R2Bucket;
+    const r = await publishWith(await oidcToken({ run_id: '5' }), undefined, SIDECAR, { SITES: racing });
+    expect(r.status).toBe(200);
+    expect(pointerWrites).toBe(2);
+    expect((await pointer())!.runId).toBe('5');
+  });
+
+  it("GitHub's keys unreachable: 503, which the uploader retries", async () => {
+    githubKeys.down = true;
+    const r = await publishWith(await oidcToken());
+    expect([r.status, code(r)]).toEqual([503, 'KEYS_UNAVAILABLE']);
+  });
+
+  it('used tokens older than a day are deleted', async () => {
+    await env.DB.prepare('INSERT INTO publish_tokens (jti, site, used_at) VALUES (?, ?, ?)')
+      .bind('ancient', 'x', Date.now() - 2 * 24 * 60 * 60 * 1000)
+      .run();
+    expect((await publishWith(await oidcToken())).status).toBe(200);
+    const left = await env.DB.prepare("SELECT count(*) AS n FROM publish_tokens WHERE jti = 'ancient'").first<{
+      n: number;
+    }>();
+    expect(left?.n).toBe(0);
   });
 
   it('11: without the bucket, 500 STORE_NOT_CONFIGURED and the token is not spent', async () => {

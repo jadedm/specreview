@@ -21,6 +21,7 @@ var hubOrigin = (hub) => {
   return url.origin;
 };
 var REPO = /^[a-z0-9._-]{1,100}$/;
+var VERSION = /^[0-9a-f]{40}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{8}$/;
 var actionsToken = async (audience, env2, fetchImpl) => {
   const url = env2.ACTIONS_ID_TOKEN_REQUEST_URL;
   const bearer = env2.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
@@ -84,7 +85,10 @@ var publishBuild = async ({
       return null;
     });
     const body = res ? await res.json().catch(() => null) : null;
-    if (res?.ok && typeof body?.version === "string") return { version: body.version };
+    if (res?.ok && typeof body?.version === "string") {
+      if (!VERSION.test(body.version)) throw new PublishError("the hub answered with a malformed version");
+      return { version: body.version };
+    }
     if (res?.status === 409 && body?.error?.code === "SUPERSEDED") return { superseded: true };
     if (res) last = `${res.status} ${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`.trim();
     const retryable = res === null || res.status >= 500;

@@ -12,7 +12,19 @@ const keySet = () =>
     cooldownDuration: 30_000,
   }));
 
+// For tests: the next verification fetches the keys again.
+export const forgetGithubKeys = () => {
+  keys = null;
+};
+
 export type PublishClaims = { sha: string; runId: string; runAttempt: string; jti: string };
+
+// jose reports a failed or slow key fetch as these, or as a plain error from
+// fetch; a bad token has a more specific code.
+const keysUnavailable = (e: unknown) => {
+  const code = (e as { code?: unknown } | null)?.code;
+  return typeof code !== 'string' || code === 'ERR_JWKS_TIMEOUT' || code === 'ERR_JOSE_GENERIC';
+};
 
 const unauthorized = () => new AppError(401, 'UNAUTHORIZED', 'A GitHub Actions token is required.');
 const forbidden = () => new AppError(403, 'FORBIDDEN', 'This token may not publish this site.');
@@ -53,15 +65,20 @@ export const verifyPublishToken = async (
   const auth = request.headers.get('authorization') ?? '';
   const token = /^Bearer ([A-Za-z0-9._-]+)$/.exec(auth)?.[1];
   if (!token) throw unauthorized();
-  const payload = await jwtVerify(token, keySet(), {
+  const result = await jwtVerify(token, keySet(), {
     issuer: GITHUB_ISSUER,
     audience,
     algorithms: ['RS256'],
   }).then(
-    (r) => r.payload,
-    () => null,
+    (r) => ({ payload: r.payload }),
+    (e: unknown) => ({ error: e }),
   );
-  if (!payload) throw unauthorized();
+  // GitHub's keys could not be fetched: a retry can succeed, so not 401.
+  if ('error' in result && keysUnavailable(result.error)) {
+    throw new AppError(503, 'KEYS_UNAVAILABLE', "GitHub's signing keys could not be fetched; try again shortly.");
+  }
+  if (!('payload' in result)) throw unauthorized();
+  const payload = result.payload;
   if (!allowed(payload, config, site)) throw forbidden();
   const claims = {
     sha: str(payload.sha),

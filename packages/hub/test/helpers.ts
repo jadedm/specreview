@@ -10,6 +10,7 @@ import { reconcileLabels } from '../src/github';
 import { envTokens } from '../src/github-auth';
 import { createHub } from '../src/index';
 import { forgetLabelSetup } from '../src/github';
+import { forgetGithubKeys } from '../src/github-oidc';
 import { forgetManifests } from '../src/manifest';
 import { memoryStore, type SiteStore } from '../src/store';
 
@@ -77,7 +78,22 @@ export const CONFIG = {
   ],
 };
 
-const signupPage = (hash: string, issues: number[]) => ({
+// The old version of the signup page, per site, and its real hash: history
+// is served only when the live manifest records the file's hash.
+export const OLD_TEXT: Record<string, string> = {
+  sidecar: '# Company signup\n\nAnyone with the join link can join.\n',
+  tikiti: '# Tikiti signup\n\nTikiti only.\n',
+};
+const hex = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+const OLD_HASH: Record<string, string> = {
+  sidecar: await hex(OLD_TEXT.sidecar),
+  tikiti: await hex(OLD_TEXT.tikiti),
+};
+
+const signupPage = (hash: string, issues: number[], oldHash = OLD_HASH.sidecar) => ({
   title: 'Company signup',
   hash,
   issues,
@@ -108,7 +124,7 @@ const signupPage = (hash: string, issues: number[]) => ({
       author: 'Manish Jadhav',
       pr: 51,
       path: `${PAGE}.md`,
-      hash: 'hash-old',
+      hash: oldHash,
     },
   ],
 });
@@ -138,13 +154,13 @@ export const manifests = (webIssues: number[] = []): Record<string, Manifest> =>
   [TIKITI]: {
     commit: COMMIT_LIVE,
     builtAt: '2026-10-07T00:00:00.000Z',
-    pages: { [PAGE]: signupPage('hash-tikiti', [52]) },
+    pages: { [PAGE]: signupPage('hash-tikiti', [52], OLD_HASH.tikiti) },
   },
 });
 
 export const historyFiles = (): Record<string, string> => ({
-  [`${SIDECAR}/history/${COMMIT_OLD}/${PAGE}.md`]: '# Company signup\n\nAnyone with the join link can join.\n',
-  [`${TIKITI}/history/${COMMIT_OLD}/${PAGE}.md`]: '# Tikiti signup\n\nTikiti only.\n',
+  [`${SIDECAR}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.sidecar,
+  [`${TIKITI}/history/${COMMIT_OLD}/${PAGE}.md`]: OLD_TEXT.tikiti,
 });
 
 // Every site published at VERSION: pointer, manifest, pages and history.
@@ -207,6 +223,7 @@ export const tokenFor = (email: string) => token({ email, aud: HUB_AUD });
 const githubSigning = await generateKeyPair('RS256', { extractable: true });
 const githubJwk = { ...(await exportJWK(githubSigning.publicKey)), kid: 'gh1', alg: 'RS256', use: 'sig' };
 export const PUBLISH_SHA = 'c'.repeat(40);
+export const githubKeys = { down: false };
 // A valid publish of sidecar from its docs workflow on develop. Pass a claim
 // as undefined to leave it out.
 export const oidcClaims = (): Record<string, unknown> => ({
@@ -243,6 +260,8 @@ export const emptySites = async () => {
     if (!page.truncated) break;
   }
   await env.DB.prepare('DELETE FROM publish_tokens').run();
+  githubKeys.down = false;
+  forgetGithubKeys();
 };
 
 // A stand-in for GitHub's issues API: labels per issue, per repo.
@@ -367,6 +386,7 @@ export const installFetch = () =>
     }
     if (url.host === 'api.github.com') return githubResponse(req, url);
     if (url.host === 'token.actions.githubusercontent.com' && url.pathname === '/.well-known/jwks') {
+      if (githubKeys.down) return new Response('down', { status: 503 });
       return Response.json({ keys: [githubJwk] });
     }
     throw new Error(`unexpected outbound fetch: ${req.url}`);

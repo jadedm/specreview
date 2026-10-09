@@ -64,6 +64,11 @@ const routeApi = (req: Omit<Req, 'params'>, path: string): Promise<Response> => 
   throw new AppError(404, 'NOT_FOUND');
 };
 
+const sha256Hex = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
 // Old versions are served only to the site's team: they can hold text removed
 // before an outside reader was given access.
 const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: string) => {
@@ -71,6 +76,14 @@ const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: stri
   if (req.request.method !== 'GET') throw new AppError(405, 'METHOD_NOT_ALLOWED');
   const text = await readText(req.ctx.deps.store, `${req.ctx.site.repo}/history/${commit}/${path}`);
   if (text === null) throw new AppError(404, 'NOT_FOUND');
+  // Only an old version the live manifest lists, with the hash it records:
+  // history keys are shared across publishes, so nothing a publish that never
+  // went live wrote can be shown.
+  const { manifest } = await req.ctx.snapshot();
+  const entry = Object.values(manifest.pages)
+    .flatMap((p) => p.history)
+    .find((h) => h.commit === commit && h.path === path);
+  if (!entry || entry.hash !== (await sha256Hex(text))) throw new AppError(404, 'NOT_FOUND');
   return new Response(text, {
     headers: { ...protectedHeaders("default-src 'none'"), 'content-type': 'text/plain; charset=utf-8' },
   });

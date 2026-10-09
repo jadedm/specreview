@@ -31,6 +31,7 @@ export const hubOrigin = (hub: string): string => {
 };
 
 const REPO = /^[a-z0-9._-]{1,100}$/;
+const VERSION = /^[0-9a-f]{40}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{8}$/;
 
 type Env = Record<string, string | undefined>;
 type Fetch = typeof fetch;
@@ -125,7 +126,11 @@ export const publishBuild = async ({
           error?: { code?: string; message?: string };
         } | null)
       : null;
-    if (res?.ok && typeof body?.version === 'string') return { version: body.version };
+    if (res?.ok && typeof body?.version === 'string') {
+      // Goes to GITHUB_OUTPUT: only a version of the hub's own shape.
+      if (!VERSION.test(body.version)) throw new PublishError('the hub answered with a malformed version');
+      return { version: body.version };
+    }
     // A later run has already published: nothing to do.
     if (res?.status === 409 && body?.error?.code === 'SUPERSEDED') return { superseded: true };
     if (res) last = `${res.status} ${body?.error?.code ?? ''} ${body?.error?.message ?? ''}`.trim();
