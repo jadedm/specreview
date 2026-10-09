@@ -269,7 +269,9 @@ describe('builds that must fail, naming the cause', () => {
     commit(repo, 'vue');
     expect(build(repo).status).toBe(0);
     const html = readFileSync(path.join(repo, '.specreview', 'site', 'vue.html'), 'utf8');
-    expect(html).not.toContain('42');
+    // What each line would become if Vue ran it. Not a bare '42': hashed ids
+    // such as data-v-151942dc and asset names can contain it.
+    expect(html).not.toMatch(/Total 42 here|>42<\/code>|`42`/);
     expect(html.match(/\{\{ 6\*7 \}\}|&#123;&#123; 6\*7 &#125;&#125;/g)?.length).toBe(3);
   });
 
