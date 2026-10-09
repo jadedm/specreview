@@ -91,7 +91,7 @@ var publishBuild = async ({
     }
     if (res?.status === 409 && body?.error?.code === "SUPERSEDED") return { superseded: true };
     if (res) last = `${res.status} ${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`.trim();
-    const retryable = res === null || res.status >= 500;
+    const retryable = res === null || res.status >= 500 || res.status === 409 && body?.error?.code === "BUSY";
     if (!retryable || attempt === ATTEMPTS) break;
     await pause(2e3 * attempt);
   }

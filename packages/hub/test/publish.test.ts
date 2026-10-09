@@ -170,6 +170,25 @@ describe('1, 8, 9: a publish', () => {
     expect((await history())[0]).toBe(404);
   });
 
+  it('a history file starting with a byte-order mark is served, byte for byte', async () => {
+    const withBom = '\uFEFF# Company signup\n\nSaved by a Windows editor.\n';
+    const manifest = await manifestFor();
+    manifest.pages['onboarding/signup'].history[0].hash = await sha256(withBom);
+    const parts = { ...(await bundleParts(manifest)), [`history/${OLD}/onboarding/signup.md`]: withBom };
+    expect((await publishWith(await oidcToken(), parts)).status).toBe(200);
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(`${HOST}/${SIDECAR}/_history/${OLD}/onboarding/signup.md`, {
+        headers: { 'cf-access-jwt-assertion': await tokenFor('dev@inoltro.ai') },
+      }) as Request<unknown, IncomingRequestCfProperties>,
+      testEnv(),
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect([...new Uint8Array(await res.arrayBuffer()).slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+  });
+
   it("a build's own asset is never replaced by the previous version's file of the same name", async () => {
     await publishWith(
       await oidcToken({ run_id: '100' }),

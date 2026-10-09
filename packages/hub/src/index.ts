@@ -13,7 +13,7 @@ import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
-import { readText, unconfiguredStore } from './store';
+import { read, unconfiguredStore } from './store';
 
 type Req = { request: Request; url: URL; ctx: Ctx; caller: Caller; params: string[] };
 type Handler = (req: Req) => Promise<Response>;
@@ -64,8 +64,8 @@ const routeApi = (req: Omit<Req, 'params'>, path: string): Promise<Response> => 
   throw new AppError(404, 'NOT_FOUND');
 };
 
-const sha256Hex = async (text: string) =>
-  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+const sha256Hex = async (bytes: ArrayBuffer) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 
@@ -74,8 +74,14 @@ const sha256Hex = async (text: string) =>
 const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: string) => {
   if (!isTeam(req.caller.role)) throw new AppError(403, 'FORBIDDEN');
   if (req.request.method !== 'GET') throw new AppError(405, 'METHOD_NOT_ALLOWED');
-  const text = await readText(req.ctx.deps.store, `${req.ctx.site.repo}/history/${commit}/${path}`);
-  if (text === null) throw new AppError(404, 'NOT_FOUND');
+  const obj = await read(req.ctx.deps.store, `${req.ctx.site.repo}/history/${commit}/${path}`);
+  if (obj === null) throw new AppError(404, 'NOT_FOUND');
+  // The bytes as stored, as publish hashed them: decoding as text would drop
+  // a leading byte-order mark and the hash would no longer match.
+  const bytes = await new Response(obj.body).arrayBuffer().catch((e: unknown) => {
+    console.error('store read failed', e instanceof Error ? e.message : String(e));
+    throw new AppError(503, 'STORAGE_UNAVAILABLE', 'Storage is unavailable; try again shortly.');
+  });
   // Only an old version the live manifest lists, with the hash it records:
   // history keys are shared across publishes, so nothing a publish that never
   // went live wrote can be shown.
@@ -83,8 +89,8 @@ const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: stri
   const entry = Object.values(manifest.pages)
     .flatMap((p) => p.history)
     .find((h) => h.commit === commit && h.path === path);
-  if (!entry || entry.hash !== (await sha256Hex(text))) throw new AppError(404, 'NOT_FOUND');
-  return new Response(text, {
+  if (!entry || entry.hash !== (await sha256Hex(bytes))) throw new AppError(404, 'NOT_FOUND');
+  return new Response(bytes, {
     headers: { ...protectedHeaders("default-src 'none'"), 'content-type': 'text/plain; charset=utf-8' },
   });
 };

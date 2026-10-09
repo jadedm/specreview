@@ -134,7 +134,8 @@ export const publishBuild = async ({
     // A later run has already published: nothing to do.
     if (res?.status === 409 && body?.error?.code === 'SUPERSEDED') return { superseded: true };
     if (res) last = `${res.status} ${body?.error?.code ?? ''} ${body?.error?.message ?? ''}`.trim();
-    const retryable = res === null || res.status >= 500;
+    // BUSY: another publish kept moving the pointer; a fresh attempt can win.
+    const retryable = res === null || res.status >= 500 || (res.status === 409 && body?.error?.code === 'BUSY');
     if (!retryable || attempt === ATTEMPTS) break;
     await pause(2000 * attempt);
   }

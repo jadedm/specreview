@@ -150,6 +150,13 @@ describe('14: publishing', () => {
     expect(calls.filter((c) => c.url.includes('/_publish/'))).toHaveLength(1);
   });
 
+  it('retries BUSY, when another publish kept moving the pointer', async () => {
+    const { fetchImpl } = stub([() => Response.json({ error: { code: 'BUSY' } }, { status: 409 }), ok]);
+    expect(
+      await publishBuild({ hub: 'https://h.example', repo: 'sidecar', out, env: ENV, fetch: fetchImpl, wait: noWait }),
+    ).toEqual({ version: V1 });
+  });
+
   it('gives up after three failures, naming the last', async () => {
     const down = () => Response.json({ error: { code: 'STORAGE_UNAVAILABLE' } }, { status: 503 });
     const { fetchImpl } = stub([down, down, down]);
