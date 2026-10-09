@@ -30,7 +30,7 @@ describe('config rules, one at a time', () => {
       '\u{1f469}\u200d\u{1f4bb} team',
       '\u05e6\u05d5\u05d5\u05ea\u200f',
       'Équipe Acme',
-      '\u30a4\u30ce\u30eb\u30c8\u30ed',
+      '\u30c1\u30fc\u30e0',
       '\u{1f600}'.repeat(40),
     ]) {
       expect(problemsIn({ ...valid(), teamLabel: label }), label).toEqual([]);
