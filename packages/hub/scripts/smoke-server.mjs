@@ -9,7 +9,7 @@
 // Miniflare 4 is pinned: the 5.x alpha under wrangler takes a different
 // options shape, and its workerd predates the deploy compatibility date.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
@@ -129,6 +129,8 @@ for (const file of readdirSync(path.join(HUB, 'migrations')).sort()) {
 const r2 = await mf.getR2Bucket('SITES');
 const V = `${'b'.repeat(40)}-101`;
 const OLD = 'a'.repeat(40);
+// The hub serves an old version only if its bytes hash to the manifest's entry.
+const OLD_TEXT = '# Company signup\n\nThe old text.\n';
 const manifest = {
   commit: 'b'.repeat(40),
   builtAt: '2026-10-08T00:00:00.000Z',
@@ -140,7 +142,9 @@ const manifest = {
       hash: 'h-signup',
       issues: [52],
       sections: [{ id: 'who', title: 'Who', text: 'Any signed-in admin can create a company.' }],
-      history: [{ commit: OLD, path: 'onboarding/signup.md', hash: 'h-old' }],
+      history: [
+        { commit: OLD, path: 'onboarding/signup.md', hash: createHash('sha256').update(OLD_TEXT).digest('hex') },
+      ],
     },
   },
 };
@@ -153,7 +157,7 @@ const files = {
   [`sidecar/v/${V}/assets/logo.svg`]: '<svg xmlns="http://www.w3.org/2000/svg"/>',
   [`sidecar/v/${V}/files/report.bin`]: 'binary',
   [`sidecar/v/${V}/release-1.2.html`]: '<!doctype html><title>Release 1.2</title>',
-  [`sidecar/history/${OLD}/onboarding/signup.md`]: '# Company signup\n\nThe old text.\n',
+  [`sidecar/history/${OLD}/onboarding/signup.md`]: OLD_TEXT,
   'sidecar/current.json': JSON.stringify({ version: V, publishedAt: '2026-10-08T00:00:00.000Z' }),
 };
 for (const [k, v] of Object.entries(files)) await r2.put(k, v);
