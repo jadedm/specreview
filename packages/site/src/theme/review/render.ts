@@ -13,23 +13,29 @@ export const canSettle = (thread: Thread, me: Me) => me.role !== 'reader' || thr
 
 // ---- status ----
 
-type StatusActions = { set: (status: Status) => void };
+type StatusActions = { set: (status: Status, button: HTMLButtonElement) => void };
+
+// Buttons that write carry data-write (held while a write runs) and the label
+// they show meanwhile in data-busy.
 
 export const statusBar = (status: PageStatus, me: Me, openCount: number, actions: StatusActions) => {
   const targets: Status[] = (['pending', 'in_review', 'ready'] as Status[]).filter((s) => s !== status.status);
   const allowed = (s: Status) => (s === 'ready' ? me.role === 'approver' : me.role !== 'reader');
   const buttons = targets.filter(allowed).map((s) => {
     const blocked = s === 'ready' && openCount > 0;
-    return el(
+    const button: HTMLButtonElement = el(
       'button',
       {
         class: 'rv-btn',
         disabled: blocked,
         title: blocked ? 'Resolve the open comments first' : '',
-        onclick: () => actions.set(s),
+        'data-write': true,
+        'data-busy': 'Saving',
+        onclick: () => actions.set(s, button),
       },
       s === 'ready' ? 'Mark ready to build' : `Move to ${STATUS_TEXT[s].toLowerCase()}`,
     );
+    return button;
   });
   return el(
     'div',
@@ -78,10 +84,20 @@ export const ticketBox = (tickets: Ticket[]) =>
 // ---- comments ----
 
 type ThreadActions = {
-  reply: (thread: Thread, body: string) => void;
-  resolve: (thread: Thread, pr?: number) => void;
-  reopen: (thread: Thread) => void;
+  reply: (thread: Thread, body: string, button: HTMLButtonElement) => void;
+  resolve: (thread: Thread, button: HTMLButtonElement) => void;
+  reopen: (thread: Thread, button: HTMLButtonElement) => void;
   viewOld: (thread: Thread) => void;
+};
+
+// A button that writes: held while the write runs, showing its busy label.
+const writeButton = (label: string, busy: string, onclick: (button: HTMLButtonElement) => void) => {
+  const button: HTMLButtonElement = el(
+    'button',
+    { class: 'rv-btn', 'data-write': true, 'data-busy': busy, onclick: () => onclick(button) },
+    label,
+  );
+  return button;
 };
 
 const message = (author: string, at: string, body: string) =>
@@ -114,13 +130,11 @@ export const threadCard = (thread: Thread, me: Me, actions: ThreadActions) => {
       { class: 'rv-actions' },
       thread.state === 'open' ? replyBox : null,
       thread.state === 'open'
-        ? el('button', { class: 'rv-btn', onclick: () => actions.reply(thread, replyBox.value) }, 'Reply')
+        ? writeButton('Reply', 'Replying', (b) => actions.reply(thread, replyBox.value, b))
         : null,
-      settle && thread.state === 'open'
-        ? el('button', { class: 'rv-btn', onclick: () => actions.resolve(thread) }, 'Resolve')
-        : null,
+      settle && thread.state === 'open' ? writeButton('Resolve', 'Resolving', (b) => actions.resolve(thread, b)) : null,
       settle && thread.state === 'resolved'
-        ? el('button', { class: 'rv-btn', onclick: () => actions.reopen(thread) }, 'Reopen')
+        ? writeButton('Reopen', 'Reopening', (b) => actions.reopen(thread, b))
         : null,
     ),
   );
@@ -157,7 +171,11 @@ export const commentsBlock = (sections: Section[], threads: Thread[], me: Me, ac
   );
 };
 
-export const commentForm = (quote: string, onPost: (body: string) => void, onCancel: () => void) => {
+export const commentForm = (
+  quote: string,
+  onPost: (body: string, button: HTMLButtonElement) => void,
+  onCancel: () => void,
+) => {
   const box = el('textarea', { class: 'rv-input', rows: '3', maxlength: '5000', placeholder: 'Your comment' });
   return el(
     'div',
@@ -167,7 +185,7 @@ export const commentForm = (quote: string, onPost: (body: string) => void, onCan
     el(
       'div',
       { class: 'rv-actions' },
-      el('button', { class: 'rv-btn', onclick: () => onPost(box.value) }, 'Post'),
+      writeButton('Post', 'Posting', (b) => onPost(box.value, b)),
       el('button', { class: 'rv-btn rv-ghost', onclick: onCancel }, 'Cancel'),
     ),
   );

@@ -170,3 +170,74 @@
 .rv-board {
   width: 100%;
 }
+
+/* Loading placeholders (skeleton.ts). Grey bars sized like the panel. */
+.rv-skel-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.rv-skel-bar {
+  display: block;
+  height: 10px;
+  margin: 6px 0;
+  border-radius: 3px;
+  background: var(--vp-c-default-soft);
+  animation: rv-pulse 1.6s ease-in-out infinite;
+}
+.rv-skel-row .rv-skel-bar {
+  margin: 0;
+}
+.rv-skel-tall {
+  height: 24px;
+}
+.rv-skel-w20 {
+  width: 20%;
+}
+.rv-skel-w30 {
+  width: 30%;
+}
+.rv-skel-w45 {
+  width: 45%;
+}
+.rv-skel-w60 {
+  width: 60%;
+}
+.rv-skel-w80 {
+  width: 80%;
+}
+@keyframes rv-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rv-skel-bar {
+    animation: none;
+  }
+}
+/* Read by screen readers, not shown. */
+.rv-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.rv-btn[aria-busy='true'] {
+  cursor: progress;
+}
+/* The top placeholder's height and its 24px bottom margin, reserved before
+   any script runs, so the page text does not move when the placeholder
+   appears. Every part of that height is fixed in pixels (bars, padding, gap,
+   border), so it does not depend on the font. flow-root keeps the margin
+   inside the reserved box. */
+#rv-mount-top {
+  display: flow-root;
+  min-height: 122px;
+}
+/* No panel on this route, or it failed to load: give the space back. */
+#rv-mount-top.rv-unreserved {
+  min-height: 0;
+}
