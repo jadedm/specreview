@@ -92,6 +92,6 @@ export const changeStatus = async (ctx: Ctx, email: string, role: Role, raw: unk
     throw new AppError(409, 'OPEN_COMMENTS', 'Resolve the open comments first.');
   }
 
-  const labels = await syncSiteLabels(ctx, input.page).catch(() => 'failed' as const);
+  const labels = await syncSiteLabels(ctx, input.page);
   return { page: input.page, status, version: next, labels };
 };

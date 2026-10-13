@@ -10,10 +10,10 @@ import {
   OPEN_ON_PAGE,
   RESOLVED_LISTED,
   type ReplyRow,
-  syncLogged,
   type ThreadRow,
 } from './comment-rules';
 import { type Ctx, siteKey } from './ctx';
+import { syncSiteLabels } from './github';
 import { AppError } from './http';
 import { pageOf } from './manifest';
 import { recordWrite } from './rate-limit';
@@ -137,7 +137,7 @@ export const createComment = async (ctx: Ctx, email: string, raw: unknown) => {
     );
   const [inserted, demoted] = await db(ctx).batch([insert, ...demoteIfReady(ctx, input.page, email, at, page.hash)]);
   if (inserted.meta.changes === 0) throw await whyRefused(ctx, input.page, email);
-  if (demoted.meta.changes > 0) await syncLogged(ctx, input.page);
+  if (demoted.meta.changes > 0) await syncSiteLabels(ctx, input.page);
   return { id };
 };
 
@@ -273,6 +273,6 @@ export const reopenThread = async (ctx: Ctx, email: string, role: Role, threadId
     throw new AppError(409, 'ALREADY_OPEN');
   }
   if (done.meta.changes === 0) throw await whyRefused(ctx, thread.page, thread.author, email);
-  if (demoted.meta.changes > 0) await syncLogged(ctx, thread.page);
+  if (demoted.meta.changes > 0) await syncSiteLabels(ctx, thread.page);
   return { id: threadId, state: 'open' };
 };

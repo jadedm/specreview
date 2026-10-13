@@ -2,7 +2,6 @@
 // Every fragment filters by site first: one site's threads never count,
 // block or demote anything on another.
 import { type Ctx, siteKey } from './ctx';
-import { syncSiteLabels } from './github';
 
 // Open threads are capped when written and always all listed: an unlisted
 // open thread would block ready with nothing anyone could resolve. Only open
@@ -20,19 +19,6 @@ export const MAX_REPLIES_PER_AUTHOR = 20;
 // Bind order for each: site, page[, author].
 export const OPEN_ON_PAGE = `(SELECT count(*) FROM threads WHERE site = ? AND page = ? AND state = 'open')`;
 export const OPEN_BY_AUTHOR = `(SELECT count(*) FROM threads WHERE site = ? AND page = ? AND author = ? AND state = 'open')`;
-
-// A label sync failure is repaired by the cron; the log line makes a GitHub
-// token that keeps failing visible instead of silent.
-export const syncLogged = (ctx: Ctx, page: string) =>
-  syncSiteLabels(ctx, page).catch((err: unknown) => {
-    console.error(
-      'label sync after a comment failed',
-      siteKey(ctx),
-      page,
-      err instanceof Error ? err.message : String(err),
-    );
-    return 'failed' as const;
-  });
 
 // An open comment and a ready page cannot coexist: posting or reopening one
 // on a ready page moves it back to in review, in the same batch, so the
