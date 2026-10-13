@@ -1,6 +1,6 @@
-// The hub's bare address (#43). Access protects it, so whoever reaches the
-// Worker here has signed in: send them to their docs. One readable site is a
-// redirect; several are a list; none is a refusal that names no site.
+// The hub's bare address (#43, #45). Access protects it, so whoever reaches
+// the Worker here has signed in: an index of the sites they may read, one or
+// many; none is a refusal that names no site.
 import type { HubConfig } from './config';
 import { protectedHeaders } from './pages';
 import { canRead, roleOf } from './roles';
@@ -34,13 +34,6 @@ const page = async (status: number, title: string, body: string, head: boolean) 
 export const serveRoot = async (config: HubConfig, email: string, method: string): Promise<Response> => {
   const head = method === 'HEAD';
   const readable = [...config.sites.values()].filter((site) => canRead(roleOf(email, site)));
-  // Repo names are [a-z0-9._-] (config.ts), so they need no escaping in a path.
-  if (readable.length === 1) {
-    return new Response(null, {
-      status: 302,
-      headers: { location: `/${readable[0].repo}/`, 'cache-control': 'private, no-store' },
-    });
-  }
   const name = escapeHtml(config.brand?.name ?? config.org);
   if (readable.length === 0) {
     return page(
@@ -50,6 +43,7 @@ export const serveRoot = async (config: HubConfig, email: string, method: string
       head,
     );
   }
+  // Repo names are [a-z0-9._-] (config.ts), so they need no escaping.
   const links = readable.map((s) => `<li><a href="/${s.repo}/">${s.repo}</a></li>`).join('');
   return page(200, name, `<h1>${name}</h1><ul>${links}</ul>`, head);
 };

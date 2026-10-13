@@ -1,5 +1,5 @@
-// #43: the hub's bare address takes a signed-in visitor to their docs. Case
-// numbers are the ticket's.
+// #43, #45: the hub's bare address shows a signed-in visitor an index of the
+// sites they may read. Case numbers are the tickets'.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { call, CONFIG, installFetch, reset } from './helpers';
 
@@ -16,9 +16,10 @@ const sha256 = async (text: string) =>
   btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))));
 
 describe('43: the hub root', () => {
-  it('1: one readable site is a redirect to it', async () => {
+  it('1, #45: one readable site is listed on the index, not redirected to', async () => {
     const r = await root('pm@globex.dev');
-    expect([r.status, r.headers.get('location')]).toEqual([302, '/globex/']);
+    expect([r.status, r.headers.get('location')]).toEqual([200, null]);
+    expect([...String(r.body).matchAll(/href="([^"]+)"/g)].map((m) => m[1])).toEqual(['/globex/']);
   });
 
   it('2: several readable sites are a list of exactly those, in config order', async () => {
@@ -34,13 +35,14 @@ describe('43: the hub root', () => {
     ]);
   });
 
-  it('3: a reader of one site among three goes to it, and never sees the others named', async () => {
+  it('3, #45: a reader of one site among three sees only that site named', async () => {
     const cfg = structuredClone(CONFIG);
     cfg.sites[1].readers = [];
     cfg.sites[2].readers = [];
     const r = await root('riya@initech.example', withConfig(cfg));
-    expect([r.status, r.headers.get('location')]).toEqual([302, '/sidecar/']);
-    expect(String(r.body)).toBe('');
+    expect(r.status).toBe(200);
+    expect([...String(r.body).matchAll(/href="([^"]+)"/g)].map((m) => m[1])).toEqual(['/sidecar/']);
+    for (const other of ['web', 'globex']) expect(String(r.body)).not.toContain(other);
   });
 
   it('4: signed in with no readable site is a 403 page naming no site', async () => {
@@ -82,15 +84,11 @@ describe('43: the hub root', () => {
     }
   });
 
-  it('review: HEAD answers each case with no body; the redirect is never cached', async () => {
+  it('review, #45: HEAD answers each case with no body, never cached', async () => {
     const head = (email: string) => call('/', { raw: true, email, method: 'HEAD' });
     const one = await head('pm@globex.dev');
-    expect([one.status, one.headers.get('location'), one.headers.get('cache-control'), String(one.body)]).toEqual([
-      302,
-      '/globex/',
-      'private, no-store',
-      '',
-    ]);
+    expect([one.status, one.headers.get('cache-control'), String(one.body)]).toEqual([200, 'private, no-store', '']);
+    expect(one.headers.get('location')).toBeNull();
     const many = await head('dev@acme.dev');
     expect([many.status, String(many.body)]).toEqual([200, '']);
     const none = await head('x@stranger.example');
