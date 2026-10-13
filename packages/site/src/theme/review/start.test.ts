@@ -88,11 +88,17 @@ describe('10, 11: history only when the hub sends it', () => {
     expect(top().querySelector('.rv-history')?.textContent).toContain('History (1)');
   });
 
-  it('13: the index adds the status board under its own comments', async () => {
+  it('13, #33: the index lists all pages under its own heading, above its comments', async () => {
     const reader: Me = { email: 'r@x.example', role: 'reader' };
     await createReview(fakeApi(reader, { commit: 'c', pages: { index: PAGE } }), '/fixture/').render('index');
     const bottom = document.getElementById(BOTTOM_MOUNT)!;
-    expect(bottom.querySelector('#rv-comments')).not.toBeNull();
+    const comments = bottom.querySelector('#rv-comments')!;
+    const board = bottom.querySelector('.rv-all-pages')!;
+    expect(board.querySelector('h2')?.textContent).toBe('All pages');
+    expect(board.compareDocumentPosition(comments) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // A second render keeps the order.
+    await createReview(fakeApi(reader, { commit: 'c', pages: { index: PAGE } }), '/fixture/').render('index');
+    expect(bottom.firstElementChild?.querySelector('.rv-all-pages')).not.toBeNull();
     expect([...bottom.querySelectorAll('.rv-board a')].map((a) => a.getAttribute('href'))).toEqual([
       '/fixture/',
       '/fixture/signup',

@@ -98,6 +98,8 @@ export type Ticket =
 // History is sent to the team only.
 export type PageData = { title: string; hash: string; issues: number[]; sections: Section[]; history?: HistoryEntry[] };
 export type Pages = { commit: string; pages: Record<string, PageData> };
+// The organisation's name and whether it has a logo (#33).
+export type Brand = { name: string | null; logo: boolean };
 
 const q = (page: string) => `page=${encodeURIComponent(page)}`;
 
@@ -106,6 +108,8 @@ export const apiFor = (base: string) => {
   const at = (path: string) => `${base}_api/${path}`;
   return {
     me: () => send<Me>('GET', at('me')),
+    brand: () => send<Brand>('GET', at('brand')),
+    logoUrl: () => at('brand/logo'),
     pages: () => send<Pages>('GET', at('pages')),
     comments: (page: string) => send<Thread[]>('GET', at(`comments?${q(page)}`)),
     statuses: () => send<PageStatus[]>('GET', at('status')),

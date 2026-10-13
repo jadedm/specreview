@@ -30,8 +30,14 @@ export type Site = {
   environment: string | null;
 };
 
+// The organisation's name and logo in each site's header (#33). The logo is
+// stored under a key derived from its bytes, written by deploy, so a new logo
+// never replaces the file a running Worker points at.
+export type Brand = { name: string; logo: { key: string; type: 'image/png' | 'image/webp' } | null };
+
 export type HubConfig = {
   org: string;
+  brand: Brand | null;
   accessTeamDomain: string;
   accessAud: string;
   admins: string[];
@@ -120,8 +126,13 @@ const TOP_KEYS = new Set([
   'accessAud',
   'admins',
   'teamLabel',
+  'brand',
   'sites',
 ]);
+const BRAND_KEYS = new Set(['name', 'logo']);
+const LOGO_KEYS = new Set(['key', 'type']);
+const LOGO_TYPE: Record<string, 'image/png' | 'image/webp'> = { png: 'image/png', webp: 'image/webp' };
+export const LOGO_KEY = /^_brand\/logo-[0-9a-f]{64}\.(png|webp)$/;
 const SITE_KEYS = new Set([
   'repo',
   'teamDomains',
@@ -166,6 +177,32 @@ const labelProblem = (v: unknown): string | null => {
   // zero-width space is still You. Lookalike letters from other scripts
   // (a Cyrillic o) are not caught.
   return RESERVED_LABELS.has(folded.replace(BLANK, '')) ? 'must not be You or Reader' : null;
+};
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+// The Worker's shape, as deploy writes it: the logo is already a stored key.
+const brandProblems = (v: unknown): string[] => {
+  if (v === undefined) return [];
+  if (!isPlainObject(v)) return ['brand must be an object'];
+  const problems = Object.keys(v)
+    .filter((k) => !BRAND_KEYS.has(k))
+    .map((k) => `unknown key brand.${k}`);
+  const name = v.name === undefined ? 'is required' : labelProblem(v.name);
+  if (name) problems.push(`brand.name ${name}`);
+  if (v.logo === undefined) return problems;
+  if (!isPlainObject(v.logo)) return [...problems, 'brand.logo must be an object'];
+  const logo = v.logo;
+  problems.push(
+    ...Object.keys(logo)
+      .filter((k) => !LOGO_KEYS.has(k))
+      .map((k) => `unknown key brand.logo.${k}`),
+  );
+  const ext = typeof logo.key === 'string' ? LOGO_KEY.exec(logo.key)?.[1] : undefined;
+  if (!ext) return [...problems, 'brand.logo.key must be _brand/logo-<sha256>.png or .webp'];
+  if (logo.type !== LOGO_TYPE[ext]) problems.push(`brand.logo.type must be ${LOGO_TYPE[ext]} for a .${ext} key`);
+  return problems;
 };
 
 export const isOwner = (v: string) => OWNER.test(v);
@@ -267,6 +304,7 @@ export const problemsIn = (raw: unknown): string[] => {
   }
   const label = labelProblem(cfg.teamLabel);
   if (label) problems.push(`teamLabel ${label}`);
+  problems.push(...brandProblems(cfg.brand));
   const admins = strings(cfg.admins);
   if (!admins || admins.length === 0) problems.push('admins must be a non-empty list');
   if (admins && admins.some((e) => !isLowerEmail(e))) problems.push('admins has a malformed email');
@@ -311,6 +349,7 @@ export const configOf = (text: string | undefined): HubConfig => {
     admins: string[];
     ownerId: string;
     teamLabel?: string;
+    brand?: { name: string; logo?: { key: string; type: 'image/png' | 'image/webp' } };
     sites: {
       repo: string;
       teamDomains: string[];
@@ -326,6 +365,7 @@ export const configOf = (text: string | undefined): HubConfig => {
   };
   const config: HubConfig = {
     org: cfg.org,
+    brand: cfg.brand ? { name: cfg.brand.name, logo: cfg.brand.logo ?? null } : null,
     accessTeamDomain: cfg.accessTeamDomain,
     accessAud: cfg.accessAud,
     admins: cfg.admins,

@@ -4,7 +4,8 @@
 // setup, and deploy adds them to the config before validating it.
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { problemsIn } from '../src/config';
+import { LOGO_KEY, problemsIn } from '../src/config';
+import { type Logo, workerBrand } from './brand';
 
 export type HubJson = {
   accountId: string;
@@ -20,6 +21,9 @@ export type HubJson = {
     publishPolicyId?: string;
     publishAppId?: string;
   };
+  // Written by deploy: the logo key the live Worker uses, and every logo key
+  // uploaded and not yet deleted, so no stored logo is ever lost track of.
+  brand?: { logoKey?: string; keys?: string[] };
 };
 
 export type Org = {
@@ -38,10 +42,18 @@ const WORKER = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const D1_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 // R2 bucket names: 3 to 63 lowercase letters, digits and dashes.
 const BUCKET = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
-const HUB_KEYS = new Set(['$schema', 'accountId', 'hostname', 'worker', 'database', 'bucket', 'access']);
+const HUB_KEYS = new Set(['$schema', 'accountId', 'hostname', 'worker', 'database', 'bucket', 'access', 'brand']);
 const ACCESS_KEYS = new Set(['teamDomain', 'policyId', 'appId', 'aud', 'publishPolicyId', 'publishAppId']);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const isLogoKey = (v: unknown) => typeof v === 'string' && LOGO_KEY.test(v);
+const brandRecordOk = (brand: unknown) => {
+  if (brand === undefined) return true;
+  if (!isObject(brand) || !Object.keys(brand).every((k) => k === 'logoKey' || k === 'keys')) return false;
+  const keysOk = brand.keys === undefined || (Array.isArray(brand.keys) && brand.keys.every(isLogoKey));
+  return keysOk && (brand.logoKey === undefined || isLogoKey(brand.logoKey));
+};
 
 export const hubProblems = (raw: unknown): string[] => {
   if (!isObject(raw)) return ['hub.json is not a JSON object'];
@@ -71,6 +83,8 @@ export const hubProblems = (raw: unknown): string[] => {
     problems.push('hub.json bucket.created is written by setup and may only be true');
   }
   if (raw.access !== undefined && !isObject(raw.access)) problems.push('hub.json access must be an object');
+  if (!brandRecordOk(raw.brand))
+    problems.push('hub.json brand is written by deploy and may only hold logoKey and keys');
   if (isObject(raw.access)) {
     for (const [key, v] of Object.entries(raw.access)) {
       if (!ACCESS_KEYS.has(key)) problems.push(`hub.json access has unknown key ${key}`);
@@ -129,12 +143,21 @@ export const deployable = (hub: HubJson) => {
   };
 };
 
-// The config the Worker runs with: the organisation's file plus the Access
-// fields from hub.json, validated exactly as the Worker validates it.
-export const hubConfig = (org: Org): string => {
-  const hub = deployable(org.hub);
-  const merged = { ...org.config, accessTeamDomain: hub.access.teamDomain, accessAud: hub.access.aud };
+// The organisation's file as the Worker reads it: the logo file resolved to
+// its stored key, and the Access fields added. setup checks the same shape
+// with placeholder Access fields, so both refuse exactly what the Worker would.
+export const workerConfigOf = (org: Org, access: { teamDomain: string; aud: string }, logo?: Logo | null) => {
+  const merged = {
+    ...org.config,
+    ...(org.config.brand === undefined ? {} : { brand: workerBrand(org, logo) }),
+    accessTeamDomain: access.teamDomain,
+    accessAud: access.aud,
+  };
   const problems = problemsIn(merged);
   if (problems.length > 0) throw new DeployError(`specreview.config.json has problems:\n  ${problems.join('\n  ')}`);
-  return JSON.stringify(merged);
+  return merged;
 };
+
+// The config the Worker runs with: the Access fields from hub.json.
+export const hubConfig = (org: Org, logo?: Logo | null): string =>
+  JSON.stringify(workerConfigOf(org, deployable(org.hub).access, logo));

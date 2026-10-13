@@ -4,6 +4,7 @@
 // date and cron come from the pinned commit rather than from the organisation.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { Logo } from './brand';
 import { deployable, hubConfig, type Org } from './org';
 
 export const HUB_DIR = path.resolve(import.meta.dirname, '..');
@@ -52,7 +53,7 @@ export const pinned = (hubDir = HUB_DIR): Pinned => {
   };
 };
 
-export const wranglerConfig = (org: Org, hubDir = HUB_DIR) => {
+export const wranglerConfig = (org: Org, hubDir = HUB_DIR, logo?: Logo | null) => {
   const hub = deployable(org.hub);
   const { compatibility_date, compatibility_flags, triggers } = pinned(hubDir);
   return {
@@ -76,6 +77,6 @@ export const wranglerConfig = (org: Org, hubDir = HUB_DIR) => {
     ],
     r2_buckets: [{ binding: 'SITES', bucket_name: hub.bucket.name }],
     triggers,
-    vars: { SPECREVIEW_CONFIG: hubConfig(org) },
+    vars: { SPECREVIEW_CONFIG: hubConfig(org, logo) },
   };
 };

@@ -21,8 +21,16 @@ mkdirSync(here, { recursive: true });
 const TEAM = 'smoke.cloudflareaccess.com';
 const AUD = 'aud-smoke';
 const PORT = 8797;
+// A 48 px grey square as the organisation's logo (#33), stored under its
+// content key as deploy would store it.
+const LOGO = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAAAAAByaaZbAAAAJ0lEQVR42mO4SyJgGNVAUw3GBMCohlENoxpGNYxqGJkaRmvRAdUAAKGSHUzxrNTPAAAAAElFTkSuQmCC',
+  'base64',
+);
+const LOGO_KEY = `_brand/logo-${createHash('sha256').update(LOGO).digest('hex')}.png`;
 const config = {
   org: 'acme',
+  brand: { name: 'Acme', logo: { key: LOGO_KEY, type: 'image/png' } },
   accessTeamDomain: TEAM,
   accessAud: AUD,
   admins: ['owner@acme.dev'],
@@ -182,6 +190,7 @@ const files = {
   'sidecar/current.json': JSON.stringify({ version: V, publishedAt: '2026-10-08T00:00:00.000Z' }),
 };
 for (const [k, v] of Object.entries(files)) await r2.put(k, v);
+await r2.put(LOGO_KEY, LOGO);
 
 // SMOKE_SITE=<out of specreview-site build --repo sidecar>: publish that real
 // build as sidecar's current version instead of the hand-written pages.
