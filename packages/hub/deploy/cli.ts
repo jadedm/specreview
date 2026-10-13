@@ -10,7 +10,7 @@ import { setup } from './setup';
 const USAGE = `usage:
   deploy.mjs setup  --org <dir> --token-file <file> [--apply]
   deploy.mjs deploy --org <dir> --token-file <file> [--dry-run]
-  deploy.mjs secret --org <dir> --token-file <file> --name GITHUB_READ_TOKEN|GITHUB_WRITE_TOKEN --value-file <file>`;
+  deploy.mjs secret --org <dir> --token-file <file> --name GITHUB_APP_ID|GITHUB_APP_PRIVATE_KEY|GITHUB_READ_TOKEN|GITHUB_WRITE_TOKEN --value-file <file>`;
 
 const FLAGS = new Set(['--apply', '--dry-run']);
 const OPTIONS = new Set(['--org', '--token-file', '--name', '--value-file']);

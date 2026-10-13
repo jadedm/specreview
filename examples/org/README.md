@@ -27,11 +27,11 @@ Zero Trust must be enabled on the account first (dashboard: Zero Trust, then the
 ./run.sh setup --token-file <file> --apply     # creates it; commit hub.json
 ./run.sh deploy --token-file <file> --dry-run  # builds, calls nothing
 ./run.sh deploy --token-file <file>            # migrations, then the Worker on the hostname
-./run.sh secret --token-file <file> --name GITHUB_READ_TOKEN --value-file <file>
-./run.sh secret --token-file <file> --name GITHUB_WRITE_TOKEN --value-file <file>
+./run.sh secret --token-file <file> --name GITHUB_APP_ID --value-file <file>
+./run.sh secret --token-file <file> --name GITHUB_APP_PRIVATE_KEY --value-file <file>
 ```
 
-The GitHub tokens are fine-grained tokens on the ticket repos: Issues read, and Issues read and write. Run setup from one place at a time.
+The hub talks to GitHub as a GitHub App owned by the organisation: repository permissions Issues read and write and Metadata read, no webhook, installed on the ticket repos. Its id is on the app's settings page; the private key is the `.pem` file GitHub downloads, passed as is. The hub mints a token per ticket repo, with Issues read for reading tickets and Issues write for labels. A hub without the app can use two fine-grained personal tokens instead (`GITHUB_READ_TOKEN` with Issues read, `GITHUB_WRITE_TOKEN` with Issues read and write); if both kinds are set, the app wins. Run setup from one place at a time.
 
 ## Changes later
 

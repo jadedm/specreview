@@ -5,7 +5,7 @@ import type { Caller } from './identity';
 import { type Ctx, type Deps, makeCtx } from './ctx';
 import type { Env } from './env';
 import { reconcileLabels, ticketsFor } from './github';
-import { envTokens } from './github-auth';
+import { githubAuthFor } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf, pagesView } from './manifest';
 import { protectedHeaders, servePage } from './pages';
@@ -198,5 +198,5 @@ export const createHub = (makeDeps: (env: Env) => Deps) => ({
 
 export default createHub((env) => ({
   store: env.SITES ?? unconfiguredStore,
-  github: envTokens(env),
+  github: githubAuthFor(env),
 })) satisfies ExportedHandler<Env>;
