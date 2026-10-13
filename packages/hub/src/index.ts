@@ -123,7 +123,7 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
     if (!site) throw new AppError(404, 'NOT_FOUND');
     return publish(request, env, config, site);
   }
-  // The bare address takes a signed-in visitor to their docs (#43).
+  // The bare address shows a signed-in visitor an index of their sites (#43, #45).
   if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
     return serveRoot(config, await identify(request, config), request.method);
   }
