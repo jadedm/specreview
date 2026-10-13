@@ -21,7 +21,7 @@ const recorder = (codes: number[] = []) => {
   };
   return { run, calls };
 };
-const noWait = async () => {};
+const noWait = async () => 'resolver' as const;
 
 describe('9: the organisation folder', () => {
   it('3: hub.json problems are named', () => {
@@ -159,6 +159,9 @@ describe('9: deploy', () => {
     expect(calls).toEqual([]);
   });
 
+  // The nameserver path finds nothing, so only the system path is tested here.
+  const notThere = async () => false;
+
   it('29: waits for the Access redirect, through DNS failures and Cloudflare error pages, and times out with a reason', async () => {
     const answers = [
       () => Promise.reject(new Error('ENOTFOUND')),
@@ -182,6 +185,7 @@ describe('9: deploy', () => {
     const provisioning = (() => answers[n++]()) as typeof fetch;
     await waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
       fetchImpl: provisioning,
+      direct: notThere,
       tries: 10,
       delayMs: 1,
     });
@@ -190,8 +194,93 @@ describe('9: deploy', () => {
       throw new Error('ENOTFOUND');
     }) as typeof fetch;
     await expect(
-      waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', { fetchImpl: never, tries: 3, delayMs: 1 }),
+      waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+        fetchImpl: never,
+        direct: notThere,
+        tries: 3,
+        delayMs: 1,
+      }),
     ).rejects.toThrow(/did not answer within 0 s; DNS or the certificate/);
+  });
+
+  it('27 (1, 2, 10): the nameserver path is asked only when the system path fails, on every poll', async () => {
+    const fails = (async () => {
+      throw new Error('ENOTFOUND');
+    }) as typeof fetch;
+    const answers = [false, false, true];
+    let asked = 0;
+    const direct = async () => answers[asked++];
+    await waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+      fetchImpl: fails,
+      direct,
+      tries: 5,
+      delayMs: 1,
+    });
+    expect(asked).toBe(3);
+    asked = 0;
+    const redirects = (async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://acme.cloudflareaccess.com/cdn-cgi/access/login/specs.acme.dev' },
+      })) as typeof fetch;
+    await waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+      fetchImpl: redirects,
+      direct,
+      tries: 1,
+      delayMs: 1,
+    });
+    expect(asked).toBe(0);
+  });
+
+  it('27 (12): the timeout says the Worker is deployed and how to check and flush the resolver', async () => {
+    const fails = (async () => {
+      throw new Error('ENOTFOUND');
+    }) as typeof fetch;
+    const err = await waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+      fetchImpl: fails,
+      direct: notThere,
+      tries: 2,
+      delayMs: 1,
+    }).then(
+      () => new Error('the wait returned'),
+      (e: unknown) => e as Error,
+    );
+    expect(err.message).toContain('The Worker is deployed.');
+    expect(err.message).toContain('`dig +trace specs.acme.dev`');
+    expect(err.message).toContain('sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder');
+    expect(err.message).toContain('resolvectl flush-caches');
+  });
+
+  it('27 (review): a nameserver check that hangs is cut off at its budget', async () => {
+    const fails = (async () => {
+      throw new Error('ENOTFOUND');
+    }) as typeof fetch;
+    const hangs = () => new Promise<boolean>(() => {});
+    const started = Date.now();
+    await expect(
+      waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+        fetchImpl: fails,
+        direct: hangs,
+        directBudgetMs: 20,
+        tries: 3,
+        delayMs: 1,
+      }),
+    ).rejects.toThrow(/did not answer within 0 s/);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('27 (review): a hub found only through its nameservers is reported with the flush advice', async () => {
+    const { dir, tokenFile } = orgDir(exampleHub());
+    const lines: string[] = [];
+    const deployOnce = (wait: () => Promise<'resolver' | 'nameservers'>) =>
+      deploy({ org: loadOrg(dir), tokenFile, run: recorder().run, log: (l) => lines.push(l), dryRun: false, wait });
+    await deployOnce(async () => 'nameservers');
+    expect(lines.some((l) => l.includes("this machine's resolver did not find") && l.includes('dig +trace'))).toBe(
+      true,
+    );
+    lines.length = 0;
+    await deployOnce(noWait);
+    expect(lines.some((l) => l.includes('dig +trace'))).toBe(false);
   });
 
   it(

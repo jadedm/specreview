@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Cloudflare } from './cloudflare';
 import { readToken } from './cloudflare';
+import { authoritativeAddresses, probeAddress, type Dns, type Probe, systemDns } from './direct-dns';
 import { DeployError, deployable, type Org } from './org';
 import { HUB_DIR, wranglerConfig } from './wrangler-config';
 
@@ -71,25 +72,69 @@ const accessLogin = (location: string | null, teamDomain: string) => {
   })();
   return host === teamDomain;
 };
+const redirectsToAccess = (status: number, location: string | null, teamDomain: string) =>
+  status >= 300 && status < 400 && accessLogin(location, teamDomain);
+
+// The same check through the hostname's own nameservers, every address in
+// turn, for when the machine's resolver holds a stale "no such name" (#27).
+// Any failure here only means not ready yet.
+export const viaNameservers = async (
+  hostname: string,
+  teamDomain: string,
+  { dns = systemDns, probe = probeAddress() }: { dns?: Dns; probe?: Probe } = {},
+) => {
+  const addresses = await authoritativeAddresses(hostname, dns).catch(() => []);
+  for (const address of addresses) {
+    const answer = await probe(hostname, address);
+    if (answer && redirectsToAccess(answer.status, answer.location, teamDomain)) return true;
+  }
+  return false;
+};
+
+// How to see past a stale answer on this machine. `dig +trace` asks from the
+// root down, so no cache on the way is involved.
+export const flushAdvice = (hostname: string) =>
+  `If \`dig +trace ${hostname}\` ends in an address but this machine cannot resolve the name, its resolver holds a stale answer: ` +
+  `on macOS run \`sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder\`, on Linux \`resolvectl flush-caches\`.`;
+
+// Resolves to null when the budget runs out first.
+const within = <T>(p: Promise<T>, ms: number) =>
+  Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms).unref())]);
+
+// Each try asks the machine's resolver first, as any client would, so VPN and
+// split-horizon DNS keep working; only if that fails, the nameservers, within
+// a budget so a network that drops DNS to them does not stretch the wait.
+// Says which path answered.
 export const waitForHost = async (
   hostname: string,
   teamDomain: string,
   {
     fetchImpl = fetch,
+    direct = viaNameservers,
+    directBudgetMs = 10_000,
     tries = 30,
     delayMs = 10_000,
-  }: { fetchImpl?: typeof fetch; tries?: number; delayMs?: number } = {},
-) => {
+  }: {
+    fetchImpl?: typeof fetch;
+    direct?: (hostname: string, teamDomain: string) => Promise<boolean>;
+    directBudgetMs?: number;
+    tries?: number;
+    delayMs?: number;
+  } = {},
+): Promise<'resolver' | 'nameservers'> => {
+  const started = Date.now();
   for (let i = 0; i < tries; i++) {
     const answered = await fetchImpl(`https://${hostname}/`, { redirect: 'manual' }).then(
-      (r) => r.status >= 300 && r.status < 400 && accessLogin(r.headers.get('location'), teamDomain),
+      (r) => redirectsToAccess(r.status, r.headers.get('location'), teamDomain),
       () => false,
     );
-    if (answered) return;
+    if (answered) return 'resolver';
+    if (await within(direct(hostname, teamDomain), directBudgetMs)) return 'nameservers';
     await new Promise((r) => setTimeout(r, delayMs));
   }
   throw new DeployError(
-    `deployed, but https://${hostname}/ did not answer within ${Math.round((tries * delayMs) / 1000)} s; DNS or the certificate may still be provisioning`,
+    `deployed, but https://${hostname}/ did not answer within ${Math.round((Date.now() - started) / 1000)} s; DNS or the certificate may still be provisioning. ` +
+      `The Worker is deployed. ${flushAdvice(hostname)}`,
   );
 };
 
@@ -126,8 +171,13 @@ export const deploy = async ({
   });
   if (dryRun) return;
   log(`waiting for https://${org.hub.hostname}/ to answer`);
-  await wait(org.hub.hostname, deployable(org.hub).access.teamDomain);
+  const answeredBy = await wait(org.hub.hostname, deployable(org.hub).access.teamDomain);
   log(`deployed: https://${org.hub.hostname}/`);
+  if (answeredBy === 'nameservers') {
+    log(
+      `this machine's resolver did not find ${org.hub.hostname}; the hub answered through its own nameservers. ${flushAdvice(org.hub.hostname)}`,
+    );
+  }
 };
 
 export const SECRET_NAMES = ['GITHUB_READ_TOKEN', 'GITHUB_WRITE_TOKEN'] as const;
