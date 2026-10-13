@@ -14,6 +14,7 @@ const site: Site = {
   repositoryId: '1',
   workflow: '.github/workflows/docs.yml',
   environment: null,
+  visibility: 'private',
 };
 const other: Site = {
   ...site,

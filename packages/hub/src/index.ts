@@ -37,6 +37,26 @@ const serveLogo = async ({ ctx }: Req): Promise<Response> => {
   });
 };
 
+const anonymousPage = (request: Request, route: Route) =>
+  route.kind === 'page' &&
+  route.site.visibility === 'public' &&
+  !request.headers.has('cf-access-jwt-assertion') &&
+  (request.method === 'GET' || request.method === 'HEAD');
+
+// A public site's HTML says so in its head, so the review panel stays silent
+// for a visitor the hub does not know. Without a sign-in the bytes are the
+// same for everyone, so a browser may keep them a minute; with one, never.
+const PUBLIC_META = '<meta name="specreview-visibility" content="public">';
+const markPublic = (res: Response, shared: boolean): Response => {
+  const headers = new Headers(res.headers);
+  if (shared) headers.set('cache-control', 'public, max-age=60');
+  const marked = new Response(res.body, { status: res.status, headers });
+  if (!headers.get('content-type')?.startsWith('text/html')) return marked;
+  return new HTMLRewriter()
+    .on('head', { element: (head) => void head.append(PUBLIC_META, { html: true }) })
+    .transform(marked);
+};
+
 const get: Record<string, Handler> = {
   '/me': async ({ caller }) => json(caller),
   '/brand': async ({ ctx }) => json({ name: ctx.config.brand?.name ?? null, logo: Boolean(ctx.config.brand?.logo) }),
@@ -130,6 +150,13 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.
   if (!route) throw new AppError(404, 'NOT_FOUND');
+  // A public site's pages need no sign-in (#20). Only a request with no
+  // Access assertion at all is anonymous: a present but bad one is still 401.
+  if (anonymousPage(request, route)) {
+    const page = route as Extract<Route, { kind: 'page' }>;
+    const served = await servePage(makeCtx(env, deps, config, page.site), request.method, page.path, page.directory);
+    return markPublic(served, true);
+  }
   const email = await identify(request, config);
   const role = roleOf(email, route.site);
   // Read access is decided before anything about the site is read: someone
@@ -138,10 +165,17 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const ctx: Ctx = makeCtx(env, deps, config, route.site);
   const req = { request, url, ctx, caller: { email, role } };
   const byKind: Record<Route['kind'], () => Promise<Response>> = {
-    page: () => {
+    page: async () => {
       const page = route as Extract<Route, { kind: 'page' }>;
-      return servePage(ctx, request.method, page.path, page.directory);
+      const served = await servePage(ctx, request.method, page.path, page.directory);
+      return page.site.visibility === 'public' ? markPublic(served, false) : served;
     },
+    // Access signed the visitor in on the way here; send them to the site.
+    signin: async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: `/${route.site.repo}/`, 'cache-control': 'private, no-store' },
+      }),
     history: () => {
       const h = route as Extract<Route, { kind: 'history' }>;
       return serveHistory(req, h.commit, h.path);

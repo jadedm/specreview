@@ -426,3 +426,268 @@ describe('33: a brand in the config', () => {
     }
   });
 });
+
+describe('20: public sites in Access', () => {
+  const HOST = 'specs.acme.dev';
+  // Two sites; `pub` lists which are public.
+  const configWith = (pub: string[]) => ({
+    ...CONFIG,
+    sites: ['sidecar', 'web'].map((repo, i) => ({
+      ...CONFIG.sites[0],
+      repo,
+      repositoryId: String(2001 + i),
+      ...(pub.includes(repo) ? { visibility: 'public' } : {}),
+    })),
+  });
+  const protectedOf = (repo: string) => [
+    `${HOST}/${repo}/_api/*`,
+    `${HOST}/${repo}/_history/*`,
+    `${HOST}/${repo}/_signin`,
+  ];
+  const covered = (state: FakeState, id: string | undefined) =>
+    [...(state.apps.find((x) => x.id === id)?.destinations ?? []).map((d) => d.uri)].sort();
+  const setPublic = (dir: ReturnType<typeof orgDir>, pub: string[]) =>
+    writeFileSync(path.join(dir.dir, 'specreview.config.json'), JSON.stringify(configWith(pub)));
+  // A hub set up with both sites private.
+  const privateHub = async () => {
+    const state = emptyAccount();
+    const dir = orgDir(BARE_HUB, configWith([]));
+    const first = await run(state, { apply: true, dir });
+    expect(first.error).toBeNull();
+    return { state, dir };
+  };
+
+  it('14: no public site: the main app covers the hostname only; no bypass app or policy', async () => {
+    const { state, dir } = await privateHub();
+    const hub = JSON.parse(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')) as HubJson;
+    expect(covered(state, hub.access?.appId)).toEqual([HOST]);
+    expect(hub.access?.publicAppId).toBeUndefined();
+    expect(state.apps.some((x) => x.name === `specreview ${HOST} public`)).toBe(false);
+  });
+
+  it('15, 20: the first public site: plan writes nothing, then apply creates the bypass and grows the main app', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const plan = await run(state, { dir });
+    expect(plan.error).toBeNull();
+    expect(plan.writes()).toEqual([]);
+    expect(plan.lines.some((l) => l.includes(`Access bypass for ${HOST}/sidecar/*: create`))).toBe(true);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(covered(state, r.hubJson.access?.appId)).toEqual([HOST, ...protectedOf('sidecar')].sort());
+    expect(covered(state, r.hubJson.access?.publicAppId)).toEqual([`${HOST}/sidecar/*`]);
+    const policy = state.policies.find((x) => x.id === r.hubJson.access?.publicPolicyId);
+    expect(policy?.decision).toBe('bypass');
+    // The main app's audience is the one the hub trusts, unchanged.
+    expect(state.apps.find((x) => x.id === r.hubJson.access?.appId)?.aud).toBe(r.hubJson.access?.aud);
+  });
+
+  it('16: a second site turns public, then the first turns private: destinations follow exactly', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    await run(state, { apply: true, dir });
+    setPublic(dir, ['sidecar', 'web']);
+    const both = await run(state, { apply: true, dir });
+    expect(covered(state, both.hubJson.access?.publicAppId)).toEqual([`${HOST}/sidecar/*`, `${HOST}/web/*`]);
+    expect(covered(state, both.hubJson.access?.appId)).toEqual(
+      [HOST, ...protectedOf('sidecar'), ...protectedOf('web')].sort(),
+    );
+    setPublic(dir, ['web']);
+    const web = await run(state, { apply: true, dir });
+    expect(covered(state, web.hubJson.access?.publicAppId)).toEqual([`${HOST}/web/*`]);
+    expect(covered(state, web.hubJson.access?.appId)).toEqual([HOST, ...protectedOf('web')].sort());
+  });
+
+  it('16: the main app grows before the bypass changes and shrinks after it', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const on = await run(state, { apply: true, dir });
+    const onOrder = on.writes().map((w) => `${w.method} ${w.path.replace(`/accounts/${ACCOUNT}`, '')}`);
+    const grow = onOrder.findIndex((w) => w.startsWith(`PUT /access/apps/${on.hubJson.access?.appId}`));
+    const create = onOrder.findIndex((w) => w === 'POST /access/apps');
+    expect(grow).toBeGreaterThanOrEqual(0);
+    expect(grow).toBeLessThan(create);
+    setPublic(dir, []);
+    const off = await run(state, { apply: true, dir });
+    const offOrder = off.writes().map((w) => `${w.method} ${w.path.replace(`/accounts/${ACCOUNT}`, '')}`);
+    const del = offOrder.findIndex((w) => w.startsWith('DELETE /access/apps/'));
+    const shrink = offOrder.findIndex((w) => w.startsWith(`PUT /access/apps/${on.hubJson.access?.appId}`));
+    expect(del).toBeGreaterThanOrEqual(0);
+    expect(del).toBeLessThan(shrink);
+  });
+
+  it('17: the last public site turns private: bypass app and policy deleted, main app back to the hostname', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const on = await run(state, { apply: true, dir });
+    setPublic(dir, []);
+    const off = await run(state, { apply: true, dir });
+    expect(off.error).toBeNull();
+    expect(off.hubJson.access?.publicAppId).toBeUndefined();
+    expect(off.hubJson.access?.publicPolicyId).toBeUndefined();
+    expect(state.apps.some((x) => x.id === on.hubJson.access?.publicAppId)).toBe(false);
+    expect(state.policies.some((x) => x.id === on.hubJson.access?.publicPolicyId)).toBe(false);
+    expect(covered(state, off.hubJson.access?.appId)).toEqual([HOST]);
+    const again = await run(state, { dir });
+    expect(again.lines).toContain('nothing to do');
+  });
+
+  it('18: the main app covering another path is refused', async () => {
+    const { state, dir } = await privateHub();
+    const hub = JSON.parse(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')) as HubJson;
+    state.apps.find((x) => x.id === hub.access?.appId)!.destinations!.push({ type: 'public', uri: `${HOST}/other/*` });
+    const r = await run(state, { dir });
+    expect(r.error?.message).toMatch(/not only specs\.acme\.dev and the public sites' protected paths/);
+  });
+
+  it('19: a bypass app or policy changed by hand is refused', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const on = await run(state, { apply: true, dir });
+    state.apps
+      .find((x) => x.id === on.hubJson.access?.publicAppId)!
+      .destinations!.push({ type: 'public', uri: `${HOST}/*` });
+    expect((await run(state, { dir })).error?.message).toMatch(/not only public sites' pages/);
+    state.apps.find((x) => x.id === on.hubJson.access?.publicAppId)!.destinations!.pop();
+    state.policies.find((x) => x.id === on.hubJson.access?.publicPolicyId)!.decision = 'allow';
+    expect((await run(state, { dir })).error?.message).toMatch(/not a single bypass-everyone rule/);
+  });
+
+  it('19a: a failure after the bypass policy is created resumes on the next run', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const failed = await run(state, {
+      apply: true,
+      dir,
+      fake: { failOn: (r) => r.method === 'POST' && r.path.endsWith('/access/apps') },
+    });
+    expect(failed.error).not.toBeNull();
+    expect(failed.hubJson.access?.publicPolicyId).toBeDefined();
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(covered(state, r.hubJson.access?.publicAppId)).toEqual([`${HOST}/sidecar/*`]);
+  });
+
+  it('19b: a failure after the bypass app is deleted resumes on the next run', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    await run(state, { apply: true, dir });
+    setPublic(dir, []);
+    const failed = await run(state, {
+      apply: true,
+      dir,
+      fake: { failOn: (r) => r.method === 'DELETE' && r.path.includes('/access/policies/') },
+    });
+    expect(failed.error).not.toBeNull();
+    expect(failed.hubJson.access?.publicAppId).toBeUndefined();
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.hubJson.access?.publicPolicyId).toBeUndefined();
+  });
+
+  it('19b: a recorded bypass app that is gone (a delete whose answer was lost) is forgotten, not refused', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const on = await run(state, { apply: true, dir });
+    state.apps = state.apps.filter((x) => x.id !== on.hubJson.access?.publicAppId);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.hubJson.access?.publicAppId).toBeDefined();
+    expect(r.hubJson.access?.publicAppId).not.toBe(on.hubJson.access?.publicAppId);
+  });
+
+  it('review: removing a public site from the config cleans up after it, not refused', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar', 'web']);
+    await run(state, { apply: true, dir });
+    // web leaves the config entirely.
+    const onlySidecar = configWith(['sidecar']);
+    writeFileSync(
+      path.join(dir.dir, 'specreview.config.json'),
+      JSON.stringify({ ...onlySidecar, sites: onlySidecar.sites.slice(0, 1) }),
+    );
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(covered(state, r.hubJson.access?.publicAppId)).toEqual([`${HOST}/sidecar/*`]);
+    expect(covered(state, r.hubJson.access?.appId)).toEqual([HOST, ...protectedOf('sidecar')].sort());
+  });
+
+  it('review: updating the main app keeps its other settings', async () => {
+    const { state, dir } = await privateHub();
+    const hub = JSON.parse(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')) as HubJson;
+    const app = state.apps.find((x) => x.id === hub.access?.appId) as unknown as Record<string, unknown>;
+    app.session_duration = '8h';
+    app.cors_headers = { allowed_origins: ['https://x.example'] };
+    setPublic(dir, ['sidecar']);
+    await run(state, { apply: true, dir });
+    const after = state.apps.find((x) => x.id === hub.access?.appId) as unknown as Record<string, unknown>;
+    expect(after.session_duration).toBe('8h');
+    expect(after.cors_headers).toEqual({ allowed_origins: ['https://x.example'] });
+    expect(after.aud).toBe(hub.access?.aud);
+  });
+
+  it('review: a bypass app covering a path setup never writes is refused', async () => {
+    for (const stray of [`${HOST}/_publish/*`, `${HOST}/../*`, `${HOST}/./*`]) {
+      const { state, dir } = await privateHub();
+      setPublic(dir, ['sidecar']);
+      const on = await run(state, { apply: true, dir });
+      state.apps
+        .find((x) => x.id === on.hubJson.access?.publicAppId)!
+        .destinations!.push({ type: 'public', uri: stray });
+      expect((await run(state, { dir })).error?.message, stray).toMatch(/not only public sites' pages/);
+    }
+  });
+
+  it('review: a main app with a non-public destination is refused, not silently rewritten', async () => {
+    const { state, dir } = await privateHub();
+    const hub = JSON.parse(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')) as HubJson;
+    state.apps.find((x) => x.id === hub.access?.appId)!.destinations!.push({ type: 'private', uri: '10.0.0.0/8' });
+    setPublic(dir, ['sidecar']);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(/not only specs\.acme\.dev/);
+  });
+
+  it('review: a recorded bypass policy that is gone, with a same-name stray in its place, is refused', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const on = await run(state, { apply: true, dir });
+    state.apps = state.apps.filter((x) => x.id !== on.hubJson.access?.publicAppId);
+    state.policies = state.policies.filter((x) => x.id !== on.hubJson.access?.publicPolicyId);
+    state.policies.push({
+      id: 'pol-stray',
+      name: `specreview ${HOST} public`,
+      decision: 'bypass',
+      include: [{ everyone: {} }],
+    });
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(/specreview specs\.acme\.dev public/);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it('review: a bypass app left pointing at a deleted policy is repointed at the new one', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    const on = await run(state, { apply: true, dir });
+    state.policies = state.policies.filter((x) => x.id !== on.hubJson.access?.publicPolicyId);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    const after = state.apps.find((x) => x.id === r.hubJson.access?.publicAppId)!;
+    expect(r.hubJson.access?.publicPolicyId).not.toBe(on.hubJson.access?.publicPolicyId);
+    expect(after.policies.map((x) => x.id)).toEqual([r.hubJson.access?.publicPolicyId]);
+  });
+
+  it("19c: an unrecorded bypass app or policy with setup's name is refused, public or not", async () => {
+    for (const pub of [[], ['sidecar']]) {
+      const { state, dir } = await privateHub();
+      state.policies.push({
+        id: 'pol-stray',
+        name: `specreview ${HOST} public`,
+        decision: 'bypass',
+        include: [{ everyone: {} }],
+      });
+      setPublic(dir, pub);
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, JSON.stringify(pub)).toMatch(/specreview specs\.acme\.dev public/);
+    }
+  });
+});

@@ -20,6 +20,9 @@ export type HubJson = {
     aud?: string;
     publishPolicyId?: string;
     publishAppId?: string;
+    // While any site is public (#20): the bypass for those sites' pages.
+    publicPolicyId?: string;
+    publicAppId?: string;
   };
   // Written by deploy: the logo key the live Worker uses, and every logo key
   // uploaded and not yet deleted, so no stored logo is ever lost track of.
@@ -43,7 +46,16 @@ const D1_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 // R2 bucket names: 3 to 63 lowercase letters, digits and dashes.
 const BUCKET = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
 const HUB_KEYS = new Set(['$schema', 'accountId', 'hostname', 'worker', 'database', 'bucket', 'access', 'brand']);
-const ACCESS_KEYS = new Set(['teamDomain', 'policyId', 'appId', 'aud', 'publishPolicyId', 'publishAppId']);
+const ACCESS_KEYS = new Set([
+  'teamDomain',
+  'policyId',
+  'appId',
+  'aud',
+  'publishPolicyId',
+  'publishAppId',
+  'publicPolicyId',
+  'publicAppId',
+]);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
