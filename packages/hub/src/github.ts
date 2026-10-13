@@ -23,9 +23,11 @@ export type Ticket =
 // requests and the cron both have these.
 type Hub = { env: Env; deps: Deps; config: HubConfig };
 
+class NoToken extends Error {}
+
 const call = async (hub: Hub, repo: string, purpose: Purpose, path: string, init: RequestInit = {}) => {
   const token = await hub.deps.github.tokenFor(repo, purpose);
-  if (!token) throw new Error(`no GitHub ${purpose} token for ${repo}`);
+  if (!token) throw new NoToken(`no GitHub ${purpose} token for ${repo}`);
   return fetch(`${API}/repos/${repo}${path}`, {
     ...init,
     headers: {
@@ -37,6 +39,67 @@ const call = async (hub: Hub, repo: string, purpose: Purpose, path: string, init
     },
     signal: AbortSignal.timeout(5_000),
   });
+};
+
+// Why a sync failed, for the one log line an operator gets from it: the step
+// and GitHub's answer. Never the token, and of a response body only GitHub's
+// own JSON message.
+type Problems = string[];
+
+const errorName = (err: unknown) => (err instanceof Error ? err.name : typeof err);
+// For errors that are not GitHub's answer (the database, the store, a bug):
+// the hub's own code, or the error's message cut short.
+const errorText = (err: unknown) => {
+  if (err instanceof AppError) return err.code;
+  if (!(err instanceof Error)) return typeof err;
+  return `${err.name}: ${err.message.replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+};
+
+const HINT: Record<number, string> = {
+  401: 'the token is invalid or expired',
+  403: 'the token lacks permission or hit a rate limit',
+  422: 'GitHub refused the request',
+};
+// GitHub answers 404 for a repo the token cannot see, so a 404 on a repo-wide
+// path means that; on one ticket it may also mean the ticket is gone.
+const hintFor = (status: number, path: string): string | undefined => {
+  if (status === 404) {
+    return path.startsWith('/issues/')
+      ? 'no such ticket, or the token cannot see the repo'
+      : 'the token cannot see the repo';
+  }
+  if (status >= 500) return 'GitHub had an error';
+  return HINT[status];
+};
+
+const githubMessage = async (res: Response) => {
+  if (!res.headers.get('content-type')?.includes('json')) return '';
+  const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
+  if (typeof body?.message !== 'string') return '';
+  return body.message.replace(/\s+/g, ' ').trim().slice(0, 200);
+};
+
+// A request whose answer was not what the step needed; always false.
+const failed = async (problems: Problems, method: string, path: string, res: Response) => {
+  const message = await githubMessage(res);
+  const hint = hintFor(res.status, path);
+  problems.push(`${method} ${path} -> ${res.status}${message ? ` ${message}` : ''}${hint ? ` (${hint})` : ''}`);
+  return false;
+};
+
+// One GitHub request for a sync; null, with the reason noted, when there was
+// no token or no answer.
+const attempt = (hub: Hub, repo: string, path: string, problems: Problems, init: RequestInit = {}) =>
+  call(hub, repo, 'write', path, init).catch((err: unknown) => {
+    problems.push(
+      err instanceof NoToken ? err.message : `${init.method ?? 'GET'} ${path} -> no response (${errorName(err)})`,
+    );
+    return null;
+  });
+
+const summary = (problems: Problems) => {
+  const [first = 'no reason recorded'] = problems;
+  return problems.length > 1 ? `${first} (and ${problems.length - 1} more)` : first;
 };
 
 type Cached = { data: string; fetched_at: number };
@@ -110,16 +173,24 @@ const RANK: Record<Status, number> = { pending: 0, in_review: 1, ready: 2 };
 // whose pointer or manifest is broken makes the whole answer unknown (null),
 // never a guess. `known` passes in snapshots the caller already holds.
 type Snapshots = Map<string, Snapshot>;
-const snapshotsFor = async (hub: Hub, repo: string, known: Snapshots = new Map()): Promise<Snapshots | null> => {
+const snapshotsFor = async (
+  hub: Hub,
+  repo: string,
+  problems: Problems,
+  known: Snapshots = new Map(),
+): Promise<Snapshots | null> => {
   const snaps: Snapshots = new Map();
   for (const site of hub.config.sites.values()) {
     if (site.ticketRepo !== repo) continue;
     const held = known.get(site.key);
     const snap =
       held ??
-      (await snapshotOf(hub.deps.store, site.repo).catch((err: unknown) =>
-        err instanceof AppError && err.code === 'SITE_NOT_PUBLISHED' ? 'unpublished' : null,
-      ));
+      (await snapshotOf(hub.deps.store, site.repo).catch((err: unknown) => {
+        if (err instanceof AppError && err.code === 'SITE_NOT_PUBLISHED') return 'unpublished' as const;
+        const why = err instanceof AppError ? err.code : errorName(err);
+        problems.push(`site ${site.key}: its published version cannot be read (${why})`);
+        return null;
+      }));
     if (snap === null) return null;
     if (snap !== 'unpublished') snaps.set(site.key, snap);
   }
@@ -151,29 +222,34 @@ const LABEL_COLOUR: Record<string, string> = {
 };
 const labelsReady = new Set<string>();
 
-const ensureLabels = async (hub: Hub, repo: string): Promise<boolean> => {
+// 422 is also used for validation errors; only "already exists" (someone
+// created it meanwhile) counts as done.
+const alreadyExists = async (res: Response) => {
+  if (res.status !== 422) return false;
+  const body = (await res.json().catch(() => null)) as { errors?: { code?: string }[] } | null;
+  return body?.errors?.some((e) => e.code === 'already_exists') === true;
+};
+
+const ensureLabels = async (hub: Hub, repo: string, problems: Problems): Promise<boolean> => {
   if (labelsReady.has(repo)) return true;
   const results = await Promise.all(
     ownedLabels.map(async (name) => {
-      const res = await call(hub, repo, 'write', `/labels/${encodeURIComponent(name)}`).catch(() => null);
-      if (res?.ok) return true;
-      if (res?.status !== 404) return false;
-      const made = await call(hub, repo, 'write', '/labels', {
+      const path = `/labels/${encodeURIComponent(name)}`;
+      const res = await attempt(hub, repo, path, problems);
+      if (!res) return false;
+      if (res.ok) return true;
+      if (res.status !== 404) return failed(problems, 'GET', path, res);
+      const made = await attempt(hub, repo, '/labels', problems, {
         method: 'POST',
         body: JSON.stringify({
           name,
           color: LABEL_COLOUR[name],
           description: 'Set by specreview from the docs page status',
         }),
-      }).catch(() => null);
-      if (made?.ok) return true;
-      // 422 is also used for validation errors; only "already exists" (someone
-      // created it meanwhile) counts as done.
-      const body =
-        made?.status === 422
-          ? ((await made.json().catch(() => null)) as { errors?: { code?: string }[] } | null)
-          : null;
-      return body?.errors?.some((e) => e.code === 'already_exists') === true;
+      });
+      if (!made) return false;
+      if (made.ok || (await alreadyExists(made.clone()))) return true;
+      return failed(problems, 'POST', '/labels', made);
     }),
   );
   if (results.every(Boolean)) labelsReady.add(repo);
@@ -183,32 +259,40 @@ const ensureLabels = async (hub: Hub, repo: string): Promise<boolean> => {
 // For tests.
 export const forgetLabelSetup = () => labelsReady.clear();
 
-const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string): Promise<boolean> => {
-  const res = await call(hub, repo, 'write', `/issues/${n}`).catch(() => null);
-  if (!res?.ok) return false;
+// A label removal answered 404 is already done.
+const removeLabel = async (hub: Hub, repo: string, n: number, name: string, problems: Problems) => {
+  const path = `/issues/${n}/labels/${encodeURIComponent(name)}`;
+  const res = await attempt(hub, repo, path, problems, { method: 'DELETE' });
+  if (!res) return false;
+  if (res.ok || res.status === 404) return true;
+  return failed(problems, 'DELETE', path, res);
+};
+
+const addLabel = async (hub: Hub, repo: string, n: number, name: string, problems: Problems) => {
+  const path = `/issues/${n}/labels`;
+  const res = await attempt(hub, repo, path, problems, { method: 'POST', body: JSON.stringify({ labels: [name] }) });
+  if (!res) return false;
+  return res.ok || failed(problems, 'POST', path, res);
+};
+
+const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string, problems: Problems): Promise<boolean> => {
+  const path = `/issues/${n}`;
+  const res = await attempt(hub, repo, path, problems);
+  if (!res) return false;
+  if (!res.ok) return failed(problems, 'GET', path, res);
   const issue = (await res.json().catch(() => null)) as Issue | null;
-  if (!issue?.labels) return false;
+  if (!issue?.labels) {
+    problems.push(`GET ${path} -> ${res.status} with no labels in the answer`);
+    return false;
+  }
   const have = issue.labels.map((l) => l.name);
   // Add the wanted label before removing the others, so a ticket is never
   // left without one if a removal fails.
-  const add = have.includes(wanted)
-    ? true
-    : await call(hub, repo, 'write', `/issues/${n}/labels`, {
-        method: 'POST',
-        body: JSON.stringify({ labels: [wanted] }),
-      }).then(
-        (r) => r.ok,
-        () => false,
-      );
+  const add = have.includes(wanted) || (await addLabel(hub, repo, n, wanted, problems));
   if (!add) return false;
   const removals = have
     .filter((name) => ownedLabels.includes(name) && name !== wanted)
-    .map((name) =>
-      call(hub, repo, 'write', `/issues/${n}/labels/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(
-        (r) => r.ok || r.status === 404,
-        () => false,
-      ),
-    );
+    .map((name) => removeLabel(hub, repo, n, name, problems));
   const removed = (await Promise.all(removals)).every(Boolean);
   // Only when a label actually changed: mark the cached copy as expired, so the
   // ticket box refetches instead of showing the old label as fresh, while the
@@ -230,76 +314,89 @@ const syncTickets = async (
   repo: string,
   tickets: number[],
   snaps: Snapshots,
+  problems: Problems,
 ): Promise<'updated' | 'failed' | 'none'> => {
   if (tickets.length === 0) return 'none';
-  const want = await wantedStatuses(hub, snaps).catch(() => null);
-  if (!want || !(await ensureLabels(hub, repo))) return 'failed';
+  const want = await wantedStatuses(hub, snaps).catch((err: unknown) => {
+    problems.push(`reading page statuses failed (${errorText(err)})`);
+    return null;
+  });
+  if (!want || !(await ensureLabels(hub, repo, problems))) return 'failed';
   const results = await Promise.all(
-    tickets.map((n) => syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'])),
+    tickets.map((n) => syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'], problems)),
   );
   return results.every(Boolean) ? 'updated' : 'failed';
 };
 
-// After a change on one page: its tickets, with statuses from every site that
-// shares the ticket repo.
-export const syncSiteLabels = async (ctx: Ctx, page: string) => {
+const syncPage = async (ctx: Ctx, page: string, problems: Problems) => {
   const own = await ctx.snapshot();
-  const snaps = await snapshotsFor(ctx, ctx.site.ticketRepo, new Map([[ctx.site.key, own]]));
+  const snaps = await snapshotsFor(ctx, ctx.site.ticketRepo, problems, new Map([[ctx.site.key, own]]));
   if (!snaps) return 'failed';
-  return syncTickets(ctx, ctx.site.ticketRepo, own.manifest.pages[page]?.issues ?? [], snaps);
+  return syncTickets(ctx, ctx.site.ticketRepo, own.manifest.pages[page]?.issues ?? [], snaps, problems);
+};
+
+// After a change on one page: its tickets, with statuses from every site that
+// shares the ticket repo. Never throws; a failure is logged with its reason and
+// repaired by the cron.
+export const syncSiteLabels = async (ctx: Ctx, page: string) => {
+  const problems: Problems = [];
+  const result = await syncPage(ctx, page, problems).catch((err: unknown) => {
+    problems.push(`unexpected error (${errorText(err)})`);
+    return 'failed' as const;
+  });
+  if (result === 'failed') {
+    console.error(
+      `label sync failed for ${ctx.site.ticketRepo} after a change to ${ctx.site.key} ${page}: ${summary(problems)}`,
+    );
+  }
+  return result;
 };
 
 // Every ticket carrying the label, a page of 100 at a time; null if any page
 // could not be read, so a partial list is never treated as complete.
-const allCarrying = async (hub: Hub, repo: string, label: string): Promise<number[] | null> => {
+const allCarrying = async (hub: Hub, repo: string, label: string, problems: Problems): Promise<number[] | null> => {
   const numbers: number[] = [];
   for (let page = 1; page <= 50; page++) {
-    const res = await call(
-      hub,
-      repo,
-      'write',
-      `/issues?state=all&per_page=100&page=${page}&labels=${encodeURIComponent(label)}`,
-    ).catch(() => null);
-    if (!res?.ok) return null;
+    const path = `/issues?state=all&per_page=100&page=${page}&labels=${encodeURIComponent(label)}`;
+    const res = await attempt(hub, repo, path, problems);
+    if (!res) return null;
+    if (!res.ok) return failed(problems, 'GET', path, res).then(() => null);
     const body = (await res.json().catch(() => null)) as Issue[] | null;
-    if (!Array.isArray(body)) return null;
+    if (!Array.isArray(body)) {
+      problems.push(`GET ${path} -> ${res.status} with no list in the answer`);
+      return null;
+    }
     numbers.push(...body.map((i) => i.number));
     if (body.length < 100) return numbers;
   }
   // More than 5,000 labelled tickets: the list is incomplete, so say so.
+  problems.push(`more than 5,000 tickets carry ${label}; the list is incomplete`);
   return null;
 };
 
 // Tickets in this repo carrying one of our labels but linked from no page of
 // any site lose the label.
-const clearUnlinked = async (hub: Hub, repo: string, linked: Set<number>): Promise<boolean> => {
+const clearUnlinked = async (hub: Hub, repo: string, linked: Set<number>, problems: Problems): Promise<boolean> => {
   const results = await Promise.all(
     ownedLabels.map(async (label) => {
-      const carrying = await allCarrying(hub, repo, label);
+      const carrying = await allCarrying(hub, repo, label, problems);
       if (!carrying) return false;
-      const removals = carrying
-        .filter((n) => !linked.has(n))
-        .map((n) =>
-          call(hub, repo, 'write', `/issues/${n}/labels/${encodeURIComponent(label)}`, { method: 'DELETE' }).then(
-            (r) => r.ok || r.status === 404,
-            () => false,
-          ),
-        );
+      const removals = carrying.filter((n) => !linked.has(n)).map((n) => removeLabel(hub, repo, n, label, problems));
       return (await Promise.all(removals)).every(Boolean);
     }),
   );
   return results.every(Boolean);
 };
 
-const reconcileRepo = async (hub: Hub, repo: string): Promise<'updated' | 'failed' | 'none'> => {
-  const snaps = await snapshotsFor(hub, repo);
+const reconcileRepo = async (hub: Hub, repo: string, problems: Problems): Promise<'updated' | 'failed' | 'none'> => {
+  const snaps = await snapshotsFor(hub, repo, problems);
   // Without every site's links, "no page links this ticket" is unknown.
   if (!snaps) return 'failed';
   const linked = new Set<number>();
   for (const snap of snaps.values())
     for (const entry of Object.values(snap.manifest.pages)) for (const n of entry.issues) linked.add(n);
-  const result = await syncTickets(hub, repo, [...linked], snaps);
-  const cleared = await clearUnlinked(hub, repo, linked);
+  const result = await syncTickets(hub, repo, [...linked], snaps, problems);
+  const cleared = await clearUnlinked(hub, repo, linked, problems);
   return cleared ? result : 'failed';
 };
 
@@ -307,8 +404,13 @@ const reconcileRepo = async (hub: Hub, repo: string): Promise<'updated' | 'faile
 export const reconcileLabels = async (hub: Hub) => {
   const repos = [...new Set([...hub.config.sites.values()].map((s) => s.ticketRepo))];
   const results: Record<string, string> = {};
-  for (const repo of repos) results[repo] = await reconcileRepo(hub, repo).catch(() => 'failed');
-  const failed = Object.entries(results).filter(([, r]) => r === 'failed');
-  if (failed.length > 0) console.error('label sync failed for', failed.map(([r]) => r).join(', '));
+  for (const repo of repos) {
+    const problems: Problems = [];
+    results[repo] = await reconcileRepo(hub, repo, problems).catch((err: unknown) => {
+      problems.push(`unexpected error (${errorText(err)})`);
+      return 'failed' as const;
+    });
+    if (results[repo] === 'failed') console.error(`label sync failed for ${repo}: ${summary(problems)}`);
+  }
   return results;
 };

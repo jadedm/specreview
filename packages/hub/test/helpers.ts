@@ -292,6 +292,9 @@ export const github = {
   down: false,
   downRepos: new Set<string>(),
   failWritesFor: new Set<number>(),
+  // Answers a request before the stand-in does, when it returns a response;
+  // throwing makes the fetch fail as a network error would.
+  answer: null as ((method: string, repo: string, path: string) => Response | null) | null,
   reset() {
     this.repos = freshRepos();
     this.calls = [];
@@ -300,11 +303,15 @@ export const github = {
     this.down = false;
     this.downRepos = new Set();
     this.failWritesFor = new Set();
+    this.answer = null;
   },
 };
 
 const githubResponse = async (req: Request, url: URL): Promise<Response> => {
   github.calls.push(`${req.method} ${url.pathname}${url.search}`);
+  const scoped = /^\/repos\/([^/]+\/[^/]+)(\/.*)$/.exec(url.pathname);
+  const answered = scoped && github.answer?.(req.method, scoped[1], `${scoped[2]}${url.search}`);
+  if (answered) return answered;
   const def = /^\/repos\/([^/]+\/[^/]+)\/labels(?:\/(.+))?$/.exec(url.pathname);
   if (def) {
     if (github.down || github.downRepos.has(def[1]) || github.labelsMode === 'down') {

@@ -63,8 +63,29 @@ const sign = (email, aud = AUD) =>
     .sign(keys.privateKey);
 
 const issues = new Map([[52, { title: 'Company approval', state: 'open', labels: [] }]]);
+// When set (control /github-hidden), GitHub answers 404 to everything, as it
+// does for a token that cannot see the repo.
+let githubHidden = false;
 const github = async (req, url) => {
-  if (/^\/repos\/acme\/sidecar\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
+  if (githubHidden) return Response.json({ message: 'Not Found' }, { status: 404 });
+  if (/^\/repos\/acme\/[^/]+\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
+  // The cron lists tickets carrying each of our labels; only sidecar has tickets.
+  const listing = /^\/repos\/acme\/([^/]+)\/issues$/.exec(url.pathname);
+  if (listing && req.method === 'GET') {
+    const label = url.searchParams.get('labels');
+    const own = listing[1] === 'sidecar' ? [...issues.entries()] : [];
+    return Response.json(
+      own
+        .filter(([, i]) => i.labels.includes(label))
+        .map(([number, i]) => ({
+          number,
+          title: i.title,
+          state: i.state,
+          html_url: '',
+          labels: i.labels.map((name) => ({ name })),
+        })),
+    );
+  }
   if (url.pathname.startsWith('/search/issues')) return Response.json({ total_count: 0, items: [] });
   const m = /^\/repos\/acme\/sidecar\/issues\/(\d+)(\/labels(?:\/(.+))?)?$/.exec(url.pathname);
   const issue = m && issues.get(Number(m[1]));
@@ -186,7 +207,8 @@ for (const e of ['riya@initech.example', 'dev@acme.dev', 'pm@acme.dev', 'x@stran
 tokens.otherApp = await sign('dev@acme.dev', 'aud-other');
 writeFileSync(path.join(here, 'tokens.json'), JSON.stringify(tokens));
 
-// A tiny control port for the smoke: publish V2, read R2/D1/labels.
+// A tiny control port for the smoke: publish V2, read R2/D1/labels, hide the
+// ticket repo from the GitHub stand-in, run the cron.
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -206,6 +228,21 @@ http
       return send({ ok: true });
     }
     if (url.pathname === '/labels') return send(issues.get(52).labels);
+    if (url.pathname === '/github-hidden') {
+      githubHidden = url.searchParams.get('on') === '1';
+      return send({ githubHidden });
+    }
+    if (url.pathname === '/cron') {
+      // The cron's own outcome, so a failed run is not reported as a success.
+      const ran = await mf
+        .getWorker()
+        .then((worker) => worker.scheduled({ cron: '*/5 * * * *' }))
+        .then(
+          (r) => r.outcome,
+          (err) => `threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      return send({ outcome: ran });
+    }
     if (url.pathname === '/rows')
       return send((await db.prepare('SELECT site, page, status, version FROM page_status').all()).results);
     res.writeHead(404);
