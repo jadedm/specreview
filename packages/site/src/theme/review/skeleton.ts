@@ -43,8 +43,11 @@ export const bottomSkeleton = () =>
 // Long enough for VoiceOver and NVDA to have the region in their tree before
 // its text changes; a page that loads faster never shows the text at all.
 export const ANNOUNCE_DELAY_MS = 150;
+// The caller cancels it once the placeholder is gone. It also does nothing if
+// the document itself has gone by then, as when a test's page is torn down.
 export const announceLoading = () =>
   setTimeout(() => {
+    if (typeof document === 'undefined') return;
     const region = document.querySelector('.rv-skel[role="status"] .rv-sr');
     if (region) region.textContent = LOADING_TEXT;
   }, ANNOUNCE_DELAY_MS);

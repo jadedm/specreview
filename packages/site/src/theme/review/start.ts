@@ -158,6 +158,8 @@ export const createReview = (api: Api, base: string) => {
   // puts each control back exactly as it was: a "Mark ready" blocked by open
   // comments stays blocked. On success the redraw replaces them all.
   let holding = false;
+  // The pending "Loading comments and status" announcement, if any.
+  let announcing: ReturnType<typeof setTimeout> | undefined;
   const writeControls = () =>
     mounts().flatMap((m) => [
       ...m.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>('button[data-write], textarea'),
@@ -248,7 +250,8 @@ export const createReview = (api: Api, base: string) => {
       reserve(true);
       place(TOP_ID, topSkeleton(), 'top');
       place(BOTTOM_ID, bottomSkeleton(), 'bottom');
-      announceLoading();
+      clearTimeout(announcing);
+      announcing = announceLoading();
     }
     try {
       await draw(routeKey, quiet, stale);
@@ -259,6 +262,9 @@ export const createReview = (api: Api, base: string) => {
         reserve(false);
       }
       throw err;
+    } finally {
+      // The placeholder is gone (or a newer load owns it and set its own timer).
+      if (!stale()) clearTimeout(announcing);
     }
   };
 
