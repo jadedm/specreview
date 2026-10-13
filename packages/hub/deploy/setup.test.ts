@@ -407,3 +407,22 @@ describe('9: setup', () => {
     expect(wantedInclude(config)).toEqual(WANT);
   });
 });
+
+describe('33: a brand in the config', () => {
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);
+
+  it('a logo file name passes setup, which checks the config as the Worker will read it', async () => {
+    const dir = orgDir(BARE_HUB, { ...CONFIG, brand: { name: 'Acme', logo: 'logo.png' } });
+    writeFileSync(path.join(dir.dir, 'logo.png'), PNG);
+    const r = await run(emptyAccount(), { dir });
+    expect(r.error).toBeNull();
+  });
+
+  it('a broken logo or name stops setup before any write', async () => {
+    for (const brand of [{ name: 'Acme', logo: 'logo.svg' }, { name: '' }]) {
+      const r = await run(emptyAccount(), { config: { ...CONFIG, brand } });
+      expect(r.error?.message, JSON.stringify(brand)).toMatch(/brand/);
+      expect(r.writes()).toEqual([]);
+    }
+  });
+});

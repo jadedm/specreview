@@ -2,7 +2,7 @@ import type { HistoryEntry, Status } from '@specreview/shared';
 import type { Router } from 'vitepress';
 import { type Api, apiFor, ApiError, type Me, NETWORK, type PageData, type Pages, type Thread } from './api';
 import { el } from './dom';
-import { commentForm, commentsBlock, statusBar, statusBoard, ticketBox } from './render';
+import { allPages, commentForm, commentsBlock, statusBar, ticketBox } from './render';
 import { diffView, historyList, oldVersionView } from './render-history';
 import { sectionOfSelection } from './selection';
 import { announceLoading, bottomSkeleton, topSkeleton } from './skeleton';
@@ -315,9 +315,9 @@ export const createReview = (api: Api, base: string) => {
     const bottom = commentsBlock(entry.sections, threads, me, actions);
     if (quiet) clearMounts();
     place(TOP_ID, top, 'top');
+    // The index also lists every page's status, above its own comments.
+    if (page === 'index') place('rv-board', allPages(statuses, base), 'bottom');
     place(BOTTOM_ID, bottom, 'bottom');
-    // The index also shows every page's status, under its own comments.
-    if (page === 'index') place('rv-board', statusBoard(statuses, base), 'bottom');
     watchSelection(page);
   };
 

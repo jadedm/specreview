@@ -4,7 +4,7 @@ The shape of the private repo an organisation keeps for its specreview hub. Copy
 
 | File                     | Holds                                                                                  | Written by      |
 | ------------------------ | -------------------------------------------------------------------------------------- | --------------- |
-| `specreview.config.json` | sites, team domains, approvers, readers, admins                                        | you             |
+| `specreview.config.json` | sites, team domains, approvers, readers, admins; optional `brand` (name, logo file)    | you             |
 | `hub.json`               | account id, hostname, Worker name, D1 database and R2 bucket names; the ids below them | you, then setup |
 | `specreview.commit`      | the full specreview commit to run                                                      | you             |
 | `run.sh`                 | checks out that commit, builds the hub, runs a command                                 | copied          |
@@ -34,6 +34,8 @@ Zero Trust must be enabled on the account first (dashboard: Zero Trust, then the
 The GitHub tokens are fine-grained tokens on the ticket repos: Issues read, and Issues read and write. Run setup from one place at a time.
 
 ## Changes later
+
+- The organisation's name and logo in each site's header: `"brand": { "name": "Acme", "logo": "logo.png" }` in `specreview.config.json`, the PNG or WebP (at most 256 KB) beside it in this folder, then `deploy`. Leave out `logo` for the name alone, or `brand` for neither. deploy keeps `hub.json` `brand` up to date; commit it after each deploy.
 
 - Readers, approvers, admins or sites: edit `specreview.config.json`, run `setup --apply` (it brings the Access policy to exactly what the config says, removals included), then `deploy`.
 - Upgrading: change `specreview.commit`, run `deploy`. Migrations only add, so the previous Worker keeps working on the newer schema.

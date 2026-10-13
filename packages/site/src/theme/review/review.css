@@ -200,6 +200,33 @@
 .rv-board {
   width: 100%;
 }
+.rv-all-pages {
+  margin-bottom: 32px;
+}
+
+/* The organisation's logo and name at the right of the nav bar (brand.ts). */
+.sr-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+  color: var(--vp-c-text-1);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sr-brand-logo {
+  display: block;
+  height: 24px;
+  max-width: 120px;
+  object-fit: contain;
+}
+/* On a phone the logo alone, when there is one. */
+@media (max-width: 767px) {
+  .sr-brand-logo + .sr-brand-name {
+    display: none;
+  }
+}
 
 /* Loading placeholders (skeleton.ts). Grey bars sized like the panel. */
 .rv-skel-row {

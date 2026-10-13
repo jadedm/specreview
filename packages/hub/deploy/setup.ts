@@ -9,9 +9,8 @@
 // setup records in hub.json the moment each exists, never adopted by name: a
 // database or app with the right name but no recorded id may belong to
 // someone else.
-import { problemsIn } from '../src/config';
 import { CloudflareError, type Cloudflare } from './cloudflare';
-import { DeployError, saveHub, type Org } from './org';
+import { DeployError, saveHub, type Org, workerConfigOf } from './org';
 
 type Rule = { email?: { email: string }; email_domain?: { domain: string }; everyone?: Record<string, never> };
 type Policy = {
@@ -88,8 +87,7 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   const publishPolicyName = `specreview ${host} publish`;
 
   // The config must be sound before it decides who passes Access.
-  const problems = problemsIn({ ...org.config, accessTeamDomain: 'check.cloudflareaccess.com', accessAud: 'check' });
-  if (problems.length > 0) throw new DeployError(`specreview.config.json has problems:\n  ${problems.join('\n  ')}`);
+  workerConfigOf(org, { teamDomain: 'check.cloudflareaccess.com', aud: 'check' });
   const include = wantedInclude(org.config);
 
   await cf.call(`GET`, `/accounts/${a}`).catch((e: unknown) => {

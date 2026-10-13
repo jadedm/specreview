@@ -223,3 +223,8 @@ export const statusBoard = (rows: PageStatus[], base: string) =>
         ),
     ),
   );
+
+// On the index page, above the comments: its own heading, so the table is not
+// read as part of them.
+export const allPages = (rows: PageStatus[], base: string) =>
+  el('section', { class: 'rv-all-pages' }, el('h2', {}, 'All pages'), statusBoard(rows, base));

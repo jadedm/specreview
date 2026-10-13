@@ -9,7 +9,8 @@ import path from 'node:path';
 import type { Cloudflare } from './cloudflare';
 import { readToken } from './cloudflare';
 import { authoritativeAddresses, probeAddress, type Dns, type Probe, systemDns } from './direct-dns';
-import { DeployError, deployable, type Org } from './org';
+import { type Logo, logoOf } from './brand';
+import { DeployError, deployable, type Org, saveHub } from './org';
 import { HUB_DIR, wranglerConfig } from './wrangler-config';
 
 export type Run = (args: string[], opts: { env: NodeJS.ProcessEnv; input?: string }) => Promise<number>;
@@ -35,11 +36,12 @@ const withConfig = async <T>(
   org: Org,
   hubDir: string | undefined,
   fn: (configPath: string, dir: string) => Promise<T>,
+  logo?: Logo | null,
 ) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'specreview-deploy-'));
   try {
     const configPath = path.join(dir, 'wrangler.json');
-    writeFileSync(configPath, JSON.stringify(wranglerConfig(org, hubDir), null, 2));
+    writeFileSync(configPath, JSON.stringify(wranglerConfig(org, hubDir, logo), null, 2));
     return await fn(configPath, dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -148,27 +150,61 @@ export const deploy = async ({
   wait = waitForHost,
 }: Common & { dryRun: boolean; wait?: typeof waitForHost }) => {
   deployable(org.hub);
-  await withConfig(org, hubDir, async (configPath, dir) => {
-    if (dryRun) {
-      // No token needed and none passed: a dry run builds, it does not call out.
+  // Read once: the file is not looked at again while deploy runs.
+  const logo = logoOf(org);
+  await withConfig(
+    org,
+    hubDir,
+    async (configPath, dir) => {
+      if (dryRun) {
+        // No token needed and none passed: a dry run builds, it does not call out.
+        await step(
+          run,
+          ['deploy', '--dry-run', '--config', configPath, '--outdir', path.join(dir, 'out')],
+          { ...process.env, CLOUDFLARE_API_TOKEN: '' },
+          'wrangler deploy --dry-run',
+        );
+        log('dry run passed: the hub builds with this configuration');
+        return;
+      }
+      const env = envFor(org, tokenFile);
+      // The logo goes up first, under a key of its own, so the Worker deployed
+      // next never names a file that is not there yet; the key is recorded as
+      // soon as it is stored, so a later failure cannot lose track of it.
+      if (logo) {
+        // The checked bytes, not whatever is on disk by now.
+        const logoFile = path.join(dir, `logo.${logo.key.split('.').pop()}`);
+        writeFileSync(logoFile, logo.bytes);
+        await step(
+          run,
+          [
+            'r2',
+            'object',
+            'put',
+            `${org.hub.bucket.name}/${logo.key}`,
+            '--file',
+            logoFile,
+            '--content-type',
+            logo.type,
+            '--remote',
+          ],
+          env,
+          'uploading the logo',
+        );
+        recordBrand(org, { keys: [logo.key] });
+      }
       await step(
         run,
-        ['deploy', '--dry-run', '--config', configPath, '--outdir', path.join(dir, 'out')],
-        { ...process.env, CLOUDFLARE_API_TOKEN: '' },
-        'wrangler deploy --dry-run',
+        ['d1', 'migrations', 'apply', 'DB', '--remote', '--config', configPath],
+        env,
+        'applying D1 migrations',
       );
-      log('dry run passed: the hub builds with this configuration');
-      return;
-    }
-    const env = envFor(org, tokenFile);
-    await step(
-      run,
-      ['d1', 'migrations', 'apply', 'DB', '--remote', '--config', configPath],
-      env,
-      'applying D1 migrations',
-    );
-    await step(run, ['deploy', '--config', configPath], env, 'wrangler deploy');
-  });
+      await step(run, ['deploy', '--config', configPath], env, 'wrangler deploy');
+      // The new Worker is live from here, whatever the wait says next.
+      recordBrand(org, { logoKey: logo?.key ?? null });
+    },
+    logo,
+  );
   if (dryRun) return;
   log(`waiting for https://${org.hub.hostname}/ to answer`);
   const answeredBy = await wait(org.hub.hostname, deployable(org.hub).access.teamDomain);
@@ -178,6 +214,46 @@ export const deploy = async ({
       `this machine's resolver did not find ${org.hub.hostname}; the hub answered through its own nameservers. ${flushAdvice(org.hub.hostname)}`,
     );
   }
+  await retireLogos(org, logo, run, envFor(org, tokenFile), log);
+};
+
+// hub.json's record of stored logos: `keys` gains what is given, `logoKey`
+// is replaced when given (null: no logo). Written at once, as setup does.
+const recordBrand = (org: Org, change: { keys?: string[]; logoKey?: string | null }) => {
+  const before = org.hub.brand ?? {};
+  // A replaced live key joins the list to delete, including one recorded
+  // before hub.json kept a list.
+  const replaced = change.logoKey !== undefined && before.logoKey ? [before.logoKey] : [];
+  const keys = [...new Set([...(before.keys ?? []), ...replaced, ...(change.keys ?? [])])];
+  const logoKey = change.logoKey === undefined ? before.logoKey : (change.logoKey ?? undefined);
+  writeBrand(org, logoKey, keys);
+};
+
+const writeBrand = (org: Org, logoKey: string | undefined, keys: string[]) => {
+  const { brand: _old, ...rest } = org.hub;
+  const brand = { ...(logoKey ? { logoKey } : {}), ...(keys.length > 0 ? { keys } : {}) };
+  org.hub = Object.keys(brand).length > 0 ? { ...rest, brand } : rest;
+  saveHub(org);
+};
+
+// Only after the new Worker has answered: delete every stored logo except
+// the one it uses. A failed delete stays recorded and is retried next time.
+const retireLogos = async (
+  org: Org,
+  logo: Logo | null,
+  run: Run,
+  env: NodeJS.ProcessEnv,
+  log: (line: string) => void,
+) => {
+  const stale = (org.hub.brand?.keys ?? []).filter((k) => k !== logo?.key);
+  const kept: string[] = [];
+  for (const key of stale) {
+    const code = await run(['r2', 'object', 'delete', `${org.hub.bucket.name}/${key}`, '--remote'], { env });
+    if (code === 0) continue;
+    kept.push(key);
+    log(`warning: the old logo ${key} could not be deleted (wrangler exit ${code}); the next deploy tries again`);
+  }
+  writeBrand(org, logo?.key, kept);
 };
 
 export const SECRET_NAMES = ['GITHUB_READ_TOKEN', 'GITHUB_WRITE_TOKEN'] as const;

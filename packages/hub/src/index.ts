@@ -24,8 +24,22 @@ const pageParam = (url: URL) => {
   return page;
 };
 
+// The organisation's name and logo for the header (#33): the same for every
+// site and every role, since the org's name is not a secret.
+const serveLogo = async ({ ctx }: Req): Promise<Response> => {
+  const logo = ctx.config.brand?.logo;
+  if (!logo) throw new AppError(404, 'NOT_FOUND');
+  const object = await read(ctx.deps.store, logo.key);
+  if (!object) throw new AppError(404, 'NOT_FOUND');
+  return new Response(object.body, {
+    headers: { ...protectedHeaders("default-src 'none'"), 'content-type': logo.type },
+  });
+};
+
 const get: Record<string, Handler> = {
   '/me': async ({ caller }) => json(caller),
+  '/brand': async ({ ctx }) => json({ name: ctx.config.brand?.name ?? null, logo: Boolean(ctx.config.brand?.logo) }),
+  '/brand/logo': serveLogo,
   '/comments': async ({ ctx, url, caller }) => json(await listComments(ctx, pageParam(url), caller)),
   '/status': async ({ ctx, caller }) => json(await listStatuses(ctx, caller)),
   '/tickets': async ({ ctx, url, caller }) =>
