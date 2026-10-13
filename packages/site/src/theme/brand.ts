@@ -1,4 +1,5 @@
-// The organisation's logo and name at the right of the nav bar (#33). A Vue
+// The organisation's logo and name at the right of the nav bar (#33), linking
+// back to the hub's index (#53). A Vue
 // component in VitePress's nav slot, so hydration and in-site navigation keep
 // one instance; it asks the hub once, after mount, and shows nothing until the
 // hub has answered with a name, or at all if the request fails.
@@ -26,7 +27,10 @@ export const OrgBrand = defineComponent({
       const b = brand.value;
       if (!b?.name) return null;
       const logo = b.logo && !broken.value;
-      return h('span', { class: BRAND_CLASS }, [
+      // A link to the hub's index (#53): every site of the hub shares its root.
+      // A target keeps VitePress's router from taking the click: / is outside
+      // the site's base, and the router would send it back into the site.
+      return h('a', { class: BRAND_CLASS, href: '/', target: '_self' }, [
         logo
           ? h('img', {
               class: `${BRAND_CLASS}-logo`,

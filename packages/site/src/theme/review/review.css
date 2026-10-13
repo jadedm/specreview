@@ -206,6 +206,7 @@
 
 /* The organisation's logo and name at the right of the nav bar (brand.ts). */
 .sr-brand {
+  text-decoration: none;
   display: flex;
   align-items: center;
   gap: 8px;

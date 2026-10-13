@@ -41,6 +41,12 @@ describe('33: the header brand', () => {
     expect(img.getAttribute('alt')).toBe('Acme');
     const name = host.querySelector(`.${BRAND_CLASS}-name`)!;
     expect(name.textContent).toBe('Acme');
+    // #53: the whole brand is one link to the hub's index.
+    const link = host.querySelector(`a.${BRAND_CLASS}`)!;
+    expect(link.getAttribute('href')).toBe('/');
+    // A full load, not VitePress's in-site router (which keeps clicks inside the base).
+    expect(link.getAttribute('target')).toBe('_self');
+    expect(link.contains(img)).toBe(true);
     // Read once, through the image's alt.
     expect(name.getAttribute('aria-hidden')).toBe('true');
   });
