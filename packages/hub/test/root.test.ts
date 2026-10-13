@@ -1,7 +1,9 @@
 // #43, #45: the hub's bare address shows a signed-in visitor an index of the
 // sites they may read. Case numbers are the tickets'.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { call, CONFIG, installFetch, reset } from './helpers';
+import { TITLE_WAIT_MS } from '../src/root';
+import { memoryStore, type SiteStore } from '../src/store';
+import { call, CONFIG, deps, installFetch, publishedFiles, reset, SIDECAR, VERSION } from './helpers';
 
 let spy: ReturnType<typeof installFetch>;
 beforeEach(async () => {
@@ -11,6 +13,8 @@ beforeEach(async () => {
 afterEach(() => spy.mockRestore());
 
 const root = (email?: string, opts: Record<string, unknown> = {}) => call('/', { raw: true, email, ...opts });
+// The page without its style block, for checks on what it says.
+const text = (r: { body: unknown }) => String(r.body).replace(/<style>[^<]*<\/style>/, '');
 const withConfig = (cfg: unknown) => ({ envOverride: { SPECREVIEW_CONFIG: JSON.stringify(cfg) } });
 const sha256 = async (text: string) =>
   btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))));
@@ -42,14 +46,14 @@ describe('43: the hub root', () => {
     const r = await root('riya@initech.example', withConfig(cfg));
     expect(r.status).toBe(200);
     expect([...String(r.body).matchAll(/href="([^"]+)"/g)].map((m) => m[1])).toEqual(['/sidecar/']);
-    for (const other of ['web', 'globex']) expect(String(r.body)).not.toContain(other);
+    for (const other of ['web', 'globex']) expect(text(r)).not.toContain(other);
   });
 
   it('4: signed in with no readable site is a 403 page naming no site', async () => {
     const r = await root('x@stranger.example');
     expect(r.status).toBe(403);
     expect(r.headers.get('content-type')).toContain('text/html');
-    for (const repo of ['sidecar', 'web', 'globex']) expect(String(r.body)).not.toContain(repo);
+    for (const repo of ['sidecar', 'web', 'globex']) expect(text(r)).not.toContain(repo);
   });
 
   it('5: no token or a bad one is 401', async () => {
@@ -63,12 +67,12 @@ describe('43: the hub root', () => {
     expect((await call('/', { raw: true, method: 'POST', body: {} })).status).toBe(404);
   });
 
-  it('7: the brand name is escaped in the heading', async () => {
+  it('7: the brand name is escaped in the top bar', async () => {
     const r = await root('dev@acme.dev', withConfig({ ...CONFIG, brand: { name: '<b>Acme & "co"</b>' } }));
-    expect(String(r.body)).toContain('<h1>&lt;b&gt;Acme &amp; &quot;co&quot;&lt;/b&gt;</h1>');
+    expect(String(r.body)).toContain('<span class="org">&lt;b&gt;Acme &amp; &quot;co&quot;&lt;/b&gt;</span>');
     expect(String(r.body)).not.toContain('<b>');
     const plain = await root('dev@acme.dev');
-    expect(String(plain.body)).toContain('<h1>acme</h1>');
+    expect(String(plain.body)).toContain('<span class="org">acme</span>');
   });
 
   it('8: the pages are never cached or framed and allow only their own style', async () => {
@@ -98,5 +102,92 @@ describe('43: the hub root', () => {
   it('10: an invalid config still refuses /', async () => {
     const r = await root('dev@acme.dev', { envOverride: { SPECREVIEW_CONFIG: '{}' } });
     expect(r.status).toBe(500);
+  });
+});
+
+describe('48: the index in the house style', () => {
+  const rows = (r: { body: unknown }) =>
+    [...String(r.body).matchAll(/<span class="title">([^<]*)<\/span><span class="path">([^<]*)<\/span>/g)].map((m) => [
+      m[1],
+      m[2],
+    ]);
+
+  it('1, 2: each site shows its published title, or its repo name when it has none', async () => {
+    const r = await root('dev@acme.dev');
+    expect(r.status).toBe(200);
+    expect(rows(r)).toEqual([
+      ['sidecar docs', '/sidecar/'],
+      ['web', '/web/'],
+    ]);
+  });
+
+  it('2: an unpublished site falls back to its repo name, page still 200', async () => {
+    // sidecar has a titled index while published, so the fallback shows.
+    const files = publishedFiles();
+    files.delete(`${SIDECAR}/current.json`);
+    deps.store = memoryStore(files);
+    const r = await root('dev@acme.dev');
+    expect(r.status).toBe(200);
+    expect(rows(r)[0]).toEqual(['sidecar', '/sidecar/']);
+  });
+
+  it('2: a broken pointer falls back to the repo name, page still 200', async () => {
+    const files = publishedFiles();
+    files.set(`${SIDECAR}/current.json`, 'not json');
+    deps.store = memoryStore(files);
+    const r = await root('dev@acme.dev');
+    expect(r.status).toBe(200);
+    expect(rows(r)[0]).toEqual(['sidecar', '/sidecar/']);
+  });
+
+  it('review: a store that does not answer cannot stall the page past the wait', async () => {
+    deps.store = { get: () => new Promise(() => {}) };
+    const started = Date.now();
+    const r = await root('dev@acme.dev');
+    expect(r.status).toBe(200);
+    expect(rows(r).map(([title]) => title)).toEqual(['sidecar', 'web']);
+    expect(Date.now() - started).toBeLessThan(TITLE_WAIT_MS + 1_500);
+  });
+
+  it('3: the store down: repo names, page still 200, nothing about the store', async () => {
+    deps.store = { get: () => Promise.reject(new Error('bucket specreview-sites failed')) };
+    const r = await root('dev@acme.dev');
+    expect(r.status).toBe(200);
+    expect(rows(r).map(([title]) => title)).toEqual(['sidecar', 'web']);
+    expect(text(r)).not.toMatch(/specreview-sites|bucket/);
+  });
+
+  it('4: the no-access page reads nothing from the store', async () => {
+    const reads: string[] = [];
+    const inner = memoryStore(publishedFiles());
+    deps.store = { get: async (k) => (reads.push(k), inner.get(k)) } satisfies SiteStore;
+    const r = await root('x@stranger.example');
+    expect(r.status).toBe(403);
+    expect(reads).toEqual([]);
+    expect(String(r.body)).toContain('<span class="org">acme</span>');
+  });
+
+  it('7: every colour in the page is a true grey (house style, #32)', async () => {
+    const style = /<style>([^<]*)<\/style>/.exec(String((await root('dev@acme.dev')).body))?.[1] ?? '';
+    const hexes = style.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [];
+    expect(hexes.length).toBeGreaterThan(0);
+    for (const hex of hexes) {
+      const h = hex.slice(1);
+      const full = h.length === 3 ? [...h].map((c) => c + c).join('') : h.slice(0, 6);
+      expect([full.slice(0, 2), full.slice(2, 4)], hex).toEqual([full.slice(2, 4), full.slice(4, 6)]);
+    }
+    expect(style).not.toMatch(/rgb|hsl|oklch|lab\(/);
+  });
+
+  it('5: a title with markup characters is escaped', async () => {
+    const files = publishedFiles();
+    const key = `${SIDECAR}/v/${VERSION}/manifest.json`;
+    const manifest = JSON.parse(files.get(key)!) as { pages: Record<string, { title: string }> };
+    manifest.pages.index.title = '<img src=x onerror=alert(1)> & co';
+    files.set(key, JSON.stringify(manifest));
+    deps.store = memoryStore(files);
+    const r = await root('dev@acme.dev');
+    expect(String(r.body)).toContain('&lt;img src=x onerror=alert(1)&gt; &amp; co');
+    expect(text(r)).not.toContain('<img');
   });
 });
