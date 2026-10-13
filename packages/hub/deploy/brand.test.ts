@@ -8,8 +8,12 @@ import { loadOrg } from './org';
 import { HUB_DIR, wranglerConfig } from './wrangler-config';
 import { CONFIG, orgDir } from './test-helpers';
 
-const EXAMPLE = path.join(HUB_DIR, '..', '..', 'examples', 'org');
-const exampleHub = () => JSON.parse(readFileSync(path.join(EXAMPLE, 'hub.json'), 'utf8')) as Record<string, unknown>;
+// examples/org is the blank template (#55); this is the same org after setup.
+const exampleHub = () =>
+  JSON.parse(readFileSync(path.join(HUB_DIR, 'deploy', 'fixtures', 'finished-hub.json'), 'utf8')) as Record<
+    string,
+    unknown
+  >;
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);
 const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.from([8, 0, 0, 0]), Buffer.from('WEBPVP8 ')]);

@@ -9,7 +9,15 @@ import { HUB_DIR, parseJsonc, pinned, wranglerConfig } from './wrangler-config';
 import { CONFIG, emptyAccount, fakeCloudflare, orgDir, TOKEN } from './test-helpers';
 
 const EXAMPLE = path.join(HUB_DIR, '..', '..', 'examples', 'org');
-const exampleHub = () => JSON.parse(readFileSync(path.join(EXAMPLE, 'hub.json'), 'utf8')) as Record<string, unknown>;
+// examples/org is the blank template (#55); this is the same org after setup.
+const exampleHub = () =>
+  JSON.parse(readFileSync(path.join(HUB_DIR, 'deploy', 'fixtures', 'finished-hub.json'), 'utf8')) as Record<
+    string,
+    unknown
+  >;
+// The example organisation folder as it is once setup has run.
+const finishedExample = () =>
+  orgDir(exampleHub(), JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8'))).dir;
 
 // Records each wrangler call with the generated config as it was at the time.
 const recorder = (codes: number[] = []) => {
@@ -48,7 +56,7 @@ describe('9: the organisation folder', () => {
   });
 
   it('1, 25 and 26: the generated config is complete, uses absolute paths and the pinned date', () => {
-    const cfg = wranglerConfig(loadOrg(EXAMPLE));
+    const cfg = wranglerConfig(loadOrg(finishedExample()));
     const hub = exampleHub() as { accountId: string; access: { teamDomain: string; aud: string } };
     expect(cfg).toMatchObject({
       name: 'specreview-hub',
@@ -303,7 +311,7 @@ describe('9: deploy', () => {
       const real = runWrangler();
       try {
         await deploy({
-          org: loadOrg(EXAMPLE),
+          org: loadOrg(finishedExample()),
           tokenFile: '',
           run: async (args, opts) => {
             const code = await real(args, opts);

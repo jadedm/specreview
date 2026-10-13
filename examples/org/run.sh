@@ -7,6 +7,8 @@
 set -euo pipefail
 ORG=$(cd "$(dirname "$0")" && pwd)
 COMMIT=$(tr -d '[:space:]' < "$ORG/specreview.commit")
+[[ "$COMMIT" =~ ^[0-9a-f]{40}$ && ! "$COMMIT" =~ ^0+$ ]] ||
+  { echo "run.sh: set specreview.commit to a full commit of jadedm/specreview" >&2; exit 2; }
 CHECKOUT="$ORG/.specreview"
 [ -d "$CHECKOUT/.git" ] || git clone -q https://github.com/jadedm/specreview.git "$CHECKOUT"
 git -C "$CHECKOUT" fetch -q origin
