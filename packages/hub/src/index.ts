@@ -11,6 +11,7 @@ import { pageOf, pagesView } from './manifest';
 import { protectedHeaders, servePage } from './pages';
 import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
+import { serveRoot } from './root';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
 import { read, unconfiguredStore } from './store';
@@ -121,6 +122,10 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
     const site = config.sites.get(publishing[1]);
     if (!site) throw new AppError(404, 'NOT_FOUND');
     return publish(request, env, config, site);
+  }
+  // The bare address takes a signed-in visitor to their docs (#43).
+  if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
+    return serveRoot(config, await identify(request, config), request.method);
   }
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.

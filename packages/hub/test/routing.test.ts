@@ -82,8 +82,8 @@ describe('49, 50: responses and shadowing', () => {
     expect(r.headers.get('cache-control')).toBe('no-store');
   });
 
-  it('pages are served under /<repo>/; / is 404', async () => {
+  it('pages are served under /<repo>/; / without a sign-in is 401 (#43)', async () => {
     expect((await call('/sidecar/onboarding/signup', { email: TEAM })).status).toBe(200);
-    expect((await call('/')).status).toBe(404);
+    expect((await call('/')).status).toBe(401);
   });
 });
