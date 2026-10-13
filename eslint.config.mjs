@@ -4,7 +4,15 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/node_modules/**', '**/dist/**', '**/.vitepress/dist/**', '**/.vitepress/cache/**', '**/.wrangler/**'],
+    // *.playwright.js: a bare function expression for the Playwright MCP tool, run in the browser.
+    ignores: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/.vitepress/dist/**',
+      '**/.vitepress/cache/**',
+      '**/.wrangler/**',
+      '**/*.playwright.js',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

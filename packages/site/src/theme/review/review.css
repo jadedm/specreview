@@ -1,8 +1,8 @@
 .rv-top {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   margin: 0 0 24px;
-  padding: 12px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--vp-c-divider);
   border-radius: 8px;
   background: var(--vp-c-bg-soft);
@@ -14,6 +14,8 @@
   gap: 8px 12px;
   align-items: center;
 }
+/* Status by form, never by hue: pending outlined grey, in review outlined
+   and bold, ready to build solid. Each badge also says its status. */
 .rv-badge {
   font-weight: 600;
   padding: 2px 8px;
@@ -24,17 +26,29 @@
   color: var(--vp-c-text-2);
 }
 .rv-status[data-status='in_review'] .rv-badge {
-  color: var(--vp-c-warning-1);
+  color: var(--vp-c-text-1);
+  font-weight: 700;
 }
 .rv-status[data-status='ready'] .rv-badge {
-  color: var(--vp-c-success-1);
+  color: var(--vp-c-bg);
+  background: var(--vp-c-text-1);
+  border-color: var(--vp-c-text-1);
+}
+/* The buttons sit together at the right and wrap as a group, so a long
+   "changed by" line never leaves one button alone on a second row. */
+.rv-status-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 .rv-muted {
   color: var(--vp-c-text-2);
   font-size: 13px;
 }
+/* Control edges at #8a8a8a: 3.45 to 1 on white and 3.17 on the panel's
+   #f5f5f5, above the 3 to 1 a control's boundary needs. */
 .rv-btn {
-  border: 1px solid var(--vp-c-divider);
+  border: 1px solid #8a8a8a;
   border-radius: 6px;
   padding: 3px 10px;
   font-size: 13px;
@@ -42,7 +56,7 @@
   cursor: pointer;
 }
 .rv-btn:hover:not(:disabled) {
-  border-color: var(--vp-c-brand-1);
+  border-color: var(--vp-c-text-1);
 }
 .rv-btn:disabled {
   opacity: 0.5;
@@ -51,11 +65,14 @@
 .rv-ghost {
   background: transparent;
 }
+/* Text buttons are underlined: with no colour, nothing else marks them. */
 .rv-link {
   background: none;
   border: 0;
   padding: 0 4px;
-  color: var(--vp-c-brand-1);
+  color: var(--vp-c-text-1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
   font-size: 13px;
 }
@@ -68,19 +85,28 @@
   margin-top: 40px;
   border-top: 1px solid var(--vp-c-divider);
 }
-.rv-thread {
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  padding: 10px 12px;
-  margin: 10px 0;
+.rv-comments h2 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 24px 0 8px;
 }
-.rv-thread[data-state='resolved'] {
-  opacity: 0.75;
+/* The page section a group of threads belongs to. */
+.rv-comments h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vp-c-text-2);
+  margin: 24px 0 4px;
+}
+/* Threads are separated by space and a hairline, not boxed. */
+.rv-thread {
+  border-top: 1px solid var(--vp-c-divider);
+  padding: 12px 0;
+  margin: 0;
 }
 .rv-quote {
   margin: 0 0 8px;
   padding-left: 8px;
-  border-left: 3px solid var(--vp-c-warning-2);
+  border-left: 3px solid var(--vp-c-border);
   color: var(--vp-c-text-2);
   font-size: 13px;
 }
@@ -103,14 +129,14 @@
 }
 .rv-input {
   width: 100%;
-  border: 1px solid var(--vp-c-divider);
+  border: 1px solid #8a8a8a;
   border-radius: 6px;
   padding: 6px 8px;
   font: inherit;
   font-size: 14px;
 }
 .rv-form {
-  border: 1px solid var(--vp-c-brand-1);
+  border: 1px solid var(--vp-c-text-1);
   border-radius: 8px;
   padding: 10px 12px;
   margin: 16px 0;
@@ -118,7 +144,7 @@
 .rv-pop {
   position: absolute;
   z-index: 50;
-  border: 1px solid var(--vp-c-brand-1);
+  border: 1px solid var(--vp-c-text-1);
   background: var(--vp-c-bg);
   border-radius: 6px;
   padding: 3px 10px;
@@ -138,9 +164,10 @@
   border-radius: 6px;
   margin-bottom: 12px;
 }
+/* An error by its rule and its words, not by red. */
 .rv-error {
-  border-color: var(--vp-c-danger-1);
-  color: var(--vp-c-danger-1);
+  border: 2px solid var(--vp-c-text-1);
+  color: var(--vp-c-text-1);
 }
 .rv-old {
   margin-bottom: 24px;
@@ -155,12 +182,15 @@
   border-radius: 6px;
   background: var(--vp-c-bg-soft);
 }
+/* Diff lines carry their + and - markers; added lines are filled, removed
+   lines struck through. */
 .rv-add {
-  background: var(--vp-c-success-soft);
+  background: var(--vp-c-gray-soft);
   display: block;
 }
 .rv-del {
-  background: var(--vp-c-danger-soft);
+  color: var(--vp-c-text-2);
+  text-decoration: line-through;
   display: block;
 }
 .rv-same {

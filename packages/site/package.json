@@ -12,7 +12,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.theme.json --noEmit && tsc -p tsconfig.test.json",
     "test": "pnpm --filter @specreview/shared build && pnpm run build && vitest run",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc -p tsconfig.theme.json && cp src/theme/review/review.css dist/theme/review/"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc -p tsconfig.theme.json && cp src/theme/house.css dist/theme/ && cp src/theme/review/review.css dist/theme/review/"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.2.0",
