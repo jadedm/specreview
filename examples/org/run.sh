@@ -3,7 +3,7 @@
 # checkout of specreview at the commit in specreview.commit.
 #   ./run.sh setup  --token-file /tmp/.cf-token [--apply]
 #   ./run.sh deploy --token-file /tmp/.cf-token [--dry-run]
-#   ./run.sh secret --token-file /tmp/.cf-token --name GITHUB_READ_TOKEN --value-file /tmp/.gh-read
+#   ./run.sh secret --token-file /tmp/.cf-token --name GITHUB_APP_PRIVATE_KEY --value-file /tmp/.gh-app.pem
 set -euo pipefail
 ORG=$(cd "$(dirname "$0")" && pwd)
 COMMIT=$(tr -d '[:space:]' < "$ORG/specreview.commit")

@@ -346,6 +346,18 @@ describe('9: secret', () => {
     expect(calls[0].args.join(' ') + lines.join('\n') + calls[0].config).not.toMatch(/ghp-secret-value|cf-test-token/);
   });
 
+  it('12 (#6): takes the app id and the multi-line private key, the key intact on stdin and nowhere else', async () => {
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD9\n-----END RSA PRIVATE KEY-----\n';
+    const s = setUp(['specreview-hub'], pem);
+    const { run, calls } = recorder();
+    const lines: string[] = [];
+    await secret({ ...s, run, log: (l) => lines.push(l), name: 'GITHUB_APP_PRIVATE_KEY' });
+    await secret({ ...s, run, log: (l) => lines.push(l), name: 'GITHUB_APP_ID' });
+    expect(calls.map((c) => c.args[2])).toEqual(['GITHUB_APP_PRIVATE_KEY', 'GITHUB_APP_ID']);
+    expect(calls[0].input).toBe(pem.slice(0, -1));
+    expect(calls[0].args.join(' ') + lines.join('\n') + calls[0].config).not.toMatch(/MIIBOgIBAAJBAKj34GkxFhD9/);
+  });
+
   it('30: refuses before the first deploy, an empty value, and other names', async () => {
     const { run, calls } = recorder();
     await expect(secret({ ...setUp([], 'x'), run, log: () => {}, name: 'GITHUB_READ_TOKEN' })).rejects.toThrow(

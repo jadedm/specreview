@@ -256,7 +256,12 @@ const retireLogos = async (
   writeBrand(org, logo?.key, kept);
 };
 
-export const SECRET_NAMES = ['GITHUB_READ_TOKEN', 'GITHUB_WRITE_TOKEN'] as const;
+export const SECRET_NAMES = [
+  'GITHUB_APP_ID',
+  'GITHUB_APP_PRIVATE_KEY',
+  'GITHUB_READ_TOKEN',
+  'GITHUB_WRITE_TOKEN',
+] as const;
 
 export const secret = async ({
   org,

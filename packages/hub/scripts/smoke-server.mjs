@@ -6,13 +6,18 @@
 // pnpm --filter @specreview/hub build
 // node packages/hub/scripts/smoke-server.mjs     (then scripts/smoke.sh)
 //
+// SMOKE_APP=1 (#6) gives the Worker only the GitHub App's secrets, with a
+// PKCS#1 key made the way GitHub makes one, and the GitHub stand-in then acts
+// as the app's endpoints: it verifies the app JWT, mints tokens for one repo
+// and permission, and refuses any other token. Control /app reports them.
+//
 // Miniflare 4 is pinned: the 5.x alpha under wrangler takes a different
 // options shape, and its workerd predates the deploy compatibility date.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
-import { SignJWT, exportJWK, generateKeyPair } from 'jose';
+import { SignJWT, exportJWK, generateKeyPair, importSPKI, jwtVerify } from 'jose';
 import { Miniflare } from 'miniflare';
 
 const HUB = path.resolve(import.meta.dirname, '..');
@@ -76,8 +81,48 @@ const issues = new Map([[52, { title: 'Company approval', state: 'open', labels:
 // When set (control /github-hidden), GitHub answers 404 to everything, as it
 // does for a token that cannot see the repo.
 let githubHidden = false;
+
+const APP = process.env.SMOKE_APP === '1';
+const APP_ID = '424242';
+const appKeys = generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+});
+const appPublic = await importSPKI(appKeys.publicKey, 'RS256');
+const app = { lookups: 0, mints: [], refused: 0, issued: new Map() };
+const bearer = (req) => req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+// The app's own endpoints, then the token check on every repo call.
+const appAnswer = async (req, url) => {
+  const lookup = /^\/repos\/acme\/([^/]+)\/installation$/.exec(url.pathname);
+  const mint = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
+  if (lookup || mint) {
+    const ok = await jwtVerify(bearer(req), appPublic, { issuer: APP_ID, algorithms: ['RS256'] }).catch(() => null);
+    if (!ok) return Response.json({ message: 'A JSON web token could not be decoded' }, { status: 401 });
+  }
+  if (lookup) {
+    app.lookups++;
+    return Response.json({ id: 99 });
+  }
+  if (mint) {
+    const body = await req.json();
+    app.mints.push(body);
+    const token = `ghs_smoke_${randomUUID()}`;
+    app.issued.set(token, { repo: body.repositories?.[0], permission: body.permissions?.issues });
+    return Response.json({ token, expires_at: new Date(Date.now() + 3600_000).toISOString() }, { status: 201 });
+  }
+  const repo = /^\/repos\/acme\/([^/]+)\//.exec(url.pathname)?.[1];
+  const issued = app.issued.get(bearer(req));
+  const allowed = issued && issued.repo === repo && (req.method === 'GET' || issued.permission === 'write');
+  if (allowed) return null;
+  app.refused++;
+  return Response.json({ message: 'Bad credentials' }, { status: 401 });
+};
+
 const github = async (req, url) => {
   if (githubHidden) return Response.json({ message: 'Not Found' }, { status: 404 });
+  const fromApp = APP && (await appAnswer(req, url));
+  if (fromApp) return fromApp;
   if (/^\/repos\/acme\/[^/]+\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
   // The cron lists tickets carrying each of our labels; only sidecar has tickets.
   const listing = /^\/repos\/acme\/([^/]+)\/issues$/.exec(url.pathname);
@@ -127,8 +172,9 @@ const mf = new Miniflare({
       r2Buckets: ['SITES'],
       bindings: {
         SPECREVIEW_CONFIG: JSON.stringify(config),
-        GITHUB_READ_TOKEN: 'smoke-read',
-        GITHUB_WRITE_TOKEN: 'smoke-write',
+        ...(APP
+          ? { GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: appKeys.privateKey }
+          : { GITHUB_READ_TOKEN: 'smoke-read', GITHUB_WRITE_TOKEN: 'smoke-write' }),
       },
       outboundService: async (req) => {
         const url = new URL(req.url);
@@ -239,6 +285,7 @@ http
       return send({ ok: true });
     }
     if (url.pathname === '/labels') return send(issues.get(52).labels);
+    if (url.pathname === '/app') return send({ on: APP, lookups: app.lookups, mints: app.mints, refused: app.refused });
     if (url.pathname === '/github-hidden') {
       githubHidden = url.searchParams.get('on') === '1';
       return send({ githubHidden });

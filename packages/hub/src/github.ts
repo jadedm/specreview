@@ -25,10 +25,8 @@ type Hub = { env: Env; deps: Deps; config: HubConfig };
 
 class NoToken extends Error {}
 
-const call = async (hub: Hub, repo: string, purpose: Purpose, path: string, init: RequestInit = {}) => {
-  const token = await hub.deps.github.tokenFor(repo, purpose);
-  if (!token) throw new NoToken(`no GitHub ${purpose} token for ${repo}`);
-  return fetch(`${API}/repos/${repo}${path}`, {
+const send = (token: string, repo: string, path: string, init: RequestInit) =>
+  fetch(`${API}/repos/${repo}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -39,6 +37,20 @@ const call = async (hub: Hub, repo: string, purpose: Purpose, path: string, init
     },
     signal: AbortSignal.timeout(5_000),
   });
+
+// A 401 means the token was revoked or expired early: drop it and try once
+// more with a new one. A second 401 is GitHub's answer.
+const call = async (hub: Hub, repo: string, purpose: Purpose, path: string, init: RequestInit = {}) => {
+  const auth = hub.deps.github;
+  const token = await auth.tokenFor(repo, purpose);
+  if (!token) throw new NoToken(`no GitHub ${purpose} token for ${repo}`);
+  const res = await send(token, repo, path, init);
+  if (res.status !== 401 || !auth.invalidate) return res;
+  auth.invalidate(repo, purpose);
+  const again = await auth.tokenFor(repo, purpose);
+  if (!again || again === token) return res;
+  await res.body?.cancel();
+  return send(again, repo, path, init);
 };
 
 // Why a sync failed, for the one log line an operator gets from it: the step

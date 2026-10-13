@@ -1,13 +1,13 @@
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
-import { SignJWT, exportJWK, generateKeyPair } from 'jose';
+import { SignJWT, exportJWK, generateKeyPair, jwtVerify } from 'jose';
 import { vi } from 'vitest';
 import type { Manifest } from '@specreview/shared';
 import type { Deps } from '../src/ctx';
 import type { Env } from '../src/env';
 import { configOf } from '../src/config';
 import { reconcileLabels } from '../src/github';
-import { envTokens } from '../src/github-auth';
+import { forgetGitHubAppForTests, githubAuthFor } from '../src/github-auth';
 import { createHub } from '../src/index';
 import { forgetLabelSetup } from '../src/github';
 import { forgetGithubKeys } from '../src/github-oidc';
@@ -180,7 +180,7 @@ export const deps: { store: SiteStore; github: Deps['github'] | null } = {
   store: memoryStore(new Map()),
   github: null,
 };
-const hub = createHub((e) => ({ store: deps.store, github: deps.github ?? envTokens(e) }));
+const hub = createHub((e) => ({ store: deps.store, github: deps.github ?? githubAuthFor(e) }));
 
 export const testEnv = (override: Partial<Env> = {}): Env => ({
   ...env,
@@ -295,7 +295,12 @@ export const github = {
   // Answers a request before the stand-in does, when it returns a response;
   // throwing makes the fetch fail as a network error would.
   answer: null as ((method: string, repo: string, path: string) => Response | null) | null,
+  // The GitHub App stand-in (#6): null until a test turns it on. Then issue
+  // and label calls take only the tokens it issued, for their repo, and a
+  // read token only for GET.
+  app: null as AppStub | null,
   reset() {
+    this.app = null;
     this.repos = freshRepos();
     this.calls = [];
     this.labelDefs = new Map();
@@ -307,11 +312,90 @@ export const github = {
   },
 };
 
+type Issued = { repo: string; permission: string; installation: number };
+type AppStub = {
+  appId: string;
+  publicKey: CryptoKey;
+  // Repo to installation id; a repo not listed answers 404.
+  installations: Map<string, number>;
+  issued: Map<string, Issued>;
+  // Each mint's request body, in order, and the iat of the JWT that asked.
+  mints: { installation: number; body: unknown; iat?: number }[];
+  tokenLifeMs: number;
+  // Answer the next lookups or mints with this status instead.
+  failLookups: number[];
+  failMints: number[];
+};
+
+export const appStub = (appId: string, publicKey: CryptoKey): AppStub => ({
+  appId,
+  publicKey,
+  installations: new Map([
+    ['acme/sidecar', 7],
+    ['acme/globex', 7],
+  ]),
+  issued: new Map(),
+  mints: [],
+  tokenLifeMs: 60 * 60_000,
+  failLookups: [],
+  failMints: [],
+});
+
+const appVerified = async (app: AppStub, req: Request) => {
+  const jwt = req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+  const ok = await jwtVerify(jwt, app.publicKey, { algorithms: ['RS256'], issuer: app.appId }).catch(() => null);
+  if (!ok) return false;
+  const { iat, exp } = ok.payload;
+  return typeof iat === 'number' && typeof exp === 'number' && exp - iat <= 600;
+};
+
+const appResponse = async (app: AppStub, req: Request, url: URL): Promise<Response | null> => {
+  const lookup = /^\/repos\/([^/]+\/[^/]+)\/installation$/.exec(url.pathname);
+  const mint = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
+  if (!lookup && !mint) return null;
+  if (!(await appVerified(app, req)))
+    return Response.json({ message: 'A JSON web token could not be decoded' }, { status: 401 });
+  if (lookup) {
+    const failed = app.failLookups.shift();
+    if (failed) return new Response('failed', { status: failed });
+    const id = app.installations.get(lookup[1]);
+    return id ? Response.json({ id }) : Response.json({ message: 'Not Found' }, { status: 404 });
+  }
+  const installation = Number(mint![1]);
+  const body = (await req.json()) as { repositories?: string[]; permissions?: Record<string, string> };
+  const jwt = req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+  const iat = JSON.parse(atob(jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).iat as number;
+  app.mints.push({ installation, body, iat });
+  const failed = app.failMints.shift();
+  if (failed) return new Response('failed', { status: failed });
+  const repos = body.repositories ?? [];
+  const covered = repos.length === 1 && app.installations.get(`acme/${repos[0]}`) === installation;
+  if (!covered) return Response.json({ message: 'repository not in installation' }, { status: 422 });
+  const token = `ghs_${crypto.randomUUID()}`;
+  app.issued.set(token, { repo: `acme/${repos[0]}`, permission: body.permissions?.issues ?? '', installation });
+  return Response.json({ token, expires_at: new Date(Date.now() + app.tokenLifeMs).toISOString() }, { status: 201 });
+};
+
+// With the app on, a repo call carries a token the app issued for that repo.
+const appRefusal = (app: AppStub, req: Request, repo: string): Response | null => {
+  const token = req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+  const issued = app.issued.get(token);
+  if (!issued) return Response.json({ message: 'Bad credentials' }, { status: 401 });
+  if (issued.repo !== repo) return Response.json({ message: 'Not Found' }, { status: 404 });
+  if (req.method !== 'GET' && issued.permission !== 'write')
+    return Response.json({ message: 'Resource not accessible by integration' }, { status: 403 });
+  return null;
+};
+
 const githubResponse = async (req: Request, url: URL): Promise<Response> => {
   github.calls.push(`${req.method} ${url.pathname}${url.search}`);
+  const fromApp = github.app && (await appResponse(github.app, req, url));
+  if (fromApp) return fromApp;
   const scoped = /^\/repos\/([^/]+\/[^/]+)(\/.*)$/.exec(url.pathname);
   const answered = scoped && github.answer?.(req.method, scoped[1], `${scoped[2]}${url.search}`);
   if (answered) return answered;
+  const refused = scoped && github.app && appRefusal(github.app, req, scoped[1]);
+  if (refused) return refused;
   const def = /^\/repos\/([^/]+\/[^/]+)\/labels(?:\/(.+))?$/.exec(url.pathname);
   if (def) {
     if (github.down || github.downRepos.has(def[1]) || github.labelsMode === 'down') {
@@ -406,6 +490,7 @@ export const reset = async () => {
   deps.github = null;
   forgetManifests();
   forgetLabelSetup();
+  forgetGitHubAppForTests();
   await env.DB.batch(
     ['replies', 'threads', 'status_history', 'page_status', 'ticket_cache', 'write_log'].map((t) =>
       env.DB.prepare(`DELETE FROM ${t}`),
@@ -465,7 +550,7 @@ export const reconcile = () => {
   const e = testEnv();
   return reconcileLabels({
     env: e,
-    deps: { store: deps.store, github: deps.github ?? envTokens(e) },
+    deps: { store: deps.store, github: deps.github ?? githubAuthFor(e) },
     config: configOf(e.SPECREVIEW_CONFIG),
   });
 };

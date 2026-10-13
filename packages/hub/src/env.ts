@@ -5,7 +5,12 @@ export type Env = {
   // Published sites (#5 writes, the hub reads); layout in store.ts. Unset
   // only before `specreview init` (#7) creates the bucket.
   SITES?: R2Bucket;
-  // Personal tokens until the GitHub App (#6): read is Issues read, write is
+  // The GitHub App (#6): its id and its private key (PKCS#1 as GitHub
+  // downloads it, or PKCS#8). Secrets. When both are set they replace the
+  // personal tokens.
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  // Personal tokens, for a hub without the app: read is Issues read, write is
   // Issues read and write. Secrets, set by a person.
   GITHUB_READ_TOKEN?: string;
   GITHUB_WRITE_TOKEN?: string;
