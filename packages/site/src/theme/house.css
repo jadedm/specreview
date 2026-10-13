@@ -90,3 +90,12 @@
 .vp-doc li {
   line-height: 1.7;
 }
+
+/* The 404 page (#52): its title is sentence case, so no capitals spacing, and
+   its sentence gets room for one line on a phone and two on a desktop. */
+.NotFound .title.title {
+  letter-spacing: normal;
+}
+.NotFound .quote.quote {
+  max-width: 320px;
+}

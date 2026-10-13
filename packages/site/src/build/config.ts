@@ -110,7 +110,14 @@ export const siteShape = (docs: string, repo: string) => {
     .map((f) => readPage(docs, f));
   for (const p of pages) parseIssues(p.file, p.issues);
   const title = pages.find((p) => p.file === 'index.md')?.title ?? repo;
-  const themeConfig = { sidebar: sidebarOf(pages), outline: { level: [2, 3] as [number, number] } };
+  // The 404 page in plain words (#52): what happened and where to go.
+  const notFound = {
+    title: 'Page not found',
+    quote: "This page doesn't exist. It may have been moved or renamed.",
+    linkText: `Go to ${title}`,
+    linkLabel: `Go to ${title}`,
+  };
+  const themeConfig = { sidebar: sidebarOf(pages), outline: { level: [2, 3] as [number, number] }, notFound };
   assertNoFunctionStrings({ title, themeConfig }, 'site');
   return { title, themeConfig };
 };

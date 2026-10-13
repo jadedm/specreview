@@ -57,9 +57,8 @@ const HIDDEN = new Set(['manifest.json']);
 
 export const servePage = async (ctx: Ctx, method: string, path: string, directory: boolean): Promise<Response> => {
   if (method !== 'GET' && method !== 'HEAD') throw new AppError(405, 'METHOD_NOT_ALLOWED');
-  if (HIDDEN.has(path)) throw new AppError(404, 'NOT_FOUND');
   const snapshot: Snapshot = await ctx.snapshot();
-  for (const candidate of candidates(path, directory)) {
+  for (const candidate of HIDDEN.has(path) ? [] : candidates(path, directory)) {
     const obj = await read(ctx.deps.store, `${ctx.site.repo}/v/${snapshot.version}/${candidate}`);
     if (!obj) continue;
     const ext = extensionOf(candidate);
@@ -76,5 +75,18 @@ export const servePage = async (ctx: Ctx, method: string, path: string, director
     }
     return new Response(obj.body, { headers });
   }
-  throw new AppError(404, 'NOT_FOUND');
+  return notFoundPage(ctx, snapshot, method);
+};
+
+// A stale link gets the site's own 404 page, as VitePress built it, with the
+// site's headers and CSP (#17); a build without one gets the JSON 404.
+const notFoundPage = async (ctx: Ctx, snapshot: Snapshot, method: string): Promise<Response> => {
+  const page = await read(ctx.deps.store, `${ctx.site.repo}/v/${snapshot.version}/404.html`);
+  if (!page) throw new AppError(404, 'NOT_FOUND');
+  const headers = { ...protectedHeaders(cspOf(snapshot)), 'content-type': TYPES.html };
+  if (method === 'HEAD') {
+    await page.body?.cancel();
+    return new Response(null, { status: 404, headers });
+  }
+  return new Response(page.body, { status: 404, headers });
 };
