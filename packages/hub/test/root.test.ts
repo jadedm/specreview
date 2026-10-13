@@ -1,6 +1,8 @@
+import { env } from 'cloudflare:workers';
 // #43, #45: the hub's bare address shows a signed-in visitor an index of the
 // sites they may read. Case numbers are the tickets'.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Env } from '../src/env';
 import { TITLE_WAIT_MS } from '../src/root';
 import { memoryStore, type SiteStore } from '../src/store';
 import { call, CONFIG, deps, installFetch, publishedFiles, reset, SIDECAR, VERSION } from './helpers';
@@ -106,18 +108,20 @@ describe('43: the hub root', () => {
 });
 
 describe('48: the index in the house style', () => {
+  // [href, title, summary line or null] per row.
   const rows = (r: { body: unknown }) =>
-    [...String(r.body).matchAll(/<span class="title">([^<]*)<\/span><span class="path">([^<]*)<\/span>/g)].map((m) => [
-      m[1],
-      m[2],
-    ]);
+    [
+      ...String(r.body).matchAll(
+        /<a class="site" href="([^"]*)"><span class="title">([^<]*)<\/span>(?:<span class="meta">([^<]*)<\/span>)?<\/a>/g,
+      ),
+    ].map((m) => [m[1], m[2], m[3] ?? null]);
 
   it('1, 2: each site shows its published title, or its repo name when it has none', async () => {
     const r = await root('dev@acme.dev');
     expect(r.status).toBe(200);
-    expect(rows(r)).toEqual([
-      ['sidecar docs', '/sidecar/'],
-      ['web', '/web/'],
+    expect(rows(r).map(([href, title]) => [href, title])).toEqual([
+      ['/sidecar/', 'sidecar docs'],
+      ['/web/', 'web'],
     ]);
   });
 
@@ -128,7 +132,7 @@ describe('48: the index in the house style', () => {
     deps.store = memoryStore(files);
     const r = await root('dev@acme.dev');
     expect(r.status).toBe(200);
-    expect(rows(r)[0]).toEqual(['sidecar', '/sidecar/']);
+    expect(rows(r)[0]).toEqual(['/sidecar/', 'sidecar', null]);
   });
 
   it('2: a broken pointer falls back to the repo name, page still 200', async () => {
@@ -137,7 +141,7 @@ describe('48: the index in the house style', () => {
     deps.store = memoryStore(files);
     const r = await root('dev@acme.dev');
     expect(r.status).toBe(200);
-    expect(rows(r)[0]).toEqual(['sidecar', '/sidecar/']);
+    expect(rows(r)[0]).toEqual(['/sidecar/', 'sidecar', null]);
   });
 
   it('review: a store that does not answer cannot stall the page past the wait', async () => {
@@ -145,7 +149,7 @@ describe('48: the index in the house style', () => {
     const started = Date.now();
     const r = await root('dev@acme.dev');
     expect(r.status).toBe(200);
-    expect(rows(r).map(([title]) => title)).toEqual(['sidecar', 'web']);
+    expect(rows(r).map(([, title]) => title)).toEqual(['sidecar', 'web']);
     expect(Date.now() - started).toBeLessThan(TITLE_WAIT_MS + 1_500);
   });
 
@@ -153,7 +157,7 @@ describe('48: the index in the house style', () => {
     deps.store = { get: () => Promise.reject(new Error('bucket specreview-sites failed')) };
     const r = await root('dev@acme.dev');
     expect(r.status).toBe(200);
-    expect(rows(r).map(([title]) => title)).toEqual(['sidecar', 'web']);
+    expect(rows(r).map(([, title]) => title)).toEqual(['sidecar', 'web']);
     expect(text(r)).not.toMatch(/specreview-sites|bucket/);
   });
 
@@ -177,6 +181,78 @@ describe('48: the index in the house style', () => {
       expect([full.slice(0, 2), full.slice(2, 4)], hex).toEqual([full.slice(2, 4), full.slice(4, 6)]);
     }
     expect(style).not.toMatch(/rgb|hsl|oklch|lab\(/);
+  });
+
+  it('#50: the top bar contents sit in the content column', async () => {
+    const r = await root('dev@acme.dev');
+    expect(String(r.body)).toContain('<header><div class="bar"><span class="org">acme</span></div></header>');
+    expect(String(r.body)).toMatch(/\.bar\{max-width:688px;[^}]*margin:0 auto/);
+    expect(String(r.body)).toMatch(/main\{max-width:688px;margin:48px auto/);
+  });
+
+  it('#52 (3): each row says how many pages, how many in review and ready, and when it was built', async () => {
+    const set = await call('/api/status', {
+      email: 'dev@acme.dev',
+      body: { page: 'onboarding/signup', status: 'in_review', expectedVersion: 0, hash: 'hash-live' },
+    });
+    expect(set.status).toBe(200);
+    const [sidecar] = rows(await root('dev@acme.dev'));
+    expect(sidecar).toEqual(['/sidecar/', 'sidecar docs', '3 pages, 1 in review, updated 7 Oct']);
+  });
+
+  it('#52 (3): ready pages are counted; a ready page whose text changed counts as in review', async () => {
+    const ready = await call('/api/status', {
+      email: 'approver@acme.dev',
+      body: { page: 'onboarding/signup', status: 'ready', expectedVersion: 0, hash: 'hash-live' },
+    });
+    expect(ready.status).toBe(200);
+    expect(rows(await root('dev@acme.dev'))[0][2]).toBe('3 pages, 1 ready to build, updated 7 Oct');
+    await env.DB.prepare("UPDATE page_status SET ready_hash = 'older'").run();
+    expect(rows(await root('dev@acme.dev'))[0][2]).toBe('3 pages, 1 in review, updated 7 Oct');
+  });
+
+  it('review: a slow database costs a row its line, never its title', async () => {
+    const slow = {
+      DB: { prepare: () => ({ bind: () => ({ all: () => new Promise(() => {}) }) }) } as unknown as Env['DB'],
+    };
+    const r = await root('dev@acme.dev', { envOverride: slow });
+    expect(rows(r)[0]).toEqual(['/sidecar/', 'sidecar docs', null]);
+  });
+
+  it('review: HEAD reads nothing from the store or the database', async () => {
+    const reads: string[] = [];
+    const inner = memoryStore(publishedFiles());
+    deps.store = { get: async (k) => (reads.push(k), inner.get(k)) } satisfies SiteStore;
+    const r = await call('/', { raw: true, email: 'dev@acme.dev', method: 'HEAD' });
+    expect([r.status, String(r.body)]).toEqual([200, '']);
+    expect(reads).toEqual([]);
+  });
+
+  it('#52 (3b): page statuses that cannot be read leave the title alone with no line', async () => {
+    const broken = {
+      DB: {
+        prepare: () => {
+          throw new Error('d1 down');
+        },
+      } as unknown as Env['DB'],
+    };
+    const r = await root('dev@acme.dev', { envOverride: broken });
+    expect(r.status).toBe(200);
+    expect(rows(r).map(([, , line]) => line)).toEqual([null, null]);
+    expect(text(r)).not.toContain('d1 down');
+  });
+
+  it('#52 (4): the heading names the organisation; no filler line', async () => {
+    const body = String((await root('dev@acme.dev')).body);
+    expect(body).toContain('<h1>acme docs</h1>');
+    expect(body).not.toContain('Everything you can read');
+  });
+
+  it('#52 (1): the no-access page names the signed-in email and links to sign in with another', async () => {
+    const r = await root('x@stranger.example');
+    expect(r.status).toBe(403);
+    expect(text(r)).toContain("You're signed in as x@stranger.example");
+    expect(text(r)).toContain('href="/cdn-cgi/access/logout"');
   });
 
   it('5: a title with markup characters is escaped', async () => {

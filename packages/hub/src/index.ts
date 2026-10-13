@@ -145,7 +145,7 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   }
   // The bare address shows a signed-in visitor an index of their sites (#43, #45).
   if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
-    return serveRoot(config, await identify(request, config), request.method, deps.store);
+    return serveRoot(config, await identify(request, config), request.method, deps.store, env);
   }
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.

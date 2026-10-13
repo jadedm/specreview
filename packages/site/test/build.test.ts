@@ -126,6 +126,17 @@ describe('a full build', () => {
     );
   });
 
+  it('#52: the 404 page says what happened in plain words and links back to the site', () => {
+    const html = readFileSync(path.join(repo, '.specreview', 'site', '404.html'), 'utf8');
+    expect(html).toContain('Page not found');
+    expect(html).not.toContain('PAGE NOT FOUND');
+    expect(html).toMatch(/This page doesn(&#39;|')t exist\. It may have been moved or renamed\./);
+    expect(html).toContain('Go to Fixture docs');
+    // The link's label travels in the embedded site data, applied in the browser.
+    expect(html).toMatch(/linkLabel\\?":\\?"Go to Fixture docs/);
+    expect(html).not.toContain('Take me home');
+  });
+
   it('2: every internal link and asset is under the base', () => {
     const site = path.join(repo, '.specreview', 'site');
     for (const f of filesUnder(site).filter((x) => x.endsWith('.html'))) {
