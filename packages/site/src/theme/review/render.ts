@@ -48,7 +48,8 @@ export const statusBar = (status: PageStatus, me: Me, openCount: number, actions
       ? el('span', { class: 'rv-muted' }, `Was ready on ${when(status.wasReadyAt)}, changed since`)
       : null,
     el('span', { class: 'rv-muted' }, `${openCount} open comment${openCount === 1 ? '' : 's'}`),
-    ...buttons,
+    // One group, so the buttons wrap together rather than one at a time.
+    buttons.length ? el('span', { class: 'rv-status-actions' }, ...buttons) : null,
   );
 };
 

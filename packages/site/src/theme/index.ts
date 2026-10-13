@@ -1,7 +1,10 @@
 import type { Theme } from 'vitepress';
-import DefaultTheme from 'vitepress/theme';
+// Without fonts: the house style uses the system font, so Inter is neither
+// bundled nor fetched.
+import DefaultTheme from 'vitepress/theme-without-fonts';
 import { h } from 'vue';
 import { BOTTOM_MOUNT, TOP_MOUNT, startReview } from './review/start';
+import './house.css';
 import './review/review.css';
 
 // The review UI lives in two empty containers the layout renders around the
