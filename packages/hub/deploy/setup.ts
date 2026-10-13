@@ -1,7 +1,9 @@
 // One organisation's Cloudflare resources: a D1 database, an R2 bucket, the
 // one-time PIN login, an Access application for the hostname with its allow
-// policy, and an Access application bypassing /_publish/* with its bypass
-// policy. Policies are reusable Access policies (per-app policies cannot be
+// policy, an Access application bypassing /_publish/* with its bypass policy,
+// and, while any site is public (#20), an application bypassing those sites'
+// pages with its own bypass policy, their API, history and sign-in paths
+// staying on the hostname's application. Policies are reusable Access policies (per-app policies cannot be
 // added to new applications) referenced by the applications.
 //
 // Everything is read first; anything that would have to be refused stops the
@@ -22,7 +24,7 @@ type Policy = {
   exclude?: unknown[];
   require?: unknown[];
 };
-type AppSummary = { id: string; domain?: string };
+type AppSummary = { id: string; domain?: string; name?: string };
 type App = AppSummary & {
   type?: string;
   aud?: string;
@@ -89,6 +91,27 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   // The config must be sound before it decides who passes Access.
   workerConfigOf(org, { teamDomain: 'check.cloudflareaccess.com', aud: 'check' });
   const include = wantedInclude(org.config);
+  // Public sites (#20): their pages bypass Access; their API, history and
+  // sign-in path stay on the hostname's app, which keeps its audience.
+  const sites = (org.config.sites as { repo: string; visibility?: string }[]) ?? [];
+  const publicRepos = sites.filter((s) => s.visibility === 'public').map((s) => s.repo);
+  const protectedPaths = (repos: string[]) =>
+    repos.flatMap((r) => [`${host}/${r}/_api/*`, `${host}/${r}/_history/*`, `${host}/${r}/_signin`]);
+  const pagePaths = (repos: string[]) => repos.map((r) => `${host}/${r}/*`);
+  const wantedMain = [host, ...protectedPaths(publicRepos)];
+  // What setup itself may have written, for any repo name (a site removed
+  // from the config still has its paths on the apps until this run):
+  // the hostname, <host>/<repo>/_api/*, /_history/* and /_signin on the main
+  // app, <host>/<repo>/* on the bypass.
+  const hostRe = host.replace(/[.]/g, '\\.');
+  // Repo names as the config allows them: no leading underscore, never . or ..
+  const repoRe = '(?!\\.{1,2}/)[a-z0-9.][a-z0-9._-]{0,99}';
+  const ownMainPath = new RegExp(`^${hostRe}(/${repoRe}/(_api/\\*|_history/\\*|_signin))?$`);
+  const ownPagePath = new RegExp(`^${hostRe}/${repoRe}/\\*$`);
+  const publicPolicyName = `specreview ${host} public`;
+  const publicAppName = `specreview ${host} public`;
+  const wantPublic = publicRepos.length > 0;
+  const sameSet = (x: string[], y: string[]) => x.length === y.length && x.every((d) => y.includes(d));
 
   await cf.call(`GET`, `/accounts/${a}`).catch((e: unknown) => {
     throw new DeployError(`the token cannot read account ${a}: ${e instanceof Error ? e.message : String(e)}`);
@@ -296,6 +319,34 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
       },
     });
 
+  // The hostname's application, as setup writes it: the hostname and the
+  // public sites' protected paths, only the one-time PIN login, only our policy.
+  // An update keeps every setting of the app as it is (session length,
+  // cookies, CORS, deny pages) and changes only what it covers.
+  const updatedMainApp = (current: App, uris: string[]) => {
+    // GET answers with read-only fields, the old domain list and whole policy
+    // objects; the update sends links to policies and only destinations.
+    const { id: _id, aud: _aud, ...rest } = current as App & Record<string, unknown>;
+    for (const key of ['created_at', 'updated_at', 'self_hosted_domains'])
+      delete (rest as Record<string, unknown>)[key];
+    return {
+      ...rest,
+      domain: host,
+      destinations: uris.map((uri) => ({ type: 'public', uri })),
+      policies: (current.policies ?? []).map((p, i) => ({ id: p.id, precedence: i + 1 })),
+    };
+  };
+  const mainAppBody = (uris: string[]) => ({
+    name: `specreview ${host}`,
+    type: 'self_hosted',
+    domain: host,
+    destinations: uris.map((uri) => ({ type: 'public', uri })),
+    session_duration: '24h',
+    allowed_idps: [otp],
+    auto_redirect_to_identity: true,
+    policies: [{ id: access.policyId, precedence: 1 }],
+  });
+
   // The hostname's application: only the one-time PIN login, only our policy.
   const mainApp = access.appId ? await appOf(access.appId) : null;
   if (access.appId && !mainApp) refusals.push(`Access app ${access.appId} recorded in hub.json is not in the account`);
@@ -303,8 +354,11 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     mainApp &&
     firstProblem([
       [
-        !coversOnly(mainApp, host) || mainApp.type !== 'self_hosted',
-        `covers ${coveredBy(mainApp).join(', ')} (${mainApp.type}), not only ${host}`,
+        !coveredBy(mainApp).includes(host) ||
+          coveredBy(mainApp).some((d) => !ownMainPath.test(d)) ||
+          (mainApp.destinations ?? []).some((d) => d.type !== undefined && d.type !== 'public') ||
+          mainApp.type !== 'self_hosted',
+        `covers ${coveredBy(mainApp).join(', ')} (${mainApp.type}), not only ${host} and the public sites' protected paths`,
       ],
       [
         Boolean(access.aud) && mainApp.aud !== access.aud,
@@ -338,18 +392,26 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     steps.push({
       say: `Access app for ${host}: create`,
       run: async () => {
-        const app = await cf.call<{ id: string; aud: string }>('POST', `/accounts/${a}/access/apps`, {
-          name: `specreview ${host}`,
-          type: 'self_hosted',
-          domain: host,
-          session_duration: '24h',
-          allowed_idps: [otp],
-          auto_redirect_to_identity: true,
-          policies: [{ id: access.policyId, precedence: 1 }],
-        });
+        const app = await cf.call<{ id: string; aud: string }>(
+          'POST',
+          `/accounts/${a}/access/apps`,
+          mainAppBody(wantedMain),
+        );
         access.appId = app.id;
         access.aud = app.aud;
         saveHub(org);
+      },
+    });
+  // Destinations change in two steps around the public app: first grow to
+  // cover both old and new protected paths, then, once the public app no
+  // longer opens a site, shrink. A site's API is never left under a bypass.
+  const mainNow = mainApp && !mainAppProblem ? coveredBy(mainApp) : null;
+  const mainGrown = mainNow ? [...new Set([...mainNow, ...wantedMain])] : null;
+  if (mainNow && mainGrown && !sameSet(mainNow, mainGrown))
+    steps.push({
+      say: `Access app for ${host}: cover ${mainGrown.filter((d) => !mainNow.includes(d)).join(', ')}`,
+      run: async () => {
+        await cf.call('PUT', `/accounts/${a}/access/apps/${access.appId}`, updatedMainApp(mainApp!, mainGrown));
       },
     });
 
@@ -390,6 +452,131 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
           policies: [{ id: access.publishPolicyId, precedence: 1 }],
         });
         access.publishAppId = app.id;
+        saveHub(org);
+      },
+    });
+
+  // The public sites' bypass policy and app (#20). A record whose resource is
+  // gone (a delete whose answer was lost) is forgotten, not refused: both are
+  // ours by their recorded id, and recreating them is safe.
+  const publicPolicy = access.publicPolicyId ? policies.find((p) => p.id === access.publicPolicyId) : undefined;
+  const publicPolicyGone = Boolean(access.publicPolicyId) && !publicPolicy;
+  const publicPolicyOk =
+    (publicPolicy?.app_count ?? 0) <= 1 &&
+    publicPolicy?.decision === 'bypass' &&
+    sameRules(publicPolicy.include, EVERYONE) &&
+    empty(publicPolicy.require) &&
+    empty(publicPolicy.exclude);
+  if (publicPolicy && !publicPolicyOk)
+    refusals.push(
+      `Access policy ${publicPolicy.id} is not a single bypass-everyone rule used by one app; setup will not change it`,
+    );
+  // Checked when nothing is recorded and when the recorded one is gone: a
+  // same-name policy is never ours to adopt or to sit beside.
+  const publicPolicyNamed =
+    (!access.publicPolicyId || !policies.some((p) => p.id === access.publicPolicyId)) &&
+    policies.some((p) => p.name === publicPolicyName && p.id !== access.publicPolicyId);
+  if (publicPolicyNamed) refusals.push(notRecorded(`an Access policy named "${publicPolicyName}"`));
+  const publicApp = access.publicAppId ? await appOf(access.publicAppId) : null;
+  const publicAppGone = Boolean(access.publicAppId) && !publicApp;
+  const publicAppProblem =
+    publicApp &&
+    firstProblem([
+      [
+        publicApp.type !== 'self_hosted' ||
+          coveredBy(publicApp).some((d) => !ownPagePath.test(d)) ||
+          (publicApp.destinations ?? []).some((d) => d.type !== undefined && d.type !== 'public'),
+        `covers ${coveredBy(publicApp).join(', ')} (${publicApp.type}), not only public sites' pages`,
+      ],
+      [
+        !sameIds(
+          publicApp.policies?.map((p) => p.id),
+          access.publicPolicyId ? [access.publicPolicyId] : [],
+        ),
+        'has policies other than the one setup recorded',
+      ],
+    ]);
+  if (publicApp && publicAppProblem)
+    refusals.push(`Access app ${publicApp.id} ${publicAppProblem}; setup will not change it`);
+  const publicAppNamed =
+    (!access.publicAppId || !apps.some((x) => x.id === access.publicAppId)) &&
+    apps.some((x) => x.name === publicAppName && x.id !== access.publicAppId);
+  if (publicAppNamed) refusals.push(notRecorded(`an Access app named "${publicAppName}"`));
+  const forget = (key: 'publicPolicyId' | 'publicAppId', what: string) =>
+    steps.unshift({
+      say: `${what} recorded in hub.json is gone: forget it`,
+      run: async () => {
+        delete access[key];
+        saveHub(org);
+      },
+    });
+  if (publicAppGone) forget('publicAppId', `Access app ${access.publicAppId}`);
+  if (publicPolicyGone) forget('publicPolicyId', `Access policy ${access.publicPolicyId}`);
+  const hasPublicPolicy = Boolean(publicPolicy);
+  const hasPublicApp = Boolean(publicApp);
+  if (wantPublic && !hasPublicPolicy && !publicPolicyNamed)
+    steps.push({
+      say: `Access policy ${publicPolicyName}: create`,
+      run: async () => {
+        access.publicPolicyId = (
+          await cf.call<{ id: string }>('POST', `/accounts/${a}/access/policies`, {
+            name: publicPolicyName,
+            decision: 'bypass',
+            include: EVERYONE,
+          })
+        ).id;
+        saveHub(org);
+      },
+    });
+  const publicAppBody = () => ({
+    name: publicAppName,
+    type: 'self_hosted',
+    domain: pagePaths(publicRepos)[0],
+    destinations: pagePaths(publicRepos).map((uri) => ({ type: 'public', uri })),
+    policies: [{ id: access.publicPolicyId, precedence: 1 }],
+  });
+  if (wantPublic && !hasPublicApp && !publicAppNamed)
+    steps.push({
+      say: `Access bypass for ${pagePaths(publicRepos).join(', ')}: create`,
+      run: async () => {
+        access.publicAppId = (await cf.call<{ id: string }>('POST', `/accounts/${a}/access/apps`, publicAppBody())).id;
+        saveHub(org);
+      },
+    });
+  if (
+    wantPublic &&
+    publicApp &&
+    !publicAppProblem &&
+    (publicPolicyGone || !sameSet(coveredBy(publicApp), pagePaths(publicRepos)))
+  )
+    steps.push({
+      say: `Access bypass: cover exactly ${pagePaths(publicRepos).join(', ')}`,
+      run: async () => {
+        await cf.call('PUT', `/accounts/${a}/access/apps/${access.publicAppId}`, publicAppBody());
+      },
+    });
+  if (!wantPublic && publicApp && !publicAppProblem)
+    steps.push({
+      say: `Access bypass for public sites: delete (no site is public)`,
+      run: async () => {
+        await cf.call('DELETE', `/accounts/${a}/access/apps/${access.publicAppId}`);
+        delete access.publicAppId;
+        saveHub(org);
+      },
+    });
+  if (mainGrown && !sameSet(mainGrown, wantedMain))
+    steps.push({
+      say: `Access app for ${host}: stop covering ${mainGrown.filter((d) => !wantedMain.includes(d)).join(', ')}`,
+      run: async () => {
+        await cf.call('PUT', `/accounts/${a}/access/apps/${access.appId}`, updatedMainApp(mainApp!, wantedMain));
+      },
+    });
+  if (!wantPublic && publicPolicy && publicPolicyOk)
+    steps.push({
+      say: `Access policy ${publicPolicyName}: delete (no site is public)`,
+      run: async () => {
+        await cf.call('DELETE', `/accounts/${a}/access/policies/${access.publicPolicyId}`);
+        delete access.publicPolicyId;
         saveHub(org);
       },
     });

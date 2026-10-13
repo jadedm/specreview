@@ -28,6 +28,9 @@ export type Site = {
   repositoryId: string;
   workflow: string;
   environment: string | null;
+  // public: anyone may read the pages without signing in (#20); the API,
+  // history and every write still need a sign-in.
+  visibility: 'public' | 'private';
 };
 
 // The organisation's name and logo in each site's header (#33). The logo is
@@ -144,6 +147,7 @@ const SITE_KEYS = new Set([
   'repositoryId',
   'workflow',
   'environment',
+  'visibility',
 ]);
 // GitHub's numeric ids, as its tokens carry them: decimal strings.
 const GITHUB_ID = /^[1-9][0-9]{0,19}$/;
@@ -244,6 +248,9 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   }
   if (typeof site.workflow !== 'string' || !WORKFLOW.test(site.workflow)) {
     problems.push(`${at}.workflow must be .github/workflows/<file>.yml`);
+  }
+  if (site.visibility !== undefined && site.visibility !== 'public' && site.visibility !== 'private') {
+    problems.push(`${at}.visibility must be public or private`);
   }
   if (site.environment !== undefined && (typeof site.environment !== 'string' || !ENVIRONMENT.test(site.environment))) {
     problems.push(`${at}.environment must be a GitHub environment name`);
@@ -361,6 +368,7 @@ export const configOf = (text: string | undefined): HubConfig => {
       repositoryId: string;
       workflow: string;
       environment?: string;
+      visibility?: 'public' | 'private';
     }[];
   };
   const config: HubConfig = {
@@ -385,6 +393,7 @@ export const configOf = (text: string | undefined): HubConfig => {
           repositoryId: s.repositoryId,
           workflow: s.workflow,
           environment: s.environment ?? null,
+          visibility: s.visibility ?? 'private',
         },
       ]),
     ),

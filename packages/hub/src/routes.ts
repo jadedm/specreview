@@ -4,6 +4,7 @@ import type { HubConfig, Site } from './config';
 // the configured sites, spelled exactly. After it:
 //   _api/<route>                 the site's API
 //   _history/<commit>/<path>.md  an old version (team only)
+//   _signin                      sign in, then back to the site (#20)
 //   anything else                a page or asset of the published version
 // The path is split, never decoded, so %2F, %5C and other escapes cannot
 // become separators. URL parsing has already resolved . and .., so what is
@@ -12,7 +13,8 @@ import type { HubConfig, Site } from './config';
 export type Route =
   | { kind: 'api'; site: Site; path: string }
   | { kind: 'history'; site: Site; commit: string; path: string }
-  | { kind: 'page'; site: Site; path: string; directory: boolean };
+  | { kind: 'page'; site: Site; path: string; directory: boolean }
+  | { kind: 'signin'; site: Site };
 
 const COMMIT = /^[0-9a-f]{40}$/;
 const SEGMENT = /^[A-Za-z0-9._~-]+$/;
@@ -28,6 +30,8 @@ export const routeOf = (pathname: string, config: HubConfig): Route | null => {
   if (area === '_api')
     return tail.length > 0 && tail.every(plain) ? { kind: 'api', site, path: `/${tail.join('/')}` } : null;
   if (area === '_history') return historyRoute(site, tail);
+  // /<repo>/_signin exactly: behind Access, it signs in and returns (#20).
+  if (area === '_signin') return tail.length === 0 ? { kind: 'signin', site } : null;
   return pageRoute(site, rest);
 };
 

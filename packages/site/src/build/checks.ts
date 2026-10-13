@@ -12,10 +12,10 @@ export class BuildError extends Error {}
 // A bare lowercase repo name: the site's path under the hub.
 const REPO = /^[a-z0-9._-]{1,100}$/;
 // The hub's router takes only these characters in a path segment, and keeps
-// _api and _history for itself. A leading dot is refused too: dot files are
+// _api, _history and _signin for itself. A leading dot is refused too: dot files are
 // never part of a site.
 const SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/;
-const RESERVED = new Set(['_api', '_history']);
+const RESERVED = new Set(['_api', '_history', '_signin']);
 // VitePress copies docs/public/ to the site root as is. Only plain files may
 // go there: HTML, scripts or SVG would run in the site's origin.
 const PUBLIC_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'pdf', 'txt', 'csv', 'woff', 'woff2']);
@@ -116,7 +116,10 @@ const pathProblem = (file: string): string | null => {
     return 'names may use only letters, digits and . _ ~ -, not start with a dot';
   // What the hub sees: public/ files land at the site root.
   const served = parts[0] === 'public' ? parts.slice(1) : parts;
-  if (RESERVED.has(served[0])) return 'the path may not start with _api or _history';
+  // A page at the top serves at its name without .md (clean URLs): _signin.md
+  // would be /<repo>/_signin.
+  const first = served.length === 1 && served[0].endsWith('.md') ? served[0].slice(0, -3) : served[0];
+  if (RESERVED.has(first)) return 'the path may not start with _api, _history or _signin';
   if (parts[0] !== 'public') return null;
   const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
   if (served.join('/') === 'manifest.json' || !PUBLIC_TYPES.has(ext)) {

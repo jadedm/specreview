@@ -38,6 +38,8 @@ const config = {
   sites: [
     {
       repo: 'sidecar',
+      // SMOKE_PUBLIC=1 makes sidecar a public site (#20).
+      ...(process.env.SMOKE_PUBLIC === '1' ? { visibility: 'public' } : {}),
       teamDomains: ['acme.dev'],
       approvers: ['pm@acme.dev'],
       readers: ['@initech.example'],
@@ -298,6 +300,9 @@ http
 // A stand-in for Access in front of the Worker, for a browser: /__smoke/login?email=
 // sets a cookie, and every other request is forwarded with a token for that
 // email, as Access does. No cookie is a 302 to a login page, as Access does.
+// With SMOKE_PUBLIC=1, sidecar's pages are bypassed as Access bypasses them:
+// forwarded with no token, signed in or not; its _api, _history and _signin
+// stay behind the stand-in.
 const PROXY = PORT - 1;
 http
   .createServer(async (req, res) => {
@@ -311,13 +316,19 @@ http
       return res.end();
     }
     const cookie = /(?:^|;\s*)smoke_as=([^;]+)/.exec(req.headers.cookie ?? '');
-    if (!cookie) {
+    const bypassed =
+      process.env.SMOKE_PUBLIC === '1' &&
+      url.pathname.startsWith('/sidecar/') &&
+      !/^\/sidecar\/(_api|_history|_signin)(\/|$)/.test(url.pathname);
+    if (!cookie && !bypassed) {
       res.writeHead(302, { location: `https://${TEAM}/cdn-cgi/access/login` });
       return res.end();
     }
     const chunks = [];
     for await (const c of req) chunks.push(c);
-    const headers = { ...req.headers, 'cf-access-jwt-assertion': await sign(decodeURIComponent(cookie[1])) };
+    const headers = bypassed
+      ? { ...req.headers }
+      : { ...req.headers, 'cf-access-jwt-assertion': await sign(decodeURIComponent(cookie[1])) };
     const upstream = http.request(
       { host: '127.0.0.1', port: PORT, path: req.url, method: req.method, headers },
       (up) => {

@@ -38,6 +38,11 @@ const content = () => document.querySelector<HTMLElement>('.vp-doc > div');
 
 const notice = (text: string) => el('div', { class: 'rv-banner rv-error', role: 'alert' }, text);
 
+// Set by the hub in a public site's head (#20).
+const publicPage = () =>
+  typeof document !== 'undefined' &&
+  document.querySelector('meta[name="specreview-visibility"]')?.getAttribute('content') === 'public';
+
 export const SIGNED_OUT_TEXT = 'Your sign-in has expired. Reload the page to sign in again.';
 export const NETWORK_TEXT = 'Could not reach the hub. Check your connection, then reload the page.';
 export const MAY_HAVE_SAVED = 'Your change may have been saved. Reload the page to check.';
@@ -242,6 +247,18 @@ export const createReview = (api: Api, base: string) => {
     const load = ++currentLoad;
     const stale = () => load !== currentLoad;
     forgetSelection();
+    // A public page shows no panel to a visitor the hub does not know (#20):
+    // no placeholders and no notice, until `me` answers.
+    if (publicPage() && !me) {
+      clearMounts();
+      const known = await api.me().catch(() => null);
+      if (stale()) return;
+      if (!known) {
+        reserve(false);
+        return;
+      }
+      me = known;
+    }
     if (!quiet) {
       visit++;
       holding = false;
@@ -260,6 +277,15 @@ export const createReview = (api: Api, base: string) => {
       if (!quiet) {
         clearMounts();
         reserve(false);
+      }
+      // On a public page a sign-in that lapsed mid-visit is silence, as for
+      // any unknown visitor (#20); the next page asks the hub again.
+      if (publicPage() && err instanceof ApiError && err.status === 401) {
+        clearMounts();
+        reserve(false);
+        me = null;
+        pages = null;
+        return;
       }
       throw err;
     } finally {

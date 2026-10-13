@@ -69,10 +69,12 @@ export type FakeOptions = {
   ignorePage?: boolean;
 };
 
+let fakeSeq = 0;
 export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
   const requests: Request[] = [];
-  let seq = 0;
-  const id = (p: string) => `${p}-${++seq}`;
+  // Ids unique across runs, as Cloudflare's are: a resource recreated after a
+  // delete never gets the old one's id.
+  const id = (p: string) => `${p}-${++fakeSeq}`;
   const ok = (result: unknown, info?: unknown) =>
     Response.json({ success: true, errors: [], result, result_info: info });
   const refuse = (status: number, message: string, code = 1000) =>
@@ -140,7 +142,7 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
     }
     if (p === `${a}/d1/database` && method === 'POST') {
       const db = {
-        uuid: `${'d'.repeat(8)}-0000-0000-0000-${String(++seq).padStart(12, '0')}`,
+        uuid: `${'d'.repeat(8)}-0000-0000-0000-${String(++fakeSeq).padStart(12, '0')}`,
         name: String(body?.name),
       };
       state.d1.push(db);
@@ -172,6 +174,11 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
       const i = state.policies.findIndex((x) => x.id === m![1]);
       if (i < 0) return refuse(404, 'not found');
       if (method === 'PUT') state.policies[i] = { ...(body as Omit<Policy, 'id'>), id: m[1] };
+      if (method === 'DELETE') {
+        if (counted(state.policies[i]).app_count > 0) return refuse(400, 'policy is in use', 12131);
+        state.policies.splice(i, 1);
+        return ok({ id: m[1] });
+      }
       return ok(counted(state.policies[i]));
     }
     if (p === `${a}/access/apps` && method === 'GET') {
@@ -192,15 +199,57 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
         name: String(body?.name),
         allowed_idps: body?.allowed_idps as string[] | undefined,
         policies: refs as { id: string }[],
-        destinations: [{ type: 'public', uri: String(body?.domain) }],
+        destinations: (body?.destinations as { type: string; uri: string }[] | undefined) ?? [
+          { type: 'public', uri: String(body?.domain) },
+        ],
         self_hosted_domains: [String(body?.domain)],
       };
+      app.self_hosted_domains = app.destinations!.map((d) => d.uri);
       state.apps.push(app);
       return ok({ id: app.id, aud: app.aud });
     }
     if ((m = /\/access\/apps\/([^/]+)$/.exec(p))) {
-      const app = state.apps.find((x) => x.id === m![1]);
-      return app ? ok(app) : refuse(404, 'not found');
+      const i = state.apps.findIndex((x) => x.id === m![1]);
+      if (i < 0) return refuse(404, 'not found');
+      if (method === 'DELETE') {
+        state.apps.splice(i, 1);
+        return ok({ id: m[1] });
+      }
+      if (method === 'PUT') {
+        // Refused here so setup's update body is pinned to what an update
+        // takes: links to reusable policies, and destinations without the old
+        // domain list beside them.
+        const refs = (body?.policies as unknown[]) ?? [];
+        const notLinks = refs.some(
+          (r) => typeof r !== 'object' || r === null || Object.keys(r).some((k) => k !== 'id' && k !== 'precedence'),
+        );
+        if (notLinks) return refuse(400, 'policies must be references to reusable policies', 12130);
+        if (body?.self_hosted_domains !== undefined && body?.destinations !== undefined) {
+          return refuse(400, 'self_hosted_domains and destinations cannot both be set', 12132);
+        }
+        // A PUT replaces the whole app, as Cloudflare's does: what the body
+        // leaves out is gone. Only the id and audience survive.
+        const destinations = (body?.destinations as { type: string; uri: string }[] | undefined) ?? [
+          { type: 'public', uri: String(body?.domain) },
+        ];
+        state.apps[i] = {
+          ...(body as Partial<App>),
+          id: state.apps[i].id,
+          aud: state.apps[i].aud,
+          name: String(body?.name),
+          domain: String(body?.domain),
+          type: String(body?.type),
+          policies: (body?.policies as { id: string }[]) ?? [],
+          destinations,
+          self_hosted_domains: destinations.map((d) => d.uri),
+        } as App;
+      }
+      // A GET answers with whole policy objects, as Cloudflare's does.
+      const app = state.apps[i];
+      return ok({
+        ...app,
+        policies: app.policies.map((r) => ({ ...(state.policies.find((x) => x.id === r.id) ?? {}), ...r })),
+      });
     }
     if ((m = /\/workers\/scripts\/([^/]+)\/settings$/.exec(p))) {
       return state.scripts.includes(m[1]) ? ok({}) : refuse(404, 'script not found', 10007);
