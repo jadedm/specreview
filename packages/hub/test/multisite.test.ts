@@ -61,8 +61,8 @@ describe('identity is per site', () => {
 
 describe('paths', () => {
   it('M2, M18: only an exact configured site prefix is a site; nothing else reveals anything', async () => {
+    // / is the hub's own page (#43, root.test.ts).
     const bad = [
-      '/',
       '/unknown/_api/me',
       '/sidecarevil/_api/me',
       '/Sidecar/_api/me',

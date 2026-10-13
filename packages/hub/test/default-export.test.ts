@@ -21,9 +21,9 @@ const send = async (path: string, headers: Record<string, string> = {}, override
   return res;
 };
 
-it('/ is 404 with no-store', async () => {
+it('/ without a sign-in is 401 with no-store (#43)', async () => {
   const res = await send('/');
-  expect(res.status).toBe(404);
+  expect(res.status).toBe(401);
   expect(res.headers.get('cache-control')).toBe('no-store');
 });
 
