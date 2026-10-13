@@ -2,7 +2,7 @@
 // #31: loading placeholders and held actions. Case numbers are the ticket's.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Api, apiFor, ApiError, type Me, type Pages, type Thread } from './api';
-import { ANNOUNCE_DELAY_MS, LOADING_TEXT } from './skeleton';
+import { ANNOUNCE_DELAY_MS, announceLoading, LOADING_TEXT } from './skeleton';
 import { BOTTOM_MOUNT, createReview, NO_STATUS, SAVED_NOT_RELOADED, TOP_MOUNT, UNRESERVED } from './start';
 
 const HISTORY = [
@@ -166,7 +166,8 @@ describe('31: placeholders while a page loads', () => {
     );
     await createReview(apiFor('/fixture/'), '/fixture/').render('a');
     expect(document.querySelector('.rv-skel')).toBeNull();
-    expect(notice()).toBe('Something went wrong. Reload and try again.');
+    // #29: an error the hub did not explain names its status.
+    expect(notice()).toBe('Something went wrong (HTTP 502). Reload and try again.');
   });
 
   it('4: a route that is not a reviewed page leaves both mounts empty', async () => {
@@ -481,5 +482,29 @@ describe('31: the comment form', () => {
     expect(document.querySelector('.rv-form')).toBe(form);
     expect((form.querySelector('textarea') as HTMLTextAreaElement).value).toBe('a new comment');
     expect(button('Post').disabled).toBe(false);
+  });
+});
+
+describe('31: the loading announcement timer', () => {
+  it('does nothing when it fires after the page has gone (a torn-down test page)', () => {
+    vi.useFakeTimers();
+    try {
+      announceLoading();
+      vi.stubGlobal('document', undefined);
+      expect(() => vi.advanceTimersByTime(ANNOUNCE_DELAY_MS + 10)).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it('is cancelled once a load finishes, so nothing is left pending', async () => {
+    vi.useFakeTimers();
+    try {
+      await createReview(fakeApi(team), '/fixture/').render('a');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
