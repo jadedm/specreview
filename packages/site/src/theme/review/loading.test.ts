@@ -166,7 +166,8 @@ describe('31: placeholders while a page loads', () => {
     );
     await createReview(apiFor('/fixture/'), '/fixture/').render('a');
     expect(document.querySelector('.rv-skel')).toBeNull();
-    expect(notice()).toBe('Something went wrong. Reload and try again.');
+    // #29: an error the hub did not explain names its status.
+    expect(notice()).toBe('Something went wrong (HTTP 502). Reload and try again.');
   });
 
   it('4: a route that is not a reviewed page leaves both mounts empty', async () => {

@@ -1,6 +1,6 @@
 import type { HistoryEntry, Status } from '@specreview/shared';
 import type { Router } from 'vitepress';
-import { type Api, apiFor, ApiError, type Me, type PageData, type Pages, type Thread } from './api';
+import { type Api, apiFor, ApiError, type Me, NETWORK, type PageData, type Pages, type Thread } from './api';
 import { el } from './dom';
 import { commentForm, commentsBlock, statusBar, statusBoard, ticketBox } from './render';
 import { diffView, historyList, oldVersionView } from './render-history';
@@ -38,12 +38,31 @@ const content = () => document.querySelector<HTMLElement>('.vp-doc > div');
 
 const notice = (text: string) => el('div', { class: 'rv-banner rv-error', role: 'alert' }, text);
 
+export const SIGNED_OUT_TEXT = 'Your sign-in has expired. Reload the page to sign in again.';
+export const NETWORK_TEXT = 'Could not reach the hub. Check your connection, then reload the page.';
+export const MAY_HAVE_SAVED = 'Your change may have been saved. Reload the page to check.';
+export const NO_ACCESS_TEXT = "Your account cannot read this site. Ask the site's team for access.";
+
+// The reference rides along on server errors: those are the ones worth
+// finding in Cloudflare's logs.
+const withReference = (text: string, err: ApiError) =>
+  err.reference ? `${text.replace(/\.$/, '')} (${err.reference}).` : text;
+
 export const explain = (err: unknown) => {
-  if (err instanceof ApiError && err.status === 401)
-    return 'Your sign-in has expired. Reload the page to sign in again.';
-  if (err instanceof ApiError && err.message) return err.message;
+  if (!(err instanceof ApiError)) return 'Something went wrong. Reload and try again.';
+  if (err.status === 401) return SIGNED_OUT_TEXT;
+  if (err.code === NETWORK) return NETWORK_TEXT;
+  // Access refusing by policy answers with its own page, not the hub's JSON.
+  if (err.status === 403 && !err.message) return NO_ACCESS_TEXT;
+  if (err.message && err.status >= 500) return withReference(err.message, err);
+  if (err.message) return err.message;
+  if (err.reference) return `Something went wrong (${err.reference}). Reload and try again.`;
   return 'Something went wrong. Reload and try again.';
 };
+
+// A write the hub may have saved: no answer at all, or a server error, which
+// can come after the database write (a crash, a timeout at the edge).
+const outcomeUnknown = (err: unknown) => err instanceof ApiError && (err.code === NETWORK || err.status >= 500);
 
 // Each piece of the UI replaces its previous copy inside our own mount.
 const place = (id: string, node: Node, where: 'top' | 'bottom') => {
@@ -193,8 +212,21 @@ export const createReview = (api: Api, base: string) => {
       },
       (err: unknown) => {
         if (!here()) return;
-        holding = false;
         release();
+        // Saved or not is unknown: keep the write controls disabled, as for a
+        // write that saved but could not be redrawn, so nothing is posted twice.
+        if (outcomeUnknown(err)) {
+          for (const c of writeControls()) c.disabled = true;
+          const ref = err instanceof ApiError ? err.reference : '';
+          return showError(
+            new ApiError(
+              0,
+              'MAY_HAVE_SAVED',
+              ref ? MAY_HAVE_SAVED.replace('saved.', `saved (${ref}).`) : MAY_HAVE_SAVED,
+            ),
+          );
+        }
+        holding = false;
         showError(err);
       },
     );
