@@ -8,10 +8,10 @@ import { AppError } from './http';
 // person in.
 
 export type List = 'readers' | 'approvers';
-type Row = { list: List; entry: string };
+type Row = { list: List; entry: string; removedAt: number };
 
 export const pendingFor = async (env: Env, siteKey: string): Promise<Row[]> => {
-  const rows = await env.DB.prepare('SELECT list, entry FROM pending_removals WHERE site = ?')
+  const rows = await env.DB.prepare('SELECT list, entry, removed_at AS removedAt FROM pending_removals WHERE site = ?')
     .bind(siteKey)
     .all<Row>()
     .catch(() => {
@@ -37,22 +37,35 @@ export const withPending = async (env: Env, site: Site): Promise<Site> => {
   };
 };
 
+// A repeat removal always moves the time forward, even within the same
+// millisecond, so a page loaded before it cannot clear it (clearPendingAt).
 export const addPending = (env: Env, siteKey: string, list: List, entry: string, by: string) =>
   env.DB.prepare(
-    'INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET removed_by = excluded.removed_by, removed_at = excluded.removed_at',
+    'INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET removed_by = excluded.removed_by, removed_at = MAX(excluded.removed_at, pending_removals.removed_at + 1)',
   )
     .bind(siteKey, list, entry, by, Date.now())
     .run();
 
-// Clears a removal only if it is older than `ms`: an add that finds the entry
-// already listed must not undo a removal another admin's commit is still
-// carrying (#12).
-export const clearPendingOlderThan = (env: Env, siteKey: string, list: List, entry: string, ms: number) =>
-  env.DB.prepare('DELETE FROM pending_removals WHERE site = ? AND list = ? AND entry = ? AND removed_at < ?')
-    .bind(siteKey, list, entry, Date.now() - ms)
-    .run();
-
-export const clearPending = (env: Env, siteKey: string, list: List, entry: string) =>
-  env.DB.prepare('DELETE FROM pending_removals WHERE site = ? AND list = ? AND entry = ?')
+// The time of an entry's recorded removal: what an admin's action saw when it
+// began, so that it clears only that removal (#67). Undefined when there is
+// none, null when the database cannot say (then nothing is cleared).
+export const pendingAt = async (env: Env, siteKey: string, list: List, entry: string) => {
+  const row = await env.DB.prepare('SELECT removed_at FROM pending_removals WHERE site = ? AND list = ? AND entry = ?')
     .bind(siteKey, list, entry)
+    .first<{ removed_at: number }>()
+    .then((r) => r ?? undefined)
+    .catch(() => null);
+  return row === null ? null : row?.removed_at;
+};
+
+// Clears exactly the removal an admin's action saw (#67): a removal made
+// since has a later time (addPending), so it is never cleared, whatever the
+// clocks of the machines involved say. True if a row went.
+export const clearPendingAt = async (env: Env, siteKey: string, list: List, entry: string, removedAt: number) => {
+  const r = await env.DB.prepare(
+    'DELETE FROM pending_removals WHERE site = ? AND list = ? AND entry = ? AND removed_at = ?',
+  )
+    .bind(siteKey, list, entry, removedAt)
     .run();
+  return r.meta.changes > 0;
+};

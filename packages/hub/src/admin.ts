@@ -249,7 +249,7 @@ const accessFor = async (a: Admin, found: Found) => {
         return `<h2>${escapeHtml(site.repo)}</h2><p class="note">The hub cannot read its list of removals right now, so these lists cannot be changed.</p>`;
       const lists = (['readers', 'approvers'] as const).map((list) => {
         const live = site[list];
-        const refused = new Set(removed.filter((r) => r.list === list).map((r) => r.entry));
+        const refused = new Map(removed.filter((r) => r.list === list).map((r) => [r.entry, r.removedAt]));
         const committed = git[list];
         const rows = [
           // In git: live, or added and not yet deployed; refused here if a removal still stands.
@@ -263,10 +263,7 @@ const accessFor = async (a: Admin, found: Found) => {
                 : live.includes(entry)
                   ? ''
                   : 'added, deploy pending',
-              {
-                remove: true,
-                restore: refused.has(entry),
-              },
+              { remove: true, restoreAt: refused.get(entry) },
             ),
           ),
           // Deployed but gone from git: refused here, or removed in git and not yet deployed.
@@ -277,10 +274,8 @@ const accessFor = async (a: Admin, found: Found) => {
                 ? entryRow(site.repo, list, entry, 'removed, deploy pending', { addBack: true })
                 : entryRow(site.repo, list, entry, 'removed in git, deploy pending', { remove: true }),
             ),
-          // Refused here though listed nowhere any more.
-          ...[...refused]
-            .filter((entry) => !committed.includes(entry) && !live.includes(entry))
-            .map((entry) => entryRow(site.repo, list, entry, 'refused here, no longer listed', { restore: true })),
+          // A removal listed nowhere any more is not shown (#67): it lets no one
+          // in, and is kept so that a config listing them again cannot either.
         ];
         const title = list === 'readers' ? 'Readers' : 'Approvers';
         const hint =
@@ -295,18 +290,26 @@ const accessFor = async (a: Admin, found: Found) => {
   return intro + sites.join('');
 };
 
-// Add back commits the entry again; Let back in only clears a removal here.
-const entryForm = (repo: string, list: List, entry: string, action: 'add' | 'remove' | 'restore', label: string) =>
-  `<form class="inline" method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="${action}"><input type="hidden" name="entry" value="${escapeHtml(entry)}"><button class="quiet" type="submit">${label}</button></form>`;
+// Add back commits the entry again; Let back in only clears the removal shown,
+// named by its time so a newer one is not cleared (#67).
+const entryForm = (
+  repo: string,
+  list: List,
+  entry: string,
+  action: 'add' | 'remove' | 'restore',
+  label: string,
+  removedAt?: number,
+) =>
+  `<form class="inline" method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="${action}"><input type="hidden" name="entry" value="${escapeHtml(entry)}">${removedAt === undefined ? '' : `<input type="hidden" name="removed_at" value="${removedAt}">`}<button class="quiet" type="submit">${label}</button></form>`;
 
 const entryRow = (
   repo: string,
   list: List,
   entry: string,
   note: string,
-  can: { remove?: boolean; restore?: boolean; addBack?: boolean },
+  can: { remove?: boolean; restoreAt?: number; addBack?: boolean },
 ) => {
-  const buttons = `${can.addBack ? entryForm(repo, list, entry, 'add', 'Add back') : ''}${can.restore ? entryForm(repo, list, entry, 'restore', 'Let back in') : ''}${can.remove ? entryForm(repo, list, entry, 'remove', 'Remove') : ''}`;
+  const buttons = `${can.addBack ? entryForm(repo, list, entry, 'add', 'Add back') : ''}${can.restoreAt === undefined ? '' : entryForm(repo, list, entry, 'restore', 'Let back in', can.restoreAt)}${can.remove ? entryForm(repo, list, entry, 'remove', 'Remove') : ''}`;
   return `<li><span class="row"><span><span class="title">${escapeHtml(entry)}</span>${note ? `<span class="meta">${note}</span>` : ''}</span><span>${buttons}</span></span></li>`;
 };
 
@@ -316,7 +319,8 @@ const accessPost = async (a: Admin) => {
   const value = (k: string) => (form.get(k) ?? '').trim();
   const list = value('list');
   const action = value('action');
-  const change = { site: value('site'), list, action, entry: value('entry').toLowerCase() };
+  const removedAt = /^\d{1,15}$/.test(value('removed_at')) ? Number(value('removed_at')) : undefined;
+  const change = { site: value('site'), list, action, entry: value('entry').toLowerCase(), removedAt };
   const shaped =
     a.config.sites.has(change.site) &&
     (list === 'readers' || list === 'approvers') &&
@@ -324,6 +328,8 @@ const accessPost = async (a: Admin) => {
     change.entry.length > 0 &&
     change.entry.length <= 254;
   if (!shaped) return say(a, 400, 'Check the form', '<p>A site, a list and an entry are needed.</p>');
+  if (action === 'restore' && removedAt === undefined)
+    return say(a, 400, 'Check the form', '<p>Reload the admin page and try again.</p>');
   const outcome = await changeAccess(change as AccessChange, {
     config: a.config,
     env: a.env,
@@ -337,7 +343,7 @@ const accessPost = async (a: Admin) => {
         a,
         200,
         action === 'add' ? 'Added' : 'Removed',
-        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still read through ${escapeHtml(outcome.still)}.</p>` : ''}`,
+        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still read through ${escapeHtml(outcome.still)}.</p>` : ''}${outcome.kind === 'done' && outcome.refused ? `<p class="note">${outcome.refused === true ? 'An earlier removal still refuses them here; the admin page offers Let back in.' : 'The hub could not check for an earlier removal; reload the admin page to see whether one still refuses them.'}</p>` : ''}`,
       ),
     unchanged: () =>
       say(a, 200, 'Nothing to change', `<p>${escapeHtml(outcome.kind === 'unchanged' ? outcome.why : '')}.</p>`),

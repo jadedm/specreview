@@ -2,9 +2,9 @@ import { b64, caller, CONFIG_FILE, unb64 } from './add-site';
 import { problemsIn, type HubConfig } from './config';
 import type { Env } from './env';
 import type { GitHubAuth } from './github-auth';
-import { addPending, clearPending, clearPendingOlderThan, type List } from './pending';
+import { addPending, clearPendingAt, pendingAt, type List } from './pending';
 
-// Longer than any commit takes to land; see clearPendingOlderThan.
+// Longer than any commit takes to land; see the add that finds the entry already listed.
 const IN_FLIGHT_MS = 2 * 60_000;
 
 // Editing a site's readers and approvers from the admin page (#12, option A):
@@ -13,9 +13,18 @@ const IN_FLIGHT_MS = 2 * 60_000;
 // config repo's apply workflow carries it to Cloudflare's login and the hub.
 // A removal also takes effect at once through pending_removals.
 
-export type AccessChange = { site: string; list: List; action: 'add' | 'remove' | 'restore'; entry: string };
+export type AccessChange = {
+  site: string;
+  list: List;
+  action: 'add' | 'remove' | 'restore';
+  entry: string;
+  // restore only: the time of the removal the admin saw.
+  removedAt?: number;
+};
 export type Outcome =
-  | { kind: 'done'; still?: string; note?: string }
+  // refused: an earlier removal still refuses them here ('unknown' when the
+  // hub could not check), so the result must not say they are let in.
+  | { kind: 'done'; still?: string; note?: string; refused?: true | 'unknown' }
   | { kind: 'unchanged'; why: string }
   | { kind: 'refused'; status: number; why: string }
   // A removal the hub enforces but could not commit: it stands until an
@@ -84,7 +93,8 @@ const stillReads = (config: Record<string, unknown>, change: AccessChange) => {
 
 // Pending removals fail closed: a removal is recorded before anything else
 // and is only ever cleared by an admin (adding the entry back, or letting the
-// person back in), never by guessing from what GitHub seems to say.
+// person back in), never by guessing from what GitHub seems to say, and never
+// a removal made after the admin's action began (#67).
 export const changeAccess = async (
   change: AccessChange,
   ctx: { config: HubConfig; env: Env; auth: GitHubAuth; email: string },
@@ -93,9 +103,25 @@ export const changeAccess = async (
   const site = config.sites.get(change.site);
   if (!site) return { kind: 'refused', status: 400, why: 'that site is not on the hub' };
   if (change.action === 'restore') {
-    await clearPending(env, site.key, change.list, change.entry);
+    if (change.removedAt === undefined) return { kind: 'refused', status: 400, why: 'the removal to clear is missing' };
+    const cleared = await clearPendingAt(env, site.key, change.list, change.entry, change.removedAt);
+    if (!cleared)
+      return {
+        kind: 'unchanged',
+        why: `the removal of ${change.entry} changed since the page was loaded; reload the admin page`,
+      };
     return { kind: 'restored' };
   }
+  // The removal this add may clear, as it stands now; one made after this is
+  // never cleared by it.
+  const seen = change.action === 'add' ? await pendingAt(env, site.key, change.list, change.entry) : undefined;
+  const clearSeen = (olderThan = Infinity) =>
+    typeof seen === 'number' && seen < olderThan
+      ? clearPendingAt(env, site.key, change.list, change.entry, seen).catch(() => false)
+      : Promise.resolve(false);
+  // After clearing: whether an earlier removal still refuses them here.
+  const stillRefused = (cleared: boolean): true | 'unknown' | undefined =>
+    seen === null ? 'unknown' : typeof seen === 'number' && !cleared ? true : undefined;
   const configRepo = config.configRepo;
   if (!configRepo) return { kind: 'refused', status: 409, why: 'the hub does not know its config repo' };
   if (!(await auth.hasApp?.())) return { kind: 'refused', status: 409, why: 'the hub has no GitHub App' };
@@ -116,8 +142,13 @@ export const changeAccess = async (
     const has = lists[change.list].includes(change.entry);
     if (!removing && has) {
       // Already in git: an old removal no longer should keep them out.
-      await clearPendingOlderThan(env, site.key, change.list, change.entry, IN_FLIGHT_MS);
-      return { kind: 'unchanged', why: `${change.entry} is already listed; the hub lets them in` };
+      const refused = stillRefused(await clearSeen(Date.now() - IN_FLIGHT_MS));
+      const why = {
+        yes: `${change.entry} is already listed, but a recent removal still refuses them here; the admin page offers Let back in`,
+        unknown: `${change.entry} is already listed; the hub could not check for an earlier removal, so reload the admin page to see whether one still refuses them`,
+        no: `${change.entry} is already listed; the hub lets them in`,
+      }[refused === true ? 'yes' : (refused ?? 'no')];
+      return { kind: 'unchanged', why };
     }
     if (removing && !has)
       return live
@@ -139,8 +170,8 @@ export const changeAccess = async (
       author: { name: email, email },
     }).catch(() => null);
     if (res?.status === 200 || res?.status === 201) {
-      if (!removing) await clearPending(env, site.key, change.list, change.entry);
-      return { kind: 'done', still: stillReads(next.config, change) };
+      const refused = removing ? undefined : stillRefused(await clearSeen());
+      return { kind: 'done', still: stillReads(next.config, change), ...(refused && { refused }) };
     }
     if (res?.status === 409) return 'conflict';
     if (!res) return failed(502, 'GitHub gave no answer; the commit may or may not have landed, check the history');
