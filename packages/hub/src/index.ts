@@ -10,6 +10,7 @@ import { githubAuthFor } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf, pagesView } from './manifest';
 import { protectedHeaders, servePage } from './pages';
+import { withPending } from './pending';
 import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
 import { serveRoot } from './root';
@@ -170,7 +171,11 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
     return markPublic(served, true);
   }
   const email = await identify(request, config);
-  const role = roleOf(email, route.site);
+  // Removals made on the admin page count before the deploy that carries them
+  // (#12). They only take access away, so someone the config already refuses
+  // is refused without a database read.
+  const configured = roleOf(email, route.site);
+  const role = configured === 'none' ? configured : roleOf(email, await withPending(env, route.site));
   // Read access is decided before anything about the site is read: someone
   // who may not read it gets the same 403 on every path, published or not.
   if (!canRead(role)) throw new AppError(403, 'FORBIDDEN');

@@ -1,4 +1,6 @@
+import { changeAccess, listsIn, readConfig, type AccessChange, type Outcome } from './access-edit';
 import { AddSiteError, addSite, inputProblem, listBranches, type SiteInput } from './add-site';
+import { pendingFor, type List } from './pending';
 import { isRepoName, type HubConfig } from './config';
 import type { Deps } from './ctx';
 import type { Env } from './env';
@@ -156,7 +158,9 @@ const configName = (a: Admin) => a.config.configRepo?.split('/')[1];
 const candidates = async (a: Admin) => {
   const all = await reachable(a);
   if (!Array.isArray(all)) return all;
-  return all.filter((r) => !a.config.sites.has(r) && r !== configName(a) && isRepoName(r) && !r.startsWith('_'));
+  return all.filter(
+    (r) => !a.config.sites.has(r) && r !== configName(a) && isRepoName(r) && !r.startsWith('_') && !r.startsWith('.'),
+  );
 };
 
 const chooseRepo = async (a: Admin, note: string) => {
@@ -225,12 +229,149 @@ const suggest = (name: string, label: string, options: string[], hint: string) =
 const select = (name: string, label: string, options: string[], chosen: string, hint: string) =>
   `<p><label>${label}<br><select name="${name}">${options.map((o) => `<option value="${escapeHtml(o)}"${o === chosen ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select></label>${hint ? `<br><span class="note">${hint}</span>` : ''}</p>`;
 
+// Who reads and approves each site (#12): the lists as committed in the
+// config repo, which is where they live, marked against what the hub runs.
+const accessFor = async (a: Admin, found: Found) => {
+  const configRepo = a.config.configRepo;
+  if (!configRepo || (!envApp(a.env) && found.kind !== 'app')) return '';
+  const file = await within(readConfig(a.deps.github, configRepo), null, LISTS_WAIT_MS);
+  const history = file
+    ? ` <a href="https://github.com/${escapeHtml(configRepo)}/commits/${file.branch.split('/').map(encodeURIComponent).join('/')}/specreview.config.json">History</a>`
+    : '';
+  const intro = `<h2>Who reads and approves</h2><p class="note">Each change is a commit to ${escapeHtml(configRepo)}; its apply workflow carries it to the sign-in and the hub in a couple of minutes, so someone added may be refused until then. A removal takes effect here at once.${history}</p>`;
+  if (!file)
+    return `${intro}<p class="note">The hub could not read the config from GitHub, so the lists cannot be changed right now.</p>`;
+  const sites = await Promise.all(
+    [...a.config.sites.values()].map(async (site) => {
+      const git = listsIn(file.config, site.repo) ?? { readers: [], approvers: [] };
+      const removed = await pendingFor(a.env, site.key).catch(() => null);
+      if (!removed)
+        return `<h2>${escapeHtml(site.repo)}</h2><p class="note">The hub cannot read its list of removals right now, so these lists cannot be changed.</p>`;
+      const lists = (['readers', 'approvers'] as const).map((list) => {
+        const live = site[list];
+        const refused = new Set(removed.filter((r) => r.list === list).map((r) => r.entry));
+        const committed = git[list];
+        const rows = [
+          // In git: live, or added and not yet deployed; refused here if a removal still stands.
+          ...committed.map((entry) =>
+            entryRow(
+              site.repo,
+              list,
+              entry,
+              refused.has(entry)
+                ? 'refused here by an earlier removal'
+                : live.includes(entry)
+                  ? ''
+                  : 'added, deploy pending',
+              {
+                remove: true,
+                restore: refused.has(entry),
+              },
+            ),
+          ),
+          // Deployed but gone from git: refused here, or removed in git and not yet deployed.
+          ...live
+            .filter((entry) => !committed.includes(entry))
+            .map((entry) =>
+              refused.has(entry)
+                ? entryRow(site.repo, list, entry, 'removed, deploy pending', { addBack: true })
+                : entryRow(site.repo, list, entry, 'removed in git, deploy pending', { remove: true }),
+            ),
+          // Refused here though listed nowhere any more.
+          ...[...refused]
+            .filter((entry) => !committed.includes(entry) && !live.includes(entry))
+            .map((entry) => entryRow(site.repo, list, entry, 'refused here, no longer listed', { restore: true })),
+        ];
+        const title = list === 'readers' ? 'Readers' : 'Approvers';
+        const hint =
+          list === 'readers'
+            ? 'name@company.com, or @company.com for everyone there'
+            : `an email at ${site.teamDomains.join(' or ')}`;
+        return `<p><strong>${title}</strong></p><ul>${rows.join('') || '<li><span class="site"><span class="meta">None</span></span></li>'}</ul><form method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(site.repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="add"><p><label>Add ${list === 'readers' ? 'a reader' : 'an approver'}<br><input name="entry" autocomplete="off"></label><br><span class="note">${escapeHtml(hint)}</span></p><button class="quiet" type="submit">Add</button></form>`;
+      });
+      return `<h2>${escapeHtml(site.repo)}</h2>${lists.join('')}`;
+    }),
+  );
+  return intro + sites.join('');
+};
+
+// Add back commits the entry again; Let back in only clears a removal here.
+const entryForm = (repo: string, list: List, entry: string, action: 'add' | 'remove' | 'restore', label: string) =>
+  `<form class="inline" method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="${action}"><input type="hidden" name="entry" value="${escapeHtml(entry)}"><button class="quiet" type="submit">${label}</button></form>`;
+
+const entryRow = (
+  repo: string,
+  list: List,
+  entry: string,
+  note: string,
+  can: { remove?: boolean; restore?: boolean; addBack?: boolean },
+) => {
+  const buttons = `${can.addBack ? entryForm(repo, list, entry, 'add', 'Add back') : ''}${can.restore ? entryForm(repo, list, entry, 'restore', 'Let back in') : ''}${can.remove ? entryForm(repo, list, entry, 'remove', 'Remove') : ''}`;
+  return `<li><span class="row"><span><span class="title">${escapeHtml(entry)}</span>${note ? `<span class="meta">${note}</span>` : ''}</span><span>${buttons}</span></span></li>`;
+};
+
+const accessPost = async (a: Admin) => {
+  if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
+  const form = await formOf(a.request);
+  const value = (k: string) => (form.get(k) ?? '').trim();
+  const list = value('list');
+  const action = value('action');
+  const change = { site: value('site'), list, action, entry: value('entry').toLowerCase() };
+  const shaped =
+    a.config.sites.has(change.site) &&
+    (list === 'readers' || list === 'approvers') &&
+    (action === 'add' || action === 'remove' || action === 'restore') &&
+    change.entry.length > 0 &&
+    change.entry.length <= 254;
+  if (!shaped) return say(a, 400, 'Check the form', '<p>A site, a list and an entry are needed.</p>');
+  const outcome = await changeAccess(change as AccessChange, {
+    config: a.config,
+    env: a.env,
+    auth: a.deps.github,
+    email: a.email,
+  });
+  const who = `${escapeHtml(change.entry)} ${action === 'add' ? 'added to' : 'removed from'} ${escapeHtml(change.site)}'s ${list}`;
+  const answers: Record<Outcome['kind'], () => Promise<Response>> = {
+    done: () =>
+      say(
+        a,
+        200,
+        action === 'add' ? 'Added' : 'Removed',
+        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still read through ${escapeHtml(outcome.still)}.</p>` : ''}`,
+      ),
+    unchanged: () =>
+      say(a, 200, 'Nothing to change', `<p>${escapeHtml(outcome.kind === 'unchanged' ? outcome.why : '')}.</p>`),
+    refused: () =>
+      say(
+        a,
+        outcome.kind === 'refused' ? outcome.status : 400,
+        'Not changed',
+        `<p>${escapeHtml(outcome.kind === 'refused' ? outcome.why : '')}.</p>`,
+      ),
+    standing: () =>
+      say(
+        a,
+        502,
+        'Removed here, not committed',
+        `<p>The hub refuses ${escapeHtml(change.entry)} on ${escapeHtml(change.site)} from now, but the change to the config did not go through cleanly: ${escapeHtml(outcome.kind === 'standing' ? outcome.why : '')}.</p><p class="note">Check the config's history, and remove them again if the commit is not there. To undo, let them back in from the admin page.</p>`,
+      ),
+    restored: () =>
+      say(
+        a,
+        200,
+        'Let back in',
+        `<p>The hub no longer refuses ${escapeHtml(change.entry)} on ${escapeHtml(change.site)} because of an earlier removal.</p>`,
+      ),
+  };
+  return answers[outcome.kind]();
+};
+
 const home = async (a: Admin) => {
   const found = await findApp(a.env);
   return page(
     200,
     nameOf(a.config),
-    `<h1>GitHub App</h1>${await bodyFor(a, found)}${await sitesFor(a, found)}`,
+    `<h1>GitHub App</h1>${await bodyFor(a, found)}${await sitesFor(a, found)}${await accessFor(a, found)}`,
     false,
     "'self' https://github.com",
   );
@@ -401,6 +542,7 @@ const ROUTES: Record<string, Route> = {
   '/_admin/github/created': { method: 'GET', run: created },
   '/_admin/github/forget': { method: 'POST', run: forget },
   '/_admin/sites': { method: 'POST', run: addSitePost },
+  '/_admin/access': { method: 'POST', run: accessPost },
 };
 
 export const adminRoute = (pathname: string) => (Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname] : null);
