@@ -30,7 +30,14 @@ const PERMISSION: Record<Purpose, Record<string, string>> = {
   // repo; a config change and a pull request on the config repo.
   'setup-product': { contents: 'write', pull_requests: 'write', workflows: 'write' },
   'setup-config': { contents: 'write', pull_requests: 'write' },
+  // Listing a repo's branches for the add-site form (#63).
+  browse: { contents: 'read' },
 };
+
+// Lists are read to the end, 100 a page; past this many pages the form asks
+// for the name as text rather than show a list that is not whole (#63).
+export const LIST_PAGES = 20;
+const REPOS_TTL_MS = 60_000;
 
 export class AppKeyError extends Error {
   override name = 'AppKeyError';
@@ -190,8 +197,67 @@ export const appAuth = ({
     }
   };
 
+  // The installation's repos for the add-site form: a token for the whole
+  // installation holding only Metadata read.
+  // A failure is remembered briefly and one listing runs at a time, so a slow
+  // or failing GitHub is not asked again on every page load.
+  const repoLists = new Map<string, { names: string[] | 'too-many' | null; until: number }>();
+  // A listing older than this is not waited on: the request that started it
+  // may have answered and had its fetches cancelled, leaving it unsettled.
+  const listing = new Map<string, { promise: Promise<string[] | 'too-many' | null>; started: number }>();
+  const LISTING_STALE_MS = 30_000;
+  const FAILED_TTL_MS = 30_000;
+  const listRepos = async (owner: string): Promise<string[] | 'too-many'> => {
+    const found = await app(`/orgs/${owner}/installation`);
+    if (!found.ok) throw new Error(`installation lookup for ${owner} -> ${found.status}`);
+    const { id } = (await found.json()) as { id: number };
+    const minted = await app(`/app/installations/${id}/access_tokens`, {
+      method: 'POST',
+      body: JSON.stringify({ permissions: { metadata: 'read' } }),
+    });
+    if (!minted.ok) throw new Error(`token for ${owner} -> ${minted.status}`);
+    const { token } = (await minted.json()) as { token: string };
+    const names: string[] = [];
+    for (let page = 1; page <= LIST_PAGES; page++) {
+      const res = await fetch(`${API}/installation/repositories?per_page=100&page=${page}`, {
+        headers: { ...HEADERS, authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) throw new Error(`listing repos for ${owner} -> ${res.status}`);
+      const body = (await res.json()) as {
+        repositories?: { name: string; archived?: boolean; owner?: { login?: string } }[];
+      };
+      const batch = body.repositories ?? [];
+      for (const r of batch)
+        if (!r.archived && r.owner?.login?.toLowerCase() === owner) names.push(r.name.toLowerCase());
+      if (batch.length < 100) return names.sort();
+    }
+    return 'too-many';
+  };
+
   return {
     hasApp: async () => true,
+    repos: async (owner) => {
+      const known = repoLists.get(owner);
+      if (known && known.until > now()) return known.names;
+      const running = listing.get(owner);
+      if (running && now() - running.started < LISTING_STALE_MS) return running.promise;
+      const started = listRepos(owner)
+        .then((names) => {
+          repoLists.set(owner, { names, until: now() + REPOS_TTL_MS });
+          return names;
+        })
+        .catch((err: unknown) => {
+          log(`github app: could not list repos for ${owner}: ${errorText(err)}`);
+          repoLists.set(owner, { names: null, until: now() + FAILED_TTL_MS });
+          return null;
+        })
+        .finally(() => {
+          if (listing.get(owner)?.promise === started) listing.delete(owner);
+        });
+      listing.set(owner, { promise: started, started: now() });
+      return started;
+    },
     // For the admin page: whether the app is installed on the repo; null when
     // GitHub cannot be asked.
     installed: async (repo) => {

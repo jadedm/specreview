@@ -1,5 +1,5 @@
-import { AddSiteError, addSite, inputProblem, type SiteInput } from './add-site';
-import type { HubConfig } from './config';
+import { AddSiteError, addSite, inputProblem, listBranches, type SiteInput } from './add-site';
+import { isRepoName, type HubConfig } from './config';
 import type { Deps } from './ctx';
 import type { Env } from './env';
 import { forgetStoredAuth } from './github-auth';
@@ -78,8 +78,8 @@ const takeState = async (env: Env, email: string, state: string) =>
     .bind(state, email, Date.now())
     .first()) !== null;
 
-const within = <T>(p: Promise<T>, fallback: T) =>
-  Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), INSTALLED_WAIT_MS))]);
+const within = <T>(p: Promise<T>, fallback: T, wait = INSTALLED_WAIT_MS) =>
+  Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), wait))]);
 
 const ticketRepos = (config: HubConfig) => [...new Set([...config.sites.values()].map((s) => s.ticketRepo))];
 
@@ -123,7 +123,16 @@ const bodyFor = async (a: Admin, found: Found) => {
 
 // Adding a site (#57) needs the app, the repo holding the config, and the
 // commit the hub runs (for the workflow's pins).
-const sitesFor = (a: Admin, found: Found) => {
+// Listing a large organisation's repos takes a page at a time.
+const LISTS_WAIT_MS = 10_000;
+const INTRO =
+  '<h2>Add a site</h2><p>The app opens two pull requests: one adding the site to the config, one adding the docs workflow to the repo.</p>';
+
+// Adding a site (#57) needs the app, the repo holding the config, and the
+// commit the hub runs (for the workflow's pins). The form offers lists from
+// GitHub (#63) in two steps, since the page runs no script: the repo, then a
+// form with its branches. The lists only help; the post is checked as before.
+const sitesFor = async (a: Admin, found: Found) => {
   const listed = [...a.config.sites.keys()]
     .map((r) => `<li><span class="site"><span class="title">${escapeHtml(r)}</span></span></li>`)
     .join('');
@@ -135,19 +144,93 @@ const sitesFor = (a: Admin, found: Found) => {
   ].filter(Boolean);
   if (missing.length > 0)
     return `${current}<p class="note">To add a site from here, the hub needs ${missing.join(', ')}.</p>`;
-  const domain = escapeHtml(a.email.split('@')[1] ?? '');
-  return `${current}<h2>Add a site</h2><p>The app opens two pull requests: one adding the site to the config, one adding the docs workflow to the repo.</p><form method="post" action="/_admin/sites">${field('repo', 'Repo', '', 'The repo whose docs to publish, in ' + escapeHtml(a.config.org))}${field('branch', 'Branch', '', "Publishes from this branch; empty for the repo's default")}${field('docs', 'Docs folder', 'docs', '')}${field('ticketRepo', 'Ticket repo', '', 'Where its tickets are; empty for the same repo')}${field('teamDomain', 'Team domain', domain, "Everyone at this domain is the site's team")}<button type="submit">Open the pull requests</button></form>`;
+  const chosen = a.url.searchParams.get('repo');
+  return `${current}${INTRO}${chosen === null ? await chooseRepo(a, '') : await siteForm(a, chosen.trim().toLowerCase())}`;
 };
 
+// Every repo the app reaches, and those that can become a site: less sites
+// and the repo holding the config.
+const reachable = (a: Admin) =>
+  within(a.deps.github.repos?.(a.config.org) ?? Promise.resolve(null), null, LISTS_WAIT_MS);
+const configName = (a: Admin) => a.config.configRepo?.split('/')[1];
+const candidates = async (a: Admin) => {
+  const all = await reachable(a);
+  if (!Array.isArray(all)) return all;
+  return all.filter((r) => !a.config.sites.has(r) && r !== configName(a) && isRepoName(r) && !r.startsWith('_'));
+};
+
+const chooseRepo = async (a: Admin, note: string) => {
+  const repos = await candidates(a);
+  const said = note ? `<p class="note">${escapeHtml(note)}</p>` : '';
+  if (!Array.isArray(repos))
+    return (
+      said +
+      textForm(
+        a,
+        '',
+        repos === 'too-many'
+          ? 'There are too many repos to list; type the names.'
+          : 'GitHub did not list the repos in time, or could not; type the names.',
+      )
+    );
+  if (repos.length === 0)
+    return `${said}<p class="note">Every repo the app can reach is already a site. Install the app on another repo first.</p>`;
+  return `${said}<form method="get" action="/_admin/">${select('repo', 'Repo', repos, '', `The repo whose docs to publish, in ${escapeHtml(a.config.org)}`)}<button type="submit">Next</button></form>`;
+};
+
+const siteForm = async (a: Admin, repo: string) => {
+  if (!isRepoName(repo) || repo.startsWith('_')) return chooseRepo(a, 'That is not a repo name.');
+  if (a.config.sites.has(repo)) return chooseRepo(a, `${repo} is already a site.`);
+  if (repo === configName(a)) return chooseRepo(a, 'The repo holding the config cannot be a docs site.');
+  // Asked together: a slow GitHub costs one wait, not two.
+  const [branches, all] = await Promise.all([
+    within(listBranches(a.deps.github, `${a.config.org}/${repo}`), null, LISTS_WAIT_MS),
+    reachable(a),
+  ]);
+  if (branches === 'missing')
+    return chooseRepo(a, `GitHub does not show ${repo} to the app. Install the app on it, or choose another.`);
+  if (!branches) return textForm(a, repo, 'GitHub did not list the branches in time, or could not; type them.');
+  // Any repo the app reaches can hold the tickets, sites and the config repo included.
+  const ticketRepos = Array.isArray(all)
+    ? [...new Set([repo, ...all, ...[...a.config.sites.values()].map((s) => s.ticketRepo.split('/')[1])])].sort()
+    : null;
+  const branch = Array.isArray(branches.names)
+    ? select('branch', 'Branch', branches.names, branches.defaultBranch, 'Publishes from this branch')
+    : field('branch', 'Branch', branches.defaultBranch, 'Publishes from this branch');
+  const tickets = ticketRepos
+    ? select('ticketRepo', 'Ticket repo', ticketRepos, repo, 'Where its tickets are')
+    : field('ticketRepo', 'Ticket repo', repo, 'Where its tickets are');
+  return `<form method="post" action="/_admin/sites"><p><strong>${escapeHtml(repo)}</strong> <a href="/_admin/">Choose another repo</a></p><input type="hidden" name="repo" value="${escapeHtml(repo)}">${branch}${field('docs', 'Docs folder', 'docs', '')}${tickets}${suggest('teamDomain', 'Team domain', teamDomains(a), "Everyone at this domain is the site's team; pick one or type another")}<button type="submit">Open the pull requests</button></form>`;
+};
+
+// Today's form, typed: when GitHub cannot list.
+const textForm = (a: Admin, repo: string, note: string) =>
+  `<p class="note">${escapeHtml(note)}</p><form method="post" action="/_admin/sites">${field('repo', 'Repo', repo, `The repo whose docs to publish, in ${escapeHtml(a.config.org)}`)}${field('branch', 'Branch', '', "Publishes from this branch; empty for the repo's default")}${field('docs', 'Docs folder', 'docs', '')}${field('ticketRepo', 'Ticket repo', '', 'Where its tickets are; empty for the same repo')}${field('teamDomain', 'Team domain', teamDomains(a)[0], "Everyone at this domain is the site's team")}<button type="submit">Open the pull requests</button></form>`;
+
+// The admin's own domain first, then the sites' team domains.
+const teamDomains = (a: Admin) => [
+  ...new Set(
+    [a.email.split('@')[1] ?? '', ...[...a.config.sites.values()].flatMap((s) => s.teamDomains)].filter(Boolean),
+  ),
+];
+
+// Values are escaped here; labels and hints are the page's own text.
 const field = (name: string, label: string, value: string, hint: string) =>
-  `<p><label>${label}<br><input name="${name}" value="${value}" autocomplete="off"></label>${hint ? `<br><span class="note">${hint}</span>` : ''}</p>`;
+  `<p><label>${label}<br><input name="${name}" value="${escapeHtml(value)}" autocomplete="off"></label>${hint ? `<br><span class="note">${hint}</span>` : ''}</p>`;
+
+// A text box with suggestions: the known values, and any other may be typed.
+const suggest = (name: string, label: string, options: string[], hint: string) =>
+  `<p><label>${label}<br><input name="${name}" value="${escapeHtml(options[0] ?? '')}" list="${name}-options" autocomplete="off"></label><datalist id="${name}-options">${options.map((o) => `<option value="${escapeHtml(o)}">`).join('')}</datalist>${hint ? `<br><span class="note">${hint}</span>` : ''}</p>`;
+
+const select = (name: string, label: string, options: string[], chosen: string, hint: string) =>
+  `<p><label>${label}<br><select name="${name}">${options.map((o) => `<option value="${escapeHtml(o)}"${o === chosen ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select></label>${hint ? `<br><span class="note">${hint}</span>` : ''}</p>`;
 
 const home = async (a: Admin) => {
   const found = await findApp(a.env);
   return page(
     200,
     nameOf(a.config),
-    `<h1>GitHub App</h1>${await bodyFor(a, found)}${sitesFor(a, found)}`,
+    `<h1>GitHub App</h1>${await bodyFor(a, found)}${await sitesFor(a, found)}`,
     false,
     "'self' https://github.com",
   );
@@ -322,8 +405,20 @@ const ROUTES: Record<string, Route> = {
 
 export const adminRoute = (pathname: string) => (Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname] : null);
 
+// A non-admin opening the page gets a page that says why and who is signed
+// in (#62); posts and the GitHub return keep the JSON answer.
+const notAdmin = (a: Admin) =>
+  page(
+    403,
+    nameOf(a.config),
+    `<h1>Admins only</h1><p>You're signed in as ${escapeHtml(a.email)}. Only the hub's admins can use this page.</p><p class="note"><a href="/cdn-cgi/access/logout">Sign in with another email</a>.</p>`,
+    false,
+  );
+
 export const serveAdmin = async (route: Route, a: Admin): Promise<Response> => {
-  if (!a.config.admins.includes(a.email)) throw new AppError(403, 'FORBIDDEN');
+  const admin = a.config.admins.includes(a.email);
+  if (!admin && route.run === home && a.request.method === 'GET') return notAdmin(a);
+  if (!admin) throw new AppError(403, 'FORBIDDEN');
   if (a.request.method !== route.method) throw new AppError(405, 'METHOD_NOT_ALLOWED');
   return route.run(a);
 };

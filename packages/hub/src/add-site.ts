@@ -1,5 +1,6 @@
 import { isRepoName, problemsIn, type HubConfig } from './config';
 import type { Env } from './env';
+import { LIST_PAGES } from './github-app';
 import type { GitHubAuth, Purpose } from './github-auth';
 
 // Adding a site from the admin page (#57): the organisation's GitHub App opens
@@ -361,4 +362,40 @@ export const addSite = async (
     `Adds the workflow that builds \`${input.docs}/\` and publishes it to ${origin}/${input.repo}/, requested on the admin page by ${ctx.email}.\n\nMerge ${configPull} first and wait for its apply workflow to finish green, then merge this. If the docs run on the merge is refused because the hub does not know the site yet, re-run it once the hub is deployed.`,
   );
   return { config: configPull, product: productPull, made };
+};
+
+// A repo's branches for the add-site form (#63): its default and every
+// branch (paged to the end; past LIST_PAGES the form asks for text), with a
+// token for that repo holding only Contents read. 'missing' when GitHub does
+// not show the repo to the app; null when GitHub cannot be asked.
+export type Branches = { defaultBranch: string; names: string[] | 'too-many' };
+
+export const listBranches = async (auth: GitHubAuth, repo: string): Promise<Branches | 'missing' | null> => {
+  const get = async (path: string) => {
+    const token = await auth.tokenFor(repo, 'browse');
+    // No token because the app is not installed there: GitHub does not show it.
+    if (!token) return (await auth.installed?.(repo)) === false ? new Response(null, { status: 404 }) : null;
+    return fetch(`${API}/repos/${repo}${path}`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'specreview',
+      },
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => null);
+  };
+  const info = await get('');
+  if (info?.status === 404) return 'missing';
+  if (!info?.ok) return null;
+  const { default_branch: defaultBranch } = (await info.json()) as { default_branch: string };
+  const names: string[] = [];
+  for (let page = 1; page <= LIST_PAGES; page++) {
+    const res = await get(`/branches?per_page=100&page=${page}`);
+    if (!res?.ok) return null;
+    const batch = (await res.json()) as { name: string }[];
+    names.push(...batch.map((b) => b.name));
+    if (batch.length < 100) return { defaultBranch, names };
+  }
+  return { defaultBranch, names: 'too-many' };
 };

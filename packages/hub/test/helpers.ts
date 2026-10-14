@@ -334,6 +334,8 @@ type AppStub = {
   tokenLifeMs: number;
   // The permissions the installation holds; a mint asking for more is 422.
   granted: Record<string, string>;
+  // Repo names GitHub reports as archived (#63).
+  archived: Set<string>;
   // Answer the next lookups or mints with this status instead.
   failLookups: number[];
   failMints: number[];
@@ -350,9 +352,25 @@ export const appStub = (appId: string, publicKey: CryptoKey): AppStub => ({
   mints: [],
   tokenLifeMs: 60 * 60_000,
   granted: { issues: 'write', metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' },
+  archived: new Set(),
   failLookups: [],
   failMints: [],
 });
+
+// GET /installation/repositories for a whole-installation token, 100 a page
+// unless asked for fewer; archived repos listed with the flag, as GitHub does.
+const listedRepos = (app: AppStub, req: Request, url: URL) => {
+  const issued = app.issued.get(req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '');
+  if (issued?.repo !== '*') return Response.json({ message: 'Bad credentials' }, { status: 401 });
+  const all = [...app.installations.keys()].map((r) => r.split('/')[1]).sort();
+  const per = Math.min(100, Number(url.searchParams.get('per_page') ?? '30'));
+  const page = Number(url.searchParams.get('page') ?? '1');
+  const slice = all.slice((page - 1) * per, page * per);
+  return Response.json({
+    total_count: all.length,
+    repositories: slice.map((name) => ({ name, archived: app.archived.has(name), owner: { login: 'acme' } })),
+  });
+};
 
 const appVerified = async (app: AppStub, req: Request) => {
   const jwt = req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
@@ -365,6 +383,17 @@ const appVerified = async (app: AppStub, req: Request) => {
 const appResponse = async (app: AppStub, req: Request, url: URL): Promise<Response | null> => {
   const lookup = /^\/repos\/([^/]+\/[^/]+)\/installation$/.exec(url.pathname);
   const mint = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
+  // #63: the org's installation, and the repos a whole-installation token sees.
+  if (url.pathname === '/installation/repositories') return listedRepos(app, req, url);
+  const orgLookup = /^\/orgs\/([^/]+)\/installation$/.exec(url.pathname);
+  if (orgLookup) {
+    if (!(await appVerified(app, req))) return Response.json({ message: 'bad JWT' }, { status: 401 });
+    const failed = app.failLookups.shift();
+    if (failed) return new Response('failed', { status: failed });
+    return app.installations.size
+      ? Response.json({ id: [...app.installations.values()][0] })
+      : Response.json({}, { status: 404 });
+  }
   if (!lookup && !mint) return null;
   if (!(await appVerified(app, req)))
     return Response.json({ message: 'A JSON web token could not be decoded' }, { status: 401 });
@@ -382,6 +411,12 @@ const appResponse = async (app: AppStub, req: Request, url: URL): Promise<Respon
   const failed = app.failMints.shift();
   if (failed) return new Response('failed', { status: failed });
   const repos = body.repositories ?? [];
+  // No repository list: a token for the whole installation (#63).
+  if (repos.length === 0 && body.repositories === undefined) {
+    const token = `ghs_all_${crypto.randomUUID()}`;
+    app.issued.set(token, { repo: '*', permission: '', permissions: body.permissions ?? {}, installation });
+    return Response.json({ token, expires_at: new Date(Date.now() + app.tokenLifeMs).toISOString() }, { status: 201 });
+  }
   const covered = repos.length === 1 && app.installations.get(`acme/${repos[0]}`) === installation;
   if (!covered) return Response.json({ message: 'repository not in installation' }, { status: 422 });
   const rank: Record<string, number> = { read: 1, write: 2 };

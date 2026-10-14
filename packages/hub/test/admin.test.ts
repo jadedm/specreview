@@ -79,12 +79,36 @@ describe('1, 2 and 16: who and what reaches the admin page', () => {
     expect((await call('/_admin/', { raw: true, token: 'not-a-jwt' })).status).toBe(401);
   });
 
-  it('16: wrong methods are 405; /_admin and unknown paths are 404 before any sign-in', async () => {
+  it('16: wrong methods are 405; unknown paths are 404 before any sign-in', async () => {
     expect((await admin('/_admin/', { method: 'POST', headers: { origin: HOST } })).status).toBe(405);
     expect((await admin('/_admin/github/forget')).status).toBe(405);
-    for (const path of ['/_admin', '/_admin/x', '/_admin/github/']) {
+    for (const path of ['/_admin/x', '/_admin/github/', '/_adminx']) {
       expect((await call(path, { raw: true })).status).toBe(404);
     }
+  });
+
+  it('#62: /_admin without its slash redirects to the page, before any sign-in', async () => {
+    const r = await call('/_admin', { raw: true });
+    expect(r.status).toBe(308);
+    expect(r.headers.get('location')).toBe('/_admin/');
+  });
+
+  it('#62: a non-admin opening the page gets a page naming their email; posts keep the JSON answer', async () => {
+    const r = await admin('/_admin/', { email: 'dev@acme.dev' });
+    expect(r.status).toBe(403);
+    expect(r.headers.get('content-type')).toContain('text/html');
+    expect(html(r)).toContain("You're signed in as dev@acme.dev. Only the hub's admins can use this page.");
+    expect(html(r)).toContain('href="/cdn-cgi/access/logout"');
+    expect(html(r)).not.toContain('<script');
+    const posted = await admin('/_admin/github/forget', {
+      email: 'dev@acme.dev',
+      method: 'POST',
+      headers: { origin: HOST },
+    });
+    expect(posted.status).toBe(403);
+    expect(posted.headers.get('content-type')).toContain('json');
+    const back = await admin(`/_admin/github/created?code=c&state=${'a'.repeat(64)}`, { email: 'dev@acme.dev' });
+    expect(back.headers.get('content-type')).toContain('json');
   });
 });
 

@@ -88,6 +88,12 @@ const standIn = async (req: Request, repoName: string, path: string): Promise<Re
     files.set(content[1], { sha: sha(), content: body.content });
     return Response.json({}, { status: existing ? 200 : 201 });
   }
+  if (u.pathname === '/branches' && req.method === 'GET') {
+    const per = Math.min(100, Number(u.searchParams.get('per_page') ?? '30'));
+    const page = Number(u.searchParams.get('page') ?? '1');
+    const names = [...repo.refs.keys()].sort();
+    return Response.json(names.slice((page - 1) * per, page * per).map((name) => ({ name })));
+  }
   const compare = /^\/compare\/(.+)\.\.\.(.+)$/.exec(u.pathname);
   if (compare && req.method === 'GET') {
     const [base, head] = [decodeURIComponent(compare[1]), decodeURIComponent(compare[2])];
@@ -179,11 +185,12 @@ describe('1 to 3: who and when', () => {
     },
   );
 
-  it("the page shows the form with the admin's domain filled in when all is there", async () => {
+  it('the page starts the add-site form when all is there; step 2 fills in the docs folder', async () => {
     const page = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: env }));
-    expect(page).toContain('<form method="post" action="/_admin/sites">');
-    expect(page).toContain('name="teamDomain" value="acme.dev"');
-    expect(page).toContain('name="docs" value="docs"');
+    expect(page).toContain('<form method="get" action="/_admin/">');
+    const step2 = html(await call('/_admin/?repo=newdocs', { raw: true, email: ADMIN, envOverride: env }));
+    expect(step2).toContain('<form method="post" action="/_admin/sites">');
+    expect(step2).toContain('name="docs" value="docs"');
   });
 });
 
@@ -485,5 +492,121 @@ describe('the review fixes', () => {
     const res = await add(NEW);
     expect(res.status).toBe(409);
     expect(html(res)).toContain('the app could not get a token for acme/newdocs');
+  });
+});
+
+describe('#63: the form offers lists from GitHub', () => {
+  const page = async (query = '') =>
+    html(await call(`/_admin/${query}`, { raw: true, email: ADMIN, envOverride: env }));
+  const options = (htmlText: string, name: string) => {
+    const block = new RegExp(`<select name="${name}">(.*?)</select>`, 's').exec(htmlText)?.[1] ?? '';
+    return [...block.matchAll(/<option value="([^"]*)"( selected)?>/g)].map((m) => (m[2] ? `*${m[1]}` : m[1]));
+  };
+
+  it('3: step 1 lists the repos the app reaches, less sites, the config repo and archived ones; Next is a GET', async () => {
+    github.app!.installations.set('acme/oldthing', 7);
+    github.app!.archived.add('oldthing');
+    const p = await page();
+    expect(p).toContain('<form method="get" action="/_admin/">');
+    expect(options(p, 'repo')).toEqual(['newdocs']);
+  });
+
+  it('4: step 2 has the branches with the default chosen, the repo as ticket repo, and team domains', async () => {
+    const r = repos.get('acme/newdocs')!;
+    r.refs.set('develop', 'devsha');
+    const p = await page('?repo=newdocs');
+    expect(p).toContain('<input type="hidden" name="repo" value="newdocs">');
+    expect(options(p, 'branch')).toEqual(['develop', '*main']);
+    expect(options(p, 'ticketRepo')).toContain('*newdocs');
+    expect(options(p, 'ticketRepo')).toContain('sidecar');
+    // A text box with suggestions, so a new team's domain can be typed.
+    expect(p).toContain('<input name="teamDomain" value="acme.dev" list="teamDomain-options"');
+    const suggested = [
+      ...(/<datalist id="teamDomain-options">(.*?)<\/datalist>/s.exec(p)?.[1] ?? '').matchAll(/value="([^"]+)"/g),
+    ].map((m) => m[1]);
+    expect(suggested[0]).toBe('acme.dev');
+    expect(suggested).toContain('globex.dev');
+    expect(new Set(suggested).size).toBe(suggested.length);
+    // Any reachable repo can hold the tickets: sites and the config repo too.
+    expect(options(p, 'ticketRepo')).toContain('docs-hub');
+    expect(p).toContain('<form method="post" action="/_admin/sites">');
+  });
+
+  it('5: a malformed repo, or one GitHub does not show, is step 1 again with a note', async () => {
+    const bad = await page('?repo=Bad%20Name!');
+    expect(bad).toContain('That is not a repo name.');
+    expect(bad).toContain('<select name="repo">');
+    expect(calls.filter((c) => c.includes('/branches'))).toEqual([]);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const ghost = await page('?repo=ghost');
+    expect(ghost).toContain('GitHub does not show ghost to the app');
+    expect(await page('?repo=sidecar')).toContain('sidecar is already a site.');
+    expect(await page('?repo=docs-hub')).toContain('The repo holding the config cannot be a docs site.');
+  });
+
+  it("5: a repo installed after step 1 was listed still gets step 2, whatever step 1's cache holds", async () => {
+    await page();
+    github.app!.installations.set('acme/brandnew', 7);
+    repos.set('acme/brandnew', repoWith(5001, {}));
+    const p = await page('?repo=brandnew');
+    expect(options(p, 'branch')).toEqual(['*main']);
+  });
+
+  it('6: lists longer than a page are read to the end; past twenty pages the field is text with a note', async () => {
+    for (let i = 0; i < 150; i++) github.app!.installations.set(`acme/repo${String(i).padStart(3, '0')}`, 7);
+    const r = repos.get('acme/newdocs')!;
+    for (let i = 0; i < 130; i++) r.refs.set(`b${String(i).padStart(3, '0')}`, `s${i}`);
+    expect(options(await page(), 'repo')).toHaveLength(151);
+    expect(options(await page('?repo=newdocs'), 'branch')).toHaveLength(131);
+    for (let i = 150; i < 2001; i++) github.app!.installations.set(`acme/repo${String(i).padStart(4, '0')}`, 7);
+    const { forgetGitHubAppForTests } = await import('../src/github-auth');
+    forgetGitHubAppForTests();
+    const many = await page();
+    expect(many).toContain('There are too many repos to list; type the names.');
+    expect(many).toContain('<input name="repo"');
+  });
+
+  it('7: the repo list uses a whole-installation token with Metadata read only; branches a one-repo Contents read token', async () => {
+    await page('?repo=newdocs');
+    const bodies = github.app!.mints.map((m) => m.body);
+    expect(bodies).toContainEqual({ permissions: { metadata: 'read' } });
+    expect(bodies).toContainEqual({ repositories: ['newdocs'], permissions: { contents: 'read' } });
+  });
+
+  it('8: when GitHub cannot list, the form is typed, with a note', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    github.app!.failLookups = [500, 500, 500];
+    const p = await page();
+    expect(p).toContain('GitHub did not list the repos in time, or could not; type the names.');
+    expect(p).toContain('<input name="repo"');
+  });
+
+  it('9: names are escaped in options and inputs', async () => {
+    repos.get('acme/newdocs')!.refs.set('x&y', 'amp');
+    repos.get('acme/newdocs')!.refs.set('q"<b', 'odd');
+    const p = await page('?repo=newdocs');
+    expect(p).toContain('<option value="x&amp;y">x&amp;y</option>');
+    expect(p).toContain('<option value="q&quot;&lt;b">q&quot;&lt;b</option>');
+    expect(p).not.toContain('value="x&y"');
+  });
+});
+
+describe('#63 review fixes: listing', () => {
+  it('a failing listing is remembered for a while, not repeated on every page load', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Only the org's installation lookup fails, and only the first time.
+    let lookups = 0;
+    const real = spy.getMockImplementation()!;
+    spy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(new Request(input, init).url);
+      if (url.pathname === '/orgs/acme/installation' && ++lookups === 1) return new Response('down', { status: 503 });
+      return real(input, init);
+    });
+    const page = () => call('/_admin/', { raw: true, email: ADMIN, envOverride: env });
+    const [first] = await Promise.all([page(), page()]);
+    expect(html(first)).toContain('GitHub did not list the repos in time, or could not');
+    // Within 30 seconds the failure is remembered: no new lookup, still the typed form.
+    expect(html(await page())).toContain('GitHub did not list the repos in time, or could not');
+    expect(lookups).toBe(1);
   });
 });
