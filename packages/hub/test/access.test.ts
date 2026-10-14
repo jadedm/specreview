@@ -1,6 +1,6 @@
 import { env as workerEnv } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appStub, call, CONFIG, github, HOST, installFetch, reset } from './helpers';
+import { appStub, call, CONFIG, github, installFetch, reset, ADMIN_HOST } from './helpers';
 
 // Editing readers and approvers from the admin page (#12): each change is a
 // commit to the config repo (a stand-in here keeps the file and its sha), and
@@ -98,7 +98,7 @@ const change = (
     email: opts.email ?? ADMIN,
     envOverride: opts.envOverride ?? env,
     rawBody: new URLSearchParams(fields).toString(),
-    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: opts.origin ?? HOST },
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: opts.origin ?? ADMIN_HOST },
   });
 const html = (r: { body: unknown }) => r.body as unknown as string;
 const add = (list: string, entry: string, site = 'sidecar') => change({ site, list, action: 'add', entry });

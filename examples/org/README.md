@@ -15,12 +15,12 @@ The template for the private repo an organisation keeps for its specreview hub. 
 
 1. Create a private repo in the organisation's GitHub account from this template (or copy this folder into one, hidden files included: `.github/` and `.gitignore`). Until step 6, the apply workflow's runs (on this first push, or any push to `main`) fail for want of the token; that is expected.
 2. Enable Zero Trust on the Cloudflare account (dashboard: Zero Trust, then the Free plan), and create the install token (below). Keep it in a file on your laptop; it never goes into GitHub.
-3. Edit `hub.json`: `accountId` (the 32-character id on the Cloudflare dashboard) and `hostname` (where the hub will live, in a zone on that account). Leave the rest; setup writes the ids.
+3. Edit `hub.json`: `accountId` (the 32-character id on the Cloudflare dashboard), `hostname` (where the docs sites will live, in a zone on that account) and `adminHostname` (the admin page's own hostname, also in a zone on the account; a sibling such as `specs-admin.example.com` beside `specs.example.com` reads clearly). Leave the rest; setup writes the ids.
 4. Edit `specreview.config.json` for your sites and people, and set `specreview.commit` to a commit of specreview's `develop` (run.sh stops with "set specreview.commit" until you do).
 5. From a laptop, with the install token: `./run.sh setup --token-file <file> --apply` (creates the Access apps and policy, the one-time PIN login, the database and the bucket, and records their ids in `hub.json`), then `./run.sh deploy --token-file <file>`.
 6. Create the workflow's token: `./run.sh workflow-token --token-file <install token file> --out <new file>`, naming a file outside this repo (`/tmp/.cf-workflow-token`, say). It writes the new token to that file and nothing else, and prints the command that stores it as this repo's `CLOUDFLARE_API_TOKEN` Actions secret. Run that, then delete the file.
 7. Commit and push to `main`. From now on the apply workflow applies every push.
-8. Give the hub its GitHub App from the hub's admin page (`/_admin/`, for the config's `admins`; see GitHub below). Until then the hub works but shows tickets as unavailable and sets no labels.
+8. Give the hub its GitHub App from the admin page (`https://<adminHostname>/_admin/`, for the config's `admins`; see GitHub below). Until then the hub works but shows tickets as unavailable and sets no labels.
 
 If a run fails part way, fix the cause and run it again: it resumes from the ids already recorded. If the workflow could not push `hub.json` (someone changed it at the same moment), it prints the file in the run's log; copy it into the repo by hand. If an id could not be recorded at all (the run was lost while creating something), setup refuses that resource and says what to add to `hub.json` by hand.
 
@@ -50,7 +50,7 @@ Cloudflare cannot limit these permissions to the hub's own resources, so this to
 
 ## GitHub
 
-The hub talks to GitHub as a GitHub App owned by the organisation, created from the hub's admin page (`/_admin/`): it opens GitHub's form with the permissions filled in, and the hub keeps the app's key in its database. Install it on the ticket repos, this repo and the product repos (the admin page links the install page). An app made by hand works too: set its id and `.pem` key with `run.sh secret` (below). The hub mints a token per ticket repo, with Issues read for reading tickets and Issues write for labels. A hub without the app can use two fine-grained personal tokens instead (`GITHUB_READ_TOKEN` with Issues read, `GITHUB_WRITE_TOKEN` with Issues read and write); if both kinds are set, the app wins.
+The hub talks to GitHub as a GitHub App owned by the organisation, created from the hub's admin page (on `adminHostname`): it opens GitHub's form with the permissions filled in, and the hub keeps the app's key in its database. Install it on the ticket repos, this repo and the product repos (the admin page links the install page). An app made by hand works too: set its id and `.pem` key with `run.sh secret` (below). The hub mints a token per ticket repo, with Issues read for reading tickets and Issues write for labels. A hub without the app can use two fine-grained personal tokens instead (`GITHUB_READ_TOKEN` with Issues read, `GITHUB_WRITE_TOKEN` with Issues read and write); if both kinds are set, the app wins.
 
 ## Changes later
 
@@ -58,6 +58,7 @@ Edit and commit to `main`; the workflow applies it.
 
 - Readers, approvers, admins or sites: `specreview.config.json`. setup brings the Access policy to exactly what the config says, removals included.
 - The organisation's name and logo in each site's header: `"brand": { "name": "Acme", "logo": "logo.png" }` in `specreview.config.json`, with the PNG or WebP (at most 256 KB) beside it. Leave out `logo` for the name alone, or `brand` for neither.
+- The admin page lives only on `adminHostname` (#75). A hub set up before that has no admin page until `adminHostname` is added to `hub.json` and pushed: the apply run checks the name is free, creates its Access application for the admins, and deploys the second hostname. `/_admin/` on the docs hostname then points there. Removing `adminHostname` deletes its Access application and policy; then remove the hostname from the hub's Worker in the Cloudflare dashboard (Workers, the Worker, Domains), since a deploy may leave it attached. To rename it, remove it in one push and add the new name in the next.
 - Upgrading: change `specreview.commit`. Migrations only add, so the previous Worker keeps working on the newer schema.
 - Rolling back the Worker: `npx wrangler rollback --name <worker>` from a checkout, with the token in `CLOUDFLARE_API_TOKEN`. Migrations are not rolled back.
 

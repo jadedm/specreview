@@ -13,7 +13,7 @@ import { protectedHeaders, servePage } from './pages';
 import { withPending } from './pending';
 import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
-import { serveRoot } from './root';
+import { page, serveRoot } from './root';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
 import { read, unconfiguredStore } from './store';
@@ -132,10 +132,54 @@ const serveHistory = async (req: Omit<Req, 'params'>, commit: string, path: stri
   });
 };
 
+const isAdminPath = (pathname: string) => pathname === '/_admin' || pathname.startsWith('/_admin/');
+const redirect = (status: number, location: string) =>
+  new Response(null, { status, headers: { location, 'cache-control': 'no-store' } });
+
+// The admin page's own hostname (#75) serves the admin page and nothing else,
+// verified against its own Access application, so no docs site shares its
+// origin.
+const handleAdminHost = async (
+  request: Request,
+  url: URL,
+  env: Env,
+  config: HubConfig,
+  deps: Deps,
+  admin: { aud: string },
+): Promise<Response> => {
+  if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) return redirect(302, '/_admin/');
+  // The admin page's address without its slash (#62); nothing else is.
+  if (url.pathname === '/_admin') return redirect(308, '/_admin/');
+  const route = url.pathname.startsWith('/_admin/') ? adminRoute(url.pathname) : null;
+  // Unknown paths 404 before any identity check.
+  if (!route) throw new AppError(404, 'NOT_FOUND');
+  const email = await identify(request, config, admin.aud);
+  return serveAdmin(route, { request, url, env, config, email, deps });
+};
+
+// The docs hostname only points at the admin page: a GET goes to the same
+// path on the admin hostname, anything else is not here (#75).
+const adminFromDocsHost = (request: Request, url: URL, config: HubConfig) => {
+  const navigation = request.method === 'GET' || request.method === 'HEAD';
+  if (config.admin && navigation) {
+    const target = url.pathname === '/_admin' ? '/_admin/' : url.pathname;
+    return redirect(308, `https://${config.admin.hostname}${target}${url.search}`);
+  }
+  if (!navigation || (url.pathname !== '/_admin' && !adminRoute(url.pathname))) throw new AppError(404, 'NOT_FOUND');
+  return page(
+    404,
+    'Admin page',
+    "<h1>The admin page needs its own hostname</h1><p>This hub has none set up. Its administrators add <code>adminHostname</code> to the hub repo's <code>hub.json</code>; the apply workflow then creates it.</p>",
+    request.method === 'HEAD',
+  );
+};
+
 const handle = async (request: Request, env: Env, deps: Deps): Promise<Response> => {
   // Config first: an invalid config refuses everything, / included.
   const config: HubConfig = configOf(env.SPECREVIEW_CONFIG);
   const url = new URL(request.url);
+  if (config.admin && url.hostname === config.admin.hostname)
+    return handleAdminHost(request, url, env, config, deps, config.admin);
   // Publishing authenticates with GitHub's OIDC token, not Access: Access
   // bypasses exactly /_publish/* (set up at deploy) and the hub checks the
   // token itself. Repo names never start with _, so this cannot shadow a site.
@@ -149,17 +193,8 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
     return serveRoot(config, await identify(request, config), request.method, deps.store, env);
   }
-  // The admin page (#56): unknown paths 404 before any identity check, as
-  // under a site; admins only.
-  // The admin page's address without its slash (#62); nothing else is.
-  if (url.pathname === '/_admin')
-    return new Response(null, { status: 308, headers: { location: '/_admin/', 'cache-control': 'no-store' } });
-  if (url.pathname.startsWith('/_admin/')) {
-    const admin = adminRoute(url.pathname);
-    if (!admin) throw new AppError(404, 'NOT_FOUND');
-    const email = await identify(request, config);
-    return serveAdmin(admin, { request, url, env, config, email, deps });
-  }
+  // The admin page (#56) lives on its own hostname (#75).
+  if (isAdminPath(url.pathname)) return adminFromDocsHost(request, url, config);
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.
   if (!route) throw new AppError(404, 'NOT_FOUND');

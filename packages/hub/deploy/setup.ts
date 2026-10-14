@@ -32,6 +32,8 @@ type App = AppSummary & {
   policies?: { id: string }[];
   destinations?: { type?: string; uri?: string }[];
   self_hosted_domains?: string[];
+  cors_headers?: { allow_all_origins?: boolean; allowed_origins?: string[] };
+  options_preflight_bypass?: boolean;
 };
 
 // Every hostname or path an app covers: since destinations, an app protects
@@ -93,7 +95,9 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   const publishPolicyName = `specreview ${host} publish`;
 
   // The config must be sound before it decides who passes Access.
-  workerConfigOf(org, { teamDomain: 'check.cloudflareaccess.com', aud: 'check' });
+  // The admin app does not exist yet on a first run: a placeholder audience
+  // checks the rest (#75).
+  workerConfigOf(org, { teamDomain: 'check.cloudflareaccess.com', aud: 'check', adminAud: 'check-admin' });
   const include = wantedInclude(org.config);
   // Public sites (#20): their pages bypass Access; their API, history and
   // sign-in path stay on the hostname's app, which keeps its audience.
@@ -134,25 +138,29 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   const refusals: string[] = [];
   const steps: Step[] = [];
 
-  // The hostname: its zone is in this account and active, and nothing else
-  // serves it. A custom domain already on this Worker is a previous deploy.
+  // Each hostname (the docs sites', and the admin page's when set, #75): its
+  // zone is in this account and active, and nothing else serves it. A custom
+  // domain already on this Worker is a previous deploy.
   const zones = await cf.list<Zone>(`/zones?account.id=${a}`);
-  const zone = zoneCovering(zones, host);
-  if (!zone) refusals.push(`no zone in account ${a} covers ${host}`);
-  if (zone && zone.status !== 'active') refusals.push(`zone ${zone.name} is ${zone.status}, not active`);
-  if (zone) {
+  const checkHostname = async (name: string) => {
+    const zone = zoneCovering(zones, name);
+    if (!zone) refusals.push(`no zone in account ${a} covers ${name}`);
+    if (zone && zone.status !== 'active') refusals.push(`zone ${zone.name} is ${zone.status}, not active`);
+    if (!zone) return;
     const domains = await cf.call<{ hostname: string; service: string }[]>(
       'GET',
-      `/accounts/${a}/workers/domains?hostname=${host}`,
+      `/accounts/${a}/workers/domains?hostname=${name}`,
     );
-    const mine = domains.some((d) => d.hostname === host && d.service === hub.worker);
-    const other = domains.find((d) => d.hostname === host && d.service !== hub.worker);
-    if (other) refusals.push(`${host} is already the custom domain of Worker ${other.service}`);
-    const records = await cf.call<unknown[]>('GET', `/zones/${zone.id}/dns_records?name=${host}`);
+    const mine = domains.some((d) => d.hostname === name && d.service === hub.worker);
+    const other = domains.find((d) => d.hostname === name && d.service !== hub.worker);
+    if (other) refusals.push(`${name} is already the custom domain of Worker ${other.service}`);
+    const records = await cf.call<unknown[]>('GET', `/zones/${zone.id}/dns_records?name=${name}`);
     if (records.length > 0 && !mine)
-      refusals.push(`${host} already has a DNS record; remove it or pick another hostname`);
-    log(`hostname ${host}: zone ${zone.name} ${mine ? '(already served by this Worker)' : 'is free'}`);
-  }
+      refusals.push(`${name} already has a DNS record; remove it or pick another hostname`);
+    log(`hostname ${name}: zone ${zone.name} ${mine ? '(already served by this Worker)' : 'is free'}`);
+  };
+  await checkHostname(host);
+  if (hub.adminHostname) await checkHostname(hub.adminHostname);
 
   // One-time PIN login: reused when present, never changed.
   const idps = await cf.list<{ id: string; type: string }>(`/accounts/${a}/access/identity_providers`);
@@ -454,6 +462,163 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
           policies: [{ id: access.publishPolicyId, precedence: 1 }],
         });
         access.publishAppId = app.id;
+        saveHub(org);
+      },
+    });
+
+  // The admin page's hostname (#75): its own app, admins only, so the admin
+  // page shares no origin and no sign-in with the docs sites. Its policy is
+  // kept equal to the config's admins, like the main one; the app may not
+  // let other origins read it (CORS) or skip Access for preflights.
+  const adminHost = hub.adminHostname;
+  const adminPolicyName = `specreview ${adminHost ?? host} admins`;
+  const adminInclude = sortedRules(
+    ((org.config.admins as string[] | undefined) ?? []).map((email) => ({ email: { email } })),
+  );
+  const adminPolicy = access.adminPolicyId ? policies.find((p) => p.id === access.adminPolicyId) : undefined;
+  const adminApp = access.adminAppId ? await appOf(access.adminAppId) : null;
+  if (adminHost) {
+    if (access.adminPolicyId && !adminPolicy)
+      refusals.push(`Access policy ${access.adminPolicyId} recorded in hub.json is not in the account`);
+    const adminPolicyHandEdited =
+      adminPolicy &&
+      ((adminPolicy.app_count ?? 0) > 1 ||
+        adminPolicy.decision !== 'allow' ||
+        !empty(adminPolicy.require) ||
+        !empty(adminPolicy.exclude) ||
+        !onlyEmailRules(adminPolicy.include));
+    if (adminPolicyHandEdited)
+      refusals.push(
+        `Access policy ${adminPolicy.id} is not a plain allow policy of email rules used by one app; setup will not change it`,
+      );
+    if (adminPolicy && !adminPolicyHandEdited && sameRules(adminPolicy.include, adminInclude))
+      log(`Access policy ${adminPolicyName}: up to date`);
+    if (adminPolicy && !adminPolicyHandEdited && !sameRules(adminPolicy.include, adminInclude))
+      steps.push({
+        say: `Access policy ${adminPolicyName}: update`,
+        run: async () => {
+          await cf.call('PUT', `/accounts/${a}/access/policies/${adminPolicy.id}`, {
+            name: adminPolicyName,
+            decision: 'allow',
+            include: adminInclude,
+            exclude: [],
+            require: [],
+          });
+        },
+      });
+    const adminPolicyNamed = !access.adminPolicyId && policies.some((p) => p.name === adminPolicyName);
+    if (adminPolicyNamed) refusals.push(notRecorded(`an Access policy named "${adminPolicyName}"`));
+    if (!access.adminPolicyId && !adminPolicyNamed)
+      steps.push({
+        say: `Access policy ${adminPolicyName}: create`,
+        run: async () => {
+          access.adminPolicyId = (
+            await cf.call<{ id: string }>('POST', `/accounts/${a}/access/policies`, {
+              name: adminPolicyName,
+              decision: 'allow',
+              include: adminInclude,
+            })
+          ).id;
+          saveHub(org);
+        },
+      });
+
+    if (access.adminAppId && !adminApp)
+      refusals.push(`Access app ${access.adminAppId} recorded in hub.json is not in the account`);
+    const corsOpen = (app: App) =>
+      app.cors_headers?.allow_all_origins === true ||
+      (app.cors_headers?.allowed_origins ?? []).length > 0 ||
+      app.options_preflight_bypass === true;
+    const adminAppProblem =
+      adminApp &&
+      firstProblem([
+        [
+          !coversOnly(adminApp, adminHost) || adminApp.type !== 'self_hosted',
+          `covers ${coveredBy(adminApp).join(', ')} (${adminApp.type}), not only ${adminHost}`,
+        ],
+        [
+          Boolean(access.adminAud) && adminApp.aud !== access.adminAud,
+          "has a different audience from hub.json's; it was recreated or edited",
+        ],
+        [
+          !sameIds(
+            adminApp.policies?.map((p) => p.id),
+            access.adminPolicyId ? [access.adminPolicyId] : [],
+          ),
+          'has policies other than the one setup recorded',
+        ],
+        [!otp || !sameIds(adminApp.allowed_idps, otp ? [otp] : []), 'allows login methods other than the one-time PIN'],
+        [corsOpen(adminApp), 'lets other origins read it (CORS) or skips Access for preflights'],
+      ]);
+    if (adminApp && adminAppProblem)
+      refusals.push(`Access app ${adminApp.id} ${adminAppProblem}; setup will not change it`);
+    if (adminApp && !adminAppProblem) log(`Access app for ${adminHost}: exists`);
+    if (adminApp && !adminAppProblem && !access.adminAud)
+      steps.push({
+        say: `Access app for ${adminHost}: record its audience`,
+        run: async () => {
+          access.adminAud = adminApp.aud;
+          saveHub(org);
+        },
+      });
+    const adminAppNamed = !access.adminAppId && apps.some((x) => x.domain === adminHost);
+    if (adminAppNamed) refusals.push(notRecorded(`an Access app for ${adminHost}`));
+    if (!access.adminAppId && !adminAppNamed)
+      steps.push({
+        say: `Access app for ${adminHost}: create`,
+        run: async () => {
+          const app = await cf.call<{ id: string; aud: string }>('POST', `/accounts/${a}/access/apps`, {
+            name: `specreview ${adminHost}`,
+            type: 'self_hosted',
+            domain: adminHost,
+            session_duration: '24h',
+            allowed_idps: [otp],
+            auto_redirect_to_identity: true,
+            policies: [{ id: access.adminPolicyId, precedence: 1 }],
+          });
+          access.adminAppId = app.id;
+          access.adminAud = app.aud;
+          saveHub(org);
+        },
+      });
+  }
+  // No admin hostname any more: its app, then its policy, go, but only while
+  // they are still only ours (the app covering one hostname with only our
+  // policy, the policy on no other app). A record whose resource is already
+  // gone is forgotten.
+  const adminAppNotOurs =
+    adminApp &&
+    (coveredBy(adminApp).length !== 1 ||
+      adminApp.type !== 'self_hosted' ||
+      !sameIds(
+        adminApp.policies?.map((p) => p.id),
+        access.adminPolicyId ? [access.adminPolicyId] : [],
+      ));
+  const adminPolicyNotOurs = adminPolicy && ((adminPolicy.app_count ?? 0) > 1 || adminPolicy.decision !== 'allow');
+  if (!adminHost && adminAppNotOurs)
+    refusals.push(
+      `Access app ${adminApp.id} recorded as the admin hostname's covers ${coveredBy(adminApp).join(', ')} or has other policies; setup will not delete it`,
+    );
+  if (!adminHost && adminPolicyNotOurs)
+    refusals.push(
+      `Access policy ${adminPolicy.id} recorded as the admin hostname's is used by other apps; setup will not delete it`,
+    );
+  if (!adminHost && access.adminAppId)
+    steps.push({
+      say: 'Access app for the old admin hostname: delete',
+      run: async () => {
+        if (adminApp) await cf.call('DELETE', `/accounts/${a}/access/apps/${access.adminAppId}`);
+        delete access.adminAppId;
+        delete access.adminAud;
+        saveHub(org);
+      },
+    });
+  if (!adminHost && access.adminPolicyId)
+    steps.push({
+      say: 'Access policy for the old admin hostname: delete',
+      run: async () => {
+        if (adminPolicy) await cf.call('DELETE', `/accounts/${a}/access/policies/${access.adminPolicyId}`);
+        delete access.adminPolicyId;
         saveHub(org);
       },
     });

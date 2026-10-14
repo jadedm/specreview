@@ -21,12 +21,12 @@ const unauthorized = () => new AppError(401, 'UNAUTHORIZED', 'Sign in to use thi
 // this hub's application (its audience). A token for another hub, however
 // valid, is refused; so is anything when the key set is unreachable. Which
 // sites the person may read is decided afterwards, per site (roles.ts).
-export const identify = async (request: Request, config: HubConfig): Promise<string> => {
+export const identify = async (request: Request, config: HubConfig, audience = config.accessAud): Promise<string> => {
   const token = request.headers.get('cf-access-jwt-assertion');
   if (!token) throw unauthorized();
   const payload: JWTPayload | null = await jwtVerify(token, keySetFor(config.accessTeamDomain), {
     issuer: `https://${config.accessTeamDomain}`,
-    audience: config.accessAud,
+    audience,
     algorithms: ['RS256'],
   }).then(
     (r) => r.payload,

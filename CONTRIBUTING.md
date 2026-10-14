@@ -64,7 +64,7 @@ node packages/hub/scripts/smoke-server.mjs        # leave it running
 bash packages/hub/scripts/smoke.sh                # in another terminal; exits 1 on any miss
 ```
 
-The server runs the built Worker in workerd with stand-ins for Cloudflare Access and GitHub, on ports 8796 to 8799. For the admin page's readers and approvers, start it as `SMOKE_APP=1 node packages/hub/scripts/smoke-server.mjs` (fresh) and run `bash packages/hub/scripts/smoke-access.sh`.
+The server runs the built Worker in workerd with stand-ins for Cloudflare Access and GitHub, on ports 8796 to 8799. For the admin page's readers and approvers, start it as `SMOKE_APP=1 node packages/hub/scripts/smoke-server.mjs` (fresh) and run `bash packages/hub/scripts/smoke-access.sh`. For the admin page's own hostname, run `bash packages/hub/scripts/smoke-admin-host.sh`; the smoke server serves the docs sites on `docs.localhost` and the admin page on `admin.localhost`, both of which reach your machine.
 
 To look at a built site in a browser:
 

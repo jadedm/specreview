@@ -27,6 +27,8 @@ type App = {
   policies: { id: string; precedence?: number }[];
   destinations?: { type: string; uri: string }[];
   self_hosted_domains?: string[];
+  cors_headers?: { allow_all_origins?: boolean; allowed_origins?: string[] };
+  options_preflight_bypass?: boolean;
 };
 
 export type FakeState = {

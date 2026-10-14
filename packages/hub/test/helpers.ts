@@ -16,6 +16,8 @@ import { memoryStore, type SiteStore } from '../src/store';
 
 export const TEAM = 'test.cloudflareaccess.com';
 export const HOST = 'https://docs.example.com';
+// The admin page's own hostname (#75).
+export const ADMIN_HOST = 'https://admin.example.com';
 export const PAGE = 'onboarding/signup';
 export const LIVE_HASH = 'hash-live';
 export const COMMIT_OLD = 'a'.repeat(40);
@@ -30,6 +32,7 @@ export const WEB = 'web';
 export const GLOBEX = 'globex';
 export const keyOf = (repo: string) => `${ORG}/${repo}`;
 export const HUB_AUD = 'aud-hub';
+export const ADMIN_AUD = 'aud-admin';
 export const VERSION = `${'b'.repeat(40)}-1`;
 
 // GitHub ids for the publish tests (publish.test.ts).
@@ -42,6 +45,9 @@ export const CONFIG = {
   ownerId: OWNER_ID,
   accessTeamDomain: TEAM,
   accessAud: HUB_AUD,
+  hostname: 'docs.example.com',
+  adminHostname: 'admin.example.com',
+  accessAdminAud: ADMIN_AUD,
   admins: ['owner@acme.dev'],
   sites: [
     {
@@ -601,6 +607,9 @@ type CallOptions = {
   envOverride?: Partial<Env>;
   // Send the path exactly as given, without mapping /api or /_history onto a site.
   raw?: boolean;
+  // Which hostname the request goes to; admin paths go to the admin host
+  // (with its audience and origin) unless a test says otherwise (#75).
+  host?: 'docs' | 'admin';
 };
 
 // '/api/x' and '/_history/x' are site-relative; anything else is sent as is.
@@ -613,12 +622,19 @@ const pathFor = (path: string, site: string) => {
 export const call = async (path: string, opts: CallOptions = {}) => {
   const site = opts.site ?? SIDECAR;
   const headers = new Headers(opts.headers ?? {});
-  const jwt = opts.token !== undefined ? opts.token : opts.email ? await tokenFor(opts.email) : null;
+  const onAdmin = (opts.host ?? (path.startsWith('/_admin') ? 'admin' : 'docs')) === 'admin';
+  const base = onAdmin ? ADMIN_HOST : HOST;
+  const jwt =
+    opts.token !== undefined
+      ? opts.token
+      : opts.email
+        ? await token({ email: opts.email, aud: onAdmin ? ADMIN_AUD : HUB_AUD })
+        : null;
   if (jwt) headers.set('cf-access-jwt-assertion', jwt);
   const hasBody = opts.body !== undefined || opts.rawBody !== undefined;
   if (hasBody && !headers.has('content-type')) headers.set('content-type', 'application/json');
-  if (hasBody && !headers.has('origin')) headers.set('origin', HOST);
-  const request = new Request(`${HOST}${opts.raw ? path : pathFor(path, site)}`, {
+  if (hasBody && !headers.has('origin')) headers.set('origin', base);
+  const request = new Request(`${base}${opts.raw ? path : pathFor(path, site)}`, {
     method: opts.method ?? (hasBody ? 'POST' : 'GET'),
     headers,
     body: opts.rawBody ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),

@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { forgetStoredAuth } from '../src/github-auth';
 import { saveApp } from '../src/stored-app';
-import { appStub, call, github, HOST, installFetch, OWNER_ID, PAGE, reset } from './helpers';
+import { appStub, call, github, installFetch, OWNER_ID, PAGE, reset, ADMIN_HOST } from './helpers';
 
 // The admin page (#56): creating the organisation's GitHub App from the hub.
 const ADMIN = 'owner@acme.dev';
@@ -67,9 +67,9 @@ describe('1, 2 and 16: who and what reaches the admin page', () => {
       for (const path of ['/_admin/', `/_admin/github/created?code=c&state=${'a'.repeat(64)}`]) {
         expect((await admin(path, { email })).status).toBe(403);
       }
-      expect((await admin('/_admin/github/forget', { email, method: 'POST', headers: { origin: HOST } })).status).toBe(
-        403,
-      );
+      expect(
+        (await admin('/_admin/github/forget', { email, method: 'POST', headers: { origin: ADMIN_HOST } })).status,
+      ).toBe(403);
       expect(await states()).toEqual([]);
     },
   );
@@ -80,7 +80,7 @@ describe('1, 2 and 16: who and what reaches the admin page', () => {
   });
 
   it('16: wrong methods are 405; unknown paths are 404 before any sign-in', async () => {
-    expect((await admin('/_admin/', { method: 'POST', headers: { origin: HOST } })).status).toBe(405);
+    expect((await admin('/_admin/', { method: 'POST', headers: { origin: ADMIN_HOST } })).status).toBe(405);
     expect((await admin('/_admin/github/forget')).status).toBe(405);
     for (const path of ['/_admin/x', '/_admin/github/', '/_adminx']) {
       expect((await call(path, { raw: true })).status).toBe(404);
@@ -103,7 +103,7 @@ describe('1, 2 and 16: who and what reaches the admin page', () => {
     const posted = await admin('/_admin/github/forget', {
       email: 'dev@acme.dev',
       method: 'POST',
-      headers: { origin: HOST },
+      headers: { origin: ADMIN_HOST },
     });
     expect(posted.status).toBe(403);
     expect(posted.headers.get('content-type')).toContain('json');
@@ -128,9 +128,9 @@ describe('3 and 14: no app yet', () => {
     ) as Record<string, unknown>;
     expect(manifest).toEqual({
       name: 'specreview acme',
-      url: HOST,
-      hook_attributes: { url: HOST, active: false },
-      redirect_url: `${HOST}/_admin/github/created`,
+      url: ADMIN_HOST,
+      hook_attributes: { url: ADMIN_HOST, active: false },
+      redirect_url: `${ADMIN_HOST}/_admin/github/created`,
       public: false,
       default_permissions: {
         issues: 'write',
@@ -374,7 +374,7 @@ describe('18: forget', () => {
       expect((await admin('/_admin/github/forget', { method: 'POST', headers })).status).toBe(403);
     }
     expect(await storedRow()).not.toBeNull();
-    const r = await admin('/_admin/github/forget', { method: 'POST', headers: { origin: HOST } });
+    const r = await admin('/_admin/github/forget', { method: 'POST', headers: { origin: ADMIN_HOST } });
     expect(r.status).toBe(303);
     expect(await storedRow()).toBeNull();
     expect(html(await admin('/_admin/'))).toContain('settings/apps/new');
@@ -383,7 +383,7 @@ describe('18: forget', () => {
   it('after forgetting, tickets go back to the personal tokens', async () => {
     github.conversion = () => conversion();
     await finish(await startFlow());
-    await admin('/_admin/github/forget', { method: 'POST', headers: { origin: HOST } });
+    await admin('/_admin/github/forget', { method: 'POST', headers: { origin: ADMIN_HOST } });
     const r = await call(`/api/tickets?page=${encodeURIComponent(PAGE)}`, {
       email: 'dev@acme.dev',
       envOverride: keyed,

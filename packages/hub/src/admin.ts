@@ -313,6 +313,13 @@ const entryRow = (
   return `<li><span class="row"><span><span class="title">${escapeHtml(entry)}</span>${note ? `<span class="meta">${note}</span>` : ''}</span><span>${buttons}</span></span></li>`;
 };
 
+// The admin page is served only with an admin hostname, which names the docs
+// hostname too (#75); never guess it from where this request came.
+const docsHostnameOf = (a: Admin) => {
+  if (!a.config.admin) throw new AppError(404, 'NOT_FOUND');
+  return a.config.admin.docsHostname;
+};
+
 const accessPost = async (a: Admin) => {
   if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
   const form = await formOf(a.request);
@@ -405,7 +412,8 @@ const addSitePost = async (a: Admin) => {
     config: a.config,
     env: a.env,
     auth: a.deps.github,
-    origin: a.url.origin,
+    // The docs sites' origin, where the new site's workflow publishes (#75).
+    origin: `https://${docsHostnameOf(a)}`,
     email: a.email,
   }).catch((err: unknown) => {
     if (err instanceof AddSiteError) return err;
@@ -534,8 +542,7 @@ const created = async (a: Admin) => {
 };
 
 // A form on our own page: the browser sends our origin; another site's form
-// cannot. Script in a docs site on this origin could (CLAUDE.md, the shared
-// origin), as it can reach every other path here.
+// cannot, and the docs sites are another origin (#75).
 const forget = async (a: Admin) => {
   if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
   await forgetApp(a.env);

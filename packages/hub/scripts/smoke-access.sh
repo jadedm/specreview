@@ -3,6 +3,8 @@
 # `SMOKE_APP=1 node packages/hub/scripts/smoke-server.mjs`. Exits 1 on any miss.
 set -uo pipefail
 W=http://127.0.0.1:8797; C=http://127.0.0.1:8798
+# The admin page's own hostname (#75); *.localhost reaches this machine.
+A=http://admin.localhost:8797
 here="$(cd "$(dirname "$0")/.." && pwd)/.wrangler/smoke"
 bodyf=$(mktemp); trap 'rm -f "$bodyf"' EXIT
 tok() { jq -r --arg e "$1" '.[$e]' "$here/tokens.json"; }
@@ -10,8 +12,8 @@ miss=0
 check() { if [ "$2" = "$3" ]; then echo "  ok  $1 -> $2"; else echo "  MISS $1: got '$2' want '$3'"; miss=1; fi; }
 has() { if grep -q -- "$2" <<<"$3"; then echo "  ok  $1"; else echo "  MISS $1: no '$2'"; miss=1; fi; }
 hasnt() { if grep -q -- "$2" <<<"$3"; then echo "  MISS $1: found '$2'"; miss=1; else echo "  ok  $1"; fi; }
-post() { curl -s -o "$bodyf" -w '%{http_code}' -X POST -H "cf-access-jwt-assertion: $(tok "${2:-owner@acme.dev}")" -H "origin: $W" -H 'content-type: application/x-www-form-urlencoded' --data "$1" "$W/_admin/access"; }
-page() { curl -s -H "cf-access-jwt-assertion: $(tok owner@acme.dev)" "$W/_admin/"; }
+post() { curl -s -o "$bodyf" -w '%{http_code}' -X POST -H "cf-access-jwt-assertion: $(tok "admin:${2:-owner@acme.dev}")" -H "origin: $A" -H 'content-type: application/x-www-form-urlencoded' --data "$1" "$A/_admin/access"; }
+page() { curl -s -H "cf-access-jwt-assertion: $(tok admin:owner@acme.dev)" "$A/_admin/"; }
 role() { curl -s -H "cf-access-jwt-assertion: $(tok "$1")" "$W/sidecar/_api/me" | jq -r .role; }
 body() { cat "$bodyf"; }
 

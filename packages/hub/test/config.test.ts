@@ -274,3 +274,40 @@ describe('14 (#57): configRepo', () => {
     expect(configOf(JSON.stringify(CONFIG)).configRepo).toBeNull();
   });
 });
+
+describe('#75: the admin hostname', () => {
+  const without = () => {
+    const { hostname: _h, adminHostname: _a, accessAdminAud: _d, ...rest } = valid();
+    return rest;
+  };
+  it('is optional, and the three keys go together', () => {
+    expect(problemsIn(without())).toEqual([]);
+    for (const key of ['hostname', 'adminHostname', 'accessAdminAud'] as const) {
+      const c = valid() as Record<string, unknown>;
+      delete c[key];
+      expect(problemsIn(c), key).toEqual(['hostname, adminHostname and accessAdminAud go together']);
+    }
+  });
+  it.each([
+    [{ adminHostname: 'docs.example.com' }, "adminHostname must differ from the docs sites' hostname"],
+    [{ adminHostname: 'Admin.Example.com' }, 'adminHostname must be a bare lowercase hostname'],
+    [{ adminHostname: 'https://admin.example.com' }, 'adminHostname must be a bare lowercase hostname'],
+    [{ hostname: 'docs.example.com/x' }, 'hostname must be a bare lowercase hostname'],
+    [
+      { accessAdminAud: 'aud-hub' },
+      "accessAdminAud must be the admin hostname's own Access application, not the hub's",
+    ],
+    [{ accessAdminAud: 'has space' }, 'accessAdminAud is malformed'],
+  ])('%o is refused', (patch, problem) => {
+    expect(problemsIn({ ...valid(), ...patch })).toEqual([problem]);
+  });
+  it('configOf exposes it, or null without it', async () => {
+    const { configOf } = await import('../src/config');
+    expect(configOf(JSON.stringify(CONFIG)).admin).toEqual({
+      hostname: 'admin.example.com',
+      aud: 'aud-admin',
+      docsHostname: 'docs.example.com',
+    });
+    expect(configOf(JSON.stringify(without())).admin).toBeNull();
+  });
+});
