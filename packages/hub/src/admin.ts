@@ -1,8 +1,9 @@
+import { AddSiteError, addSite, inputProblem, type SiteInput } from './add-site';
 import type { HubConfig } from './config';
 import type { Deps } from './ctx';
 import type { Env } from './env';
 import { forgetStoredAuth } from './github-auth';
-import { AppError } from './http';
+import { AppError, readLimited } from './http';
 import { escapeHtml, page } from './root';
 import { seal } from './seal';
 import { findApp, forgetApp, saveApp, type Found } from './stored-app';
@@ -40,8 +41,15 @@ export const manifestFor = (config: HubConfig, origin: string) => ({
   hook_attributes: { url: origin, active: false },
   redirect_url: `${origin}/_admin/github/created`,
   public: false,
-  // What the hub uses today; adding sites (#57) asks for more when it needs it.
-  default_permissions: { issues: 'write', metadata: 'read' },
+  // Tickets and labels (Issues); adding a site opens pull requests that add a
+  // workflow and change the config (#57).
+  default_permissions: {
+    issues: 'write',
+    metadata: 'read',
+    contents: 'write',
+    pull_requests: 'write',
+    workflows: 'write',
+  },
   default_events: [],
 });
 
@@ -113,14 +121,80 @@ const bodyFor = async (a: Admin, found: Found) => {
   return createForm(a);
 };
 
-const home = async (a: Admin) =>
-  page(
+// Adding a site (#57) needs the app, the repo holding the config, and the
+// commit the hub runs (for the workflow's pins).
+const sitesFor = (a: Admin, found: Found) => {
+  const listed = [...a.config.sites.keys()]
+    .map((r) => `<li><span class="site"><span class="title">${escapeHtml(r)}</span></span></li>`)
+    .join('');
+  const current = `<h2>Sites</h2><ul>${listed}</ul>`;
+  const missing = [
+    !envApp(a.env) && found.kind !== 'app' && 'a GitHub App (above)',
+    !a.config.configRepo && '<code>configRepo</code> in the config (the repo holding it)',
+    !a.env.SPECREVIEW_COMMIT && 'a real commit in <code>specreview.commit</code>, then a deploy',
+  ].filter(Boolean);
+  if (missing.length > 0)
+    return `${current}<p class="note">To add a site from here, the hub needs ${missing.join(', ')}.</p>`;
+  const domain = escapeHtml(a.email.split('@')[1] ?? '');
+  return `${current}<h2>Add a site</h2><p>The app opens two pull requests: one adding the site to the config, one adding the docs workflow to the repo.</p><form method="post" action="/_admin/sites">${field('repo', 'Repo', '', 'The repo whose docs to publish, in ' + escapeHtml(a.config.org))}${field('branch', 'Branch', '', "Publishes from this branch; empty for the repo's default")}${field('docs', 'Docs folder', 'docs', '')}${field('ticketRepo', 'Ticket repo', '', 'Where its tickets are; empty for the same repo')}${field('teamDomain', 'Team domain', domain, "Everyone at this domain is the site's team")}<button type="submit">Open the pull requests</button></form>`;
+};
+
+const field = (name: string, label: string, value: string, hint: string) =>
+  `<p><label>${label}<br><input name="${name}" value="${value}" autocomplete="off"></label>${hint ? `<br><span class="note">${hint}</span>` : ''}</p>`;
+
+const home = async (a: Admin) => {
+  const found = await findApp(a.env);
+  return page(
     200,
     nameOf(a.config),
-    `<h1>GitHub App</h1>${await bodyFor(a, await findApp(a.env))}`,
+    `<h1>GitHub App</h1>${await bodyFor(a, found)}${sitesFor(a, found)}`,
     false,
     "'self' https://github.com",
   );
+};
+
+// A small form: counted as it arrives, so a large body is never held.
+const MAX_FORM = 4096;
+const formOf = async (request: Request) => new URLSearchParams(await readLimited(request, MAX_FORM));
+
+const addSitePost = async (a: Admin) => {
+  if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
+  const form = await formOf(a.request);
+  const value = (k: string) => (form.get(k) ?? '').trim();
+  const repo = value('repo').toLowerCase();
+  const input: SiteInput = {
+    repo,
+    branch: value('branch'),
+    docs: value('docs') || 'docs',
+    ticketRepo: value('ticketRepo').toLowerCase() || repo,
+    teamDomain: value('teamDomain').toLowerCase(),
+  };
+  const problem = inputProblem(input, a.config);
+  if (problem) return say(a, 400, 'Check the form', `<p>${escapeHtml(problem)}.</p>`);
+  const added = await addSite(input, {
+    config: a.config,
+    env: a.env,
+    auth: a.deps.github,
+    origin: a.url.origin,
+    email: a.email,
+  }).catch((err: unknown) => {
+    if (err instanceof AddSiteError) return err;
+    throw err;
+  });
+  if (added instanceof AddSiteError) {
+    const made = added.made.length
+      ? `<p>Made before it stopped:</p><ul>${added.made.map((m) => `<li><span class="site"><span class="title">${escapeHtml(m.what)}</span>${m.url ? `<span class="meta"><a href="${escapeHtml(m.url)}">${escapeHtml(m.url)}</a></span>` : ''}</span></li>`).join('')}</ul><p class="note">Fix the cause and add the site again: the branch and any open pull request are reused.</p>`
+      : '';
+    return say(a, added.status, 'The site was not added', `<p>${escapeHtml(added.message)}.</p>${made}`);
+  }
+  const link = (u: string) => `<a href="${escapeHtml(u)}">${escapeHtml(u)}</a>`;
+  return say(
+    a,
+    200,
+    `Pull requests opened for ${input.repo}`,
+    `<ol><li>Merge ${link(added.config)} and wait for the apply workflow to finish green.</li><li>Then merge ${link(added.product)}. Its push publishes the site at <a href="/${escapeHtml(input.repo)}/">/${escapeHtml(input.repo)}/</a>.</li></ol><p class="note">If the docs run is refused because the hub did not know the site yet, re-run it once the hub is deployed.</p>`,
+  );
+};
 
 type Conversion = {
   id?: unknown;
@@ -243,6 +317,7 @@ const ROUTES: Record<string, Route> = {
   '/_admin/': { method: 'GET', run: home },
   '/_admin/github/created': { method: 'GET', run: created },
   '/_admin/github/forget': { method: 'POST', run: forget },
+  '/_admin/sites': { method: 'POST', run: addSitePost },
 };
 
 export const adminRoute = (pathname: string) => (Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname] : null);

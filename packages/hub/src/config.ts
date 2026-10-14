@@ -46,6 +46,9 @@ export type HubConfig = {
   admins: string[];
   // GitHub's numeric id of the org: publish tokens must carry it.
   ownerId: string;
+  // The repo holding this config (#57), `<org>/<name>`; the admin page opens
+  // pull requests on it. Null when the config does not name it.
+  configRepo: string | null;
   sites: Map<string, Site>;
 };
 
@@ -130,6 +133,7 @@ const TOP_KEYS = new Set([
   'admins',
   'teamLabel',
   'brand',
+  'configRepo',
   'sites',
 ]);
 const BRAND_KEYS = new Set(['name', 'logo']);
@@ -300,6 +304,8 @@ export const problemsIn = (raw: unknown): string[] => {
   // A misspelt key would silently drop whatever it was meant to restrict.
   for (const key of Object.keys(cfg)) if (!TOP_KEYS.has(key)) problems.push(`unknown key ${key}`);
   if (typeof cfg.org !== 'string' || !isOwner(cfg.org)) problems.push('org must be a lowercase GitHub owner name');
+  if (cfg.configRepo !== undefined && (typeof cfg.configRepo !== 'string' || !isRepoName(cfg.configRepo)))
+    problems.push('configRepo must be the bare lowercase name of the repo holding this config');
   if (typeof cfg.ownerId !== 'string' || !GITHUB_ID.test(cfg.ownerId)) {
     problems.push("ownerId must be GitHub's numeric id of the org, as a string");
   }
@@ -355,6 +361,7 @@ export const configOf = (text: string | undefined): HubConfig => {
     accessAud: string;
     admins: string[];
     ownerId: string;
+    configRepo?: string;
     teamLabel?: string;
     brand?: { name: string; logo?: { key: string; type: 'image/png' | 'image/webp' } };
     sites: {
@@ -378,6 +385,7 @@ export const configOf = (text: string | undefined): HubConfig => {
     accessAud: cfg.accessAud,
     admins: cfg.admins,
     ownerId: cfg.ownerId,
+    configRepo: cfg.configRepo ? `${cfg.org}/${cfg.configRepo}` : null,
     sites: new Map(
       cfg.sites.map((s) => [
         s.repo,

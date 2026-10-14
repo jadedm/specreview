@@ -38,6 +38,11 @@ const STYLE = [
   '.quiet{color:#1f1f1f;background:#fff;border:1px solid #c4c4c4}',
   '.quiet:hover{background:#f6f6f6}',
   'h2{font-size:18px;font-weight:600;margin:32px 0 8px}',
+  'input{font:inherit;font-size:15px;color:#1f1f1f;background:#fff;border:1px solid #c4c4c4;border-radius:6px;padding:8px 10px;width:100%;max-width:420px;margin-top:4px}',
+  'input:focus-visible{outline:2px solid #1f1f1f;outline-offset:2px}',
+  'label{font-weight:600;font-size:15px}',
+  'ol{padding-left:20px}',
+  'code{font-size:14px}',
   '@media (max-width:640px){.bar{padding:0 16px}main{margin:32px auto;padding:0 16px}h1{font-size:24px}}',
 ].join('');
 

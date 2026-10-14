@@ -34,16 +34,16 @@ const tooLarge = () => new AppError(413, 'BODY_TOO_LARGE');
 
 // Stops reading once the body passes the limit, rather than buffering
 // whatever a client sends and measuring it afterwards.
-const readLimited = async (request: Request): Promise<string> => {
+export const readLimited = async (request: Request, limit = MAX_BODY_BYTES): Promise<string> => {
   const declared = Number(request.headers.get('content-length') ?? '0');
-  if (declared > MAX_BODY_BYTES) throw tooLarge();
+  if (declared > limit) throw tooLarge();
   if (!request.body) return '';
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   for (let next = await reader.read(); !next.done; next = await reader.read()) {
     size += next.value.byteLength;
-    if (size > MAX_BODY_BYTES) {
+    if (size > limit) {
       await reader.cancel();
       throw tooLarge();
     }

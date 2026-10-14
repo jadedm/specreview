@@ -303,7 +303,11 @@ export const github = {
   // codes asked for.
   conversion: null as ((code: string) => Response) | null,
   conversions: [] as string[],
+  // Answers repo calls the stand-in above does not (#57: repos, branches,
+  // files, pull requests); null lets them through.
+  repoApi: null as ((req: Request, repo: string, path: string) => Promise<Response | null>) | null,
   reset() {
+    this.repoApi = null;
     this.app = null;
     this.conversion = null;
     this.conversions = [];
@@ -318,7 +322,7 @@ export const github = {
   },
 };
 
-type Issued = { repo: string; permission: string; installation: number };
+type Issued = { repo: string; permission: string; permissions: Record<string, string>; installation: number };
 type AppStub = {
   appId: string;
   publicKey: CryptoKey;
@@ -328,6 +332,8 @@ type AppStub = {
   // Each mint's request body, in order, and the iat of the JWT that asked.
   mints: { installation: number; body: unknown; iat?: number }[];
   tokenLifeMs: number;
+  // The permissions the installation holds; a mint asking for more is 422.
+  granted: Record<string, string>;
   // Answer the next lookups or mints with this status instead.
   failLookups: number[];
   failMints: number[];
@@ -343,6 +349,7 @@ export const appStub = (appId: string, publicKey: CryptoKey): AppStub => ({
   issued: new Map(),
   mints: [],
   tokenLifeMs: 60 * 60_000,
+  granted: { issues: 'write', metadata: 'read', contents: 'write', pull_requests: 'write', workflows: 'write' },
   failLookups: [],
   failMints: [],
 });
@@ -377,8 +384,20 @@ const appResponse = async (app: AppStub, req: Request, url: URL): Promise<Respon
   const repos = body.repositories ?? [];
   const covered = repos.length === 1 && app.installations.get(`acme/${repos[0]}`) === installation;
   if (!covered) return Response.json({ message: 'repository not in installation' }, { status: 422 });
+  const rank: Record<string, number> = { read: 1, write: 2 };
+  const beyond = Object.entries(body.permissions ?? {}).some(([k, v]) => (rank[app.granted[k]] ?? 0) < (rank[v] ?? 9));
+  if (beyond)
+    return Response.json(
+      { message: 'The permissions requested are not granted to this installation.' },
+      { status: 422 },
+    );
   const token = `ghs_${crypto.randomUUID()}`;
-  app.issued.set(token, { repo: `acme/${repos[0]}`, permission: body.permissions?.issues ?? '', installation });
+  app.issued.set(token, {
+    repo: `acme/${repos[0]}`,
+    permission: body.permissions?.issues ?? '',
+    permissions: body.permissions ?? {},
+    installation,
+  });
   return Response.json({ token, expires_at: new Date(Date.now() + app.tokenLifeMs).toISOString() }, { status: 201 });
 };
 
@@ -388,9 +407,23 @@ const appRefusal = (app: AppStub, req: Request, repo: string): Response | null =
   const issued = app.issued.get(token);
   if (!issued) return Response.json({ message: 'Bad credentials' }, { status: 401 });
   if (issued.repo !== repo) return Response.json({ message: 'Not Found' }, { status: 404 });
-  if (req.method !== 'GET' && issued.permission !== 'write')
+  const needs = permissionFor(req.method, new URL(req.url).pathname.replace(/^\/repos\/[^/]+\/[^/]+/, ''));
+  if (
+    needs.some((p) => issued.permissions[p] !== 'write' && !(req.method === 'GET' && issued.permissions[p] === 'read'))
+  )
     return Response.json({ message: 'Resource not accessible by integration' }, { status: 403 });
   return null;
+};
+
+// What GitHub asks of a token, per path: Issues for tickets and labels;
+// Contents for files and branches, plus Workflows for a workflow file; Pull
+// requests for pulls.
+const permissionFor = (method: string, path: string): string[] => {
+  if (path.startsWith('/issues') || path.startsWith('/labels')) return ['issues'];
+  if (path.startsWith('/pulls')) return ['pull_requests'];
+  if (method === 'PUT' && path.startsWith('/contents/.github/workflows/')) return ['contents', 'workflows'];
+  if (path === '' || path.startsWith('/installation')) return [];
+  return ['contents'];
 };
 
 const githubResponse = async (req: Request, url: URL): Promise<Response> => {
@@ -404,11 +437,14 @@ const githubResponse = async (req: Request, url: URL): Promise<Response> => {
   }
   const fromApp = github.app && (await appResponse(github.app, req, url));
   if (fromApp) return fromApp;
-  const scoped = /^\/repos\/([^/]+\/[^/]+)(\/.*)$/.exec(url.pathname);
-  const answered = scoped && github.answer?.(req.method, scoped[1], `${scoped[2]}${url.search}`);
+  const scoped = /^\/repos\/([^/]+\/[^/]+)(\/.*)?$/.exec(url.pathname);
+  const answered = scoped && github.answer?.(req.method, scoped[1], `${scoped[2] ?? ''}${url.search}`);
   if (answered) return answered;
   const refused = scoped && github.app && appRefusal(github.app, req, scoped[1]);
   if (refused) return refused;
+  const fromRepoApi =
+    scoped && github.repoApi && (await github.repoApi(req, scoped[1], `${scoped[2] ?? ''}${url.search}`));
+  if (fromRepoApi) return fromRepoApi;
   const def = /^\/repos\/([^/]+\/[^/]+)\/labels(?:\/(.+))?$/.exec(url.pathname);
   if (def) {
     if (github.down || github.downRepos.has(def[1]) || github.labelsMode === 'down') {

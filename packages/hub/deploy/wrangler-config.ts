@@ -77,6 +77,6 @@ export const wranglerConfig = (org: Org, hubDir = HUB_DIR, logo?: Logo | null) =
     ],
     r2_buckets: [{ binding: 'SITES', bucket_name: hub.bucket.name }],
     triggers,
-    vars: { SPECREVIEW_CONFIG: hubConfig(org, logo) },
+    vars: { SPECREVIEW_CONFIG: hubConfig(org, logo), ...(org.commit ? { SPECREVIEW_COMMIT: org.commit } : {}) },
   };
 };

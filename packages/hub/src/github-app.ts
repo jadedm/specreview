@@ -26,6 +26,10 @@ const MISSING_TTL_MS = 60_000;
 const PERMISSION: Record<Purpose, Record<string, string>> = {
   read: { issues: 'read' },
   write: { issues: 'write' },
+  // Adding a site (#57): a workflow file and a pull request on the product
+  // repo; a config change and a pull request on the config repo.
+  'setup-product': { contents: 'write', pull_requests: 'write', workflows: 'write' },
+  'setup-config': { contents: 'write', pull_requests: 'write' },
 };
 
 export class AppKeyError extends Error {
@@ -187,6 +191,7 @@ export const appAuth = ({
   };
 
   return {
+    hasApp: async () => true,
     // For the admin page: whether the app is installed on the repo; null when
     // GitHub cannot be asked.
     installed: async (repo) => {
