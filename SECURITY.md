@@ -12,7 +12,9 @@ Anyone who can push to a site's configured branch is trusted with the whole hub 
 
 The config's admins are trusted with the hub: the admin page lets them create and forget the organisation's GitHub App, add sites, and change who reads and approves, through commits and pull requests the app makes. Because sites share the hub's origin, script in a site (put there by someone trusted under the paragraph above) can act on the admin page with an admin's sign-in when that admin views the site.
 
-Whoever can write to an organisation's hub config repo can read its Cloudflare token (an Actions secret reaches workflows on any branch) and change what the hub deploys; the template's README says to give that access only to the hub's administrators.
+Whoever can write to an organisation's hub config repo can read its Cloudflare token (an Actions secret reaches workflows on any branch) and change what the hub deploys; the template's README says to give that access only to the hub's administrators. That token can change every Access application, D1 database, R2 bucket and Worker on the Cloudflare account, not only the hub's, because Cloudflare cannot scope those permissions to one resource; a separate account for the hub keeps that reach to the hub. The hub's GitHub App holds Workflows write on every repository it is installed on, the config repo included, so whoever holds the app's private key (a hub secret, or sealed in the hub's database) can also reach that token.
+
+Readers see the comments on any page they may read, including the bodies of threads whose quoted text has since changed (the quote itself is hidden from them) and threads resolved before they were given access.
 
 ## Supported versions
 
@@ -26,7 +28,7 @@ specreview has no releases yet. Fixes go to the `develop` branch; a hub runs the
 - The site build (`packages/site`): Markdown or other docs content that runs code on the build machine, reads files outside the repo's docs folder, or gets script into the built site past the build's checks.
 - The review UI in the browser (`packages/site/src/theme/review/`): comment text, author labels, ticket data or old page versions from the hub that end up running as script.
 - The publish action (`packages/action`, `build/`, `publish/`): leaking the GitHub Actions OIDC token, or publishing a build other than the one the workflow made.
-- Setting up and running a hub (`packages/hub/deploy/`, `examples/org/`): setup or deploy opening the hub to people the config does not list; the apply workflow running for anything but `main`, or leaking the Cloudflare token; `workflow-token` printing or leaking the token it creates, or giving it more than its documented permissions.
+- Setting up and running a hub (`packages/hub/deploy/`, `examples/org/`): setup or deploy opening the hub to people the config does not list, including through the Access policies, apps and paths setup itself writes and keeps in sync; the apply workflow running for anything but `main`, or leaking the Cloudflare token; `workflow-token` printing or leaking the token it creates, or giving it more than its documented permissions.
 - CI and the contribution path: a fork's pull request reaching a secret, writing to the repository, or poisoning what a later run on `develop` or `main` uses.
 
 ## Out of scope

@@ -46,7 +46,7 @@ What `workflow-token` creates, scoped to this account and the hostname's zone: e
 - Account: Account Settings Read; Access: Apps and Policies Write; Access: Organizations, Identity Providers, and Groups Read; D1 Write; Workers R2 Storage Write; Workers Scripts Write.
 - Zone: Zone Read; DNS Read; Workers Routes Write.
 
-Workers Scripts Write cannot be limited to one Worker, so this token can change any Worker on the account; a separate Cloudflare account for the hub is the way to avoid that. To replace it: run `workflow-token` again with a new file, store the new value, then delete the old token in the dashboard.
+Cloudflare cannot limit these permissions to the hub's own resources, so this token can change every Access application, D1 database, R2 bucket and Worker on the account; a separate Cloudflare account for the hub is the way to keep that reach to the hub. To replace it: run `workflow-token` again with a new file, store the new value, then delete the old token in the dashboard.
 
 ## GitHub
 
