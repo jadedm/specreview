@@ -29,6 +29,10 @@ const here = path.join(HUB, '.wrangler/smoke');
 mkdirSync(here, { recursive: true });
 const TEAM = 'smoke.cloudflareaccess.com';
 const AUD = 'aud-smoke';
+// The admin page's own hostname and Access app (#75). Browsers and curl send
+// any *.localhost name to this machine, so the two origins are real.
+const ADMIN_AUD = 'aud-smoke-admin';
+const ADMIN_HOST = 'admin.localhost';
 const PORT = 8797;
 // A 48 px grey square as the organisation's logo (#33), stored under its
 // content key as deploy would store it.
@@ -42,6 +46,9 @@ const config = {
   brand: { name: 'Acme', logo: { key: LOGO_KEY, type: 'image/png' } },
   accessTeamDomain: TEAM,
   accessAud: AUD,
+  hostname: 'docs.localhost',
+  adminHostname: ADMIN_HOST,
+  accessAdminAud: ADMIN_AUD,
   admins: ['owner@acme.dev'],
   ownerId: '1001',
   configRepo: 'docs-hub',
@@ -166,6 +173,9 @@ const repoWith = (id, files) => ({
 const orgFile = { ...config };
 delete orgFile.accessTeamDomain;
 delete orgFile.accessAud;
+delete orgFile.hostname;
+delete orgFile.adminHostname;
+delete orgFile.accessAdminAud;
 const repoState = {
   newdocs: repoWith(3001, { 'README.md': '# newdocs\n' }),
   'docs-hub': repoWith(4001, {
@@ -392,6 +402,8 @@ for (const e of [
 ])
   tokens[e] = await sign(e);
 tokens.otherApp = await sign('dev@acme.dev', 'aud-other');
+// Signed for the admin hostname's own app (#75).
+for (const e of ['owner@acme.dev', 'dev@acme.dev']) tokens[`admin:${e}`] = await sign(e, ADMIN_AUD);
 writeFileSync(path.join(here, 'tokens.json'), JSON.stringify(tokens));
 
 // A tiny control port for the smoke: publish V2, read R2/D1/labels, hide the
@@ -505,6 +517,8 @@ http
 // forwarded with no token, signed in or not; its _api, _history and _signin
 // stay behind the stand-in.
 const PROXY = PORT - 1;
+// Each hostname has its own Access app, so its own audience (#75).
+const onAdminHost = (req) => (req.headers.host ?? '').split(':')[0] === ADMIN_HOST;
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -512,7 +526,7 @@ http
       const email = url.searchParams.get('email') ?? '';
       res.writeHead(302, {
         'set-cookie': `smoke_as=${encodeURIComponent(email)}; Path=/; HttpOnly`,
-        location: '/sidecar/',
+        location: onAdminHost(req) ? '/_admin/' : '/sidecar/',
       });
       return res.end();
     }
@@ -529,7 +543,10 @@ http
     for await (const c of req) chunks.push(c);
     const headers = bypassed
       ? { ...req.headers }
-      : { ...req.headers, 'cf-access-jwt-assertion': await sign(decodeURIComponent(cookie[1])) };
+      : {
+          ...req.headers,
+          'cf-access-jwt-assertion': await sign(decodeURIComponent(cookie[1]), onAdminHost(req) ? ADMIN_AUD : AUD),
+        };
     const upstream = http.request(
       { host: '127.0.0.1', port: PORT, path: req.url, method: req.method, headers },
       (up) => {

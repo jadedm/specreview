@@ -66,7 +66,11 @@ export const wranglerConfig = (org: Org, hubDir = HUB_DIR, logo?: Logo | null) =
     // and no per-version preview URLs, which Access would not cover.
     workers_dev: false,
     preview_urls: false,
-    routes: [{ pattern: hub.hostname, custom_domain: true }],
+    // The admin page's own hostname too, when it has one (#75).
+    routes: [hub.hostname, ...(hub.adminHostname ? [hub.adminHostname] : [])].map((pattern) => ({
+      pattern,
+      custom_domain: true,
+    })),
     d1_databases: [
       {
         binding: 'DB',

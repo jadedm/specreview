@@ -43,6 +43,11 @@ export type HubConfig = {
   brand: Brand | null;
   accessTeamDomain: string;
   accessAud: string;
+  // The admin page's own hostname and its Access application's audience
+  // (#75): the admin page is served only there, apart from the docs sites'
+  // origin, which it names (docsHostname) for what it writes, such as a new
+  // site's workflow. Null when the hub has none, and then there is no admin page.
+  admin: { hostname: string; aud: string; docsHostname: string } | null;
   admins: string[];
   // GitHub's numeric id of the org: publish tokens must carry it.
   ownerId: string;
@@ -130,6 +135,9 @@ const TOP_KEYS = new Set([
   'ownerId',
   'accessTeamDomain',
   'accessAud',
+  'hostname',
+  'adminHostname',
+  'accessAdminAud',
   'admins',
   'teamLabel',
   'brand',
@@ -315,6 +323,21 @@ export const problemsIn = (raw: unknown): string[] => {
   if (typeof cfg.accessAud !== 'string' || !/^\S{1,200}$/.test(cfg.accessAud)) {
     problems.push('accessAud is missing or malformed');
   }
+  if (cfg.adminHostname !== undefined && (typeof cfg.adminHostname !== 'string' || !DOMAIN.test(cfg.adminHostname)))
+    problems.push('adminHostname must be a bare lowercase hostname');
+  const adminKeys = [cfg.hostname, cfg.adminHostname, cfg.accessAdminAud].filter((v) => v !== undefined).length;
+  if (adminKeys !== 0 && adminKeys !== 3) problems.push('hostname, adminHostname and accessAdminAud go together');
+  if (cfg.hostname !== undefined && (typeof cfg.hostname !== 'string' || !DOMAIN.test(cfg.hostname)))
+    problems.push('hostname must be a bare lowercase hostname');
+  if (cfg.hostname !== undefined && cfg.hostname === cfg.adminHostname)
+    problems.push("adminHostname must differ from the docs sites' hostname");
+  if (
+    cfg.accessAdminAud !== undefined &&
+    (typeof cfg.accessAdminAud !== 'string' || !/^\S{1,200}$/.test(cfg.accessAdminAud))
+  )
+    problems.push('accessAdminAud is malformed');
+  if (cfg.accessAdminAud !== undefined && cfg.accessAdminAud === cfg.accessAud)
+    problems.push("accessAdminAud must be the admin hostname's own Access application, not the hub's");
   const label = labelProblem(cfg.teamLabel);
   if (label) problems.push(`teamLabel ${label}`);
   problems.push(...brandProblems(cfg.brand));
@@ -359,6 +382,9 @@ export const configOf = (text: string | undefined): HubConfig => {
     org: string;
     accessTeamDomain: string;
     accessAud: string;
+    hostname?: string;
+    adminHostname?: string;
+    accessAdminAud?: string;
     admins: string[];
     ownerId: string;
     configRepo?: string;
@@ -383,6 +409,10 @@ export const configOf = (text: string | undefined): HubConfig => {
     brand: cfg.brand ? { name: cfg.brand.name, logo: cfg.brand.logo ?? null } : null,
     accessTeamDomain: cfg.accessTeamDomain,
     accessAud: cfg.accessAud,
+    admin:
+      cfg.hostname && cfg.adminHostname && cfg.accessAdminAud
+        ? { hostname: cfg.adminHostname, aud: cfg.accessAdminAud, docsHostname: cfg.hostname }
+        : null,
     admins: cfg.admins,
     ownerId: cfg.ownerId,
     configRepo: cfg.configRepo ? `${cfg.org}/${cfg.configRepo}` : null,

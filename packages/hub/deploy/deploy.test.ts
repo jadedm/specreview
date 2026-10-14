@@ -516,3 +516,83 @@ describe('9: secret', () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe('#75: the admin hostname in deploy', () => {
+  const withAdminHub = (ids = true) => {
+    const hub = exampleHub() as { access: Record<string, string> } & Record<string, unknown>;
+    return {
+      ...hub,
+      adminHostname: 'specs-admin.acme.dev',
+      access: ids
+        ? { ...hub.access, adminPolicyId: 'pol-admin', adminAppId: 'app-admin', adminAud: 'aud-admin' }
+        : hub.access,
+    };
+  };
+
+  it('12: both hostnames are routes, and the Worker config names them with the admin audience', () => {
+    const cfg = wranglerConfig(
+      loadOrg(
+        orgDir(withAdminHub(), JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8'))).dir,
+      ),
+    );
+    expect(cfg.routes).toEqual([
+      { pattern: 'specs.acme.dev', custom_domain: true },
+      { pattern: 'specs-admin.acme.dev', custom_domain: true },
+    ]);
+    const merged = JSON.parse(cfg.vars.SPECREVIEW_CONFIG) as Record<string, unknown>;
+    expect([merged.hostname, merged.adminHostname, merged.accessAdminAud]).toEqual([
+      'specs.acme.dev',
+      'specs-admin.acme.dev',
+      'aud-admin',
+    ]);
+  });
+
+  it('12: a hub without its admin ids is not deployable; one without an admin hostname needs none', async () => {
+    const { dir, tokenFile } = orgDir(withAdminHub(false));
+    const { run, calls } = recorder();
+    await expect(
+      deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run, log: () => {}, dryRun: false, wait: noWait }),
+    ).rejects.toThrow('access.adminPolicyId, access.adminAppId, access.adminAud');
+    expect(calls).toEqual([]);
+    const cfg = wranglerConfig(loadOrg(finishedExample()));
+    expect(cfg.routes).toEqual([{ pattern: 'specs.acme.dev', custom_domain: true }]);
+    const merged = JSON.parse(cfg.vars.SPECREVIEW_CONFIG) as Record<string, unknown>;
+    expect('adminHostname' in merged || 'hostname' in merged).toBe(false);
+  });
+
+  it('12: deploy waits for each hostname on its own', async () => {
+    const { dir, tokenFile } = orgDir(withAdminHub());
+    const { run } = recorder();
+    const waited: string[] = [];
+    const lines: string[] = [];
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run,
+      log: (l) => lines.push(l),
+      dryRun: false,
+      wait: async (host) => {
+        waited.push(host);
+        return 'resolver' as const;
+      },
+    });
+    expect(waited).toEqual(['specs.acme.dev', 'specs-admin.acme.dev']);
+    expect(lines.filter((l) => l.startsWith('deployed: '))).toEqual([
+      'deployed: https://specs.acme.dev/',
+      'deployed: https://specs-admin.acme.dev/',
+    ]);
+  });
+
+  it('hub.json refuses an admin hostname equal to the docs one, or malformed; the config file may not set it', () => {
+    const same = orgDir({ ...exampleHub(), adminHostname: 'specs.acme.dev' }).dir;
+    expect(() => loadOrg(same)).toThrow('hub.json adminHostname must differ from hostname');
+    const bad = orgDir({ ...exampleHub(), adminHostname: 'https://x.acme.dev' }).dir;
+    expect(() => loadOrg(bad)).toThrow('hub.json adminHostname must be a bare lowercase hostname');
+    const inConfig = orgDir(exampleHub(), {
+      ...JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8')),
+      adminHostname: 'x.acme.dev',
+    }).dir;
+    expect(() => loadOrg(inConfig)).toThrow('specreview.config.json sets adminHostname; it belongs in hub.json');
+  });
+});

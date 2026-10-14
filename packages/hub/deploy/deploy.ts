@@ -210,13 +210,17 @@ export const deploy = async ({
     logo,
   );
   if (dryRun) return;
-  log(`waiting for https://${org.hub.hostname}/ to answer`);
-  const answeredBy = await wait(org.hub.hostname, deployable(org.hub).access.teamDomain);
-  log(`deployed: https://${org.hub.hostname}/`);
-  if (answeredBy === 'nameservers') {
-    log(
-      `this machine's resolver did not find ${org.hub.hostname}; the hub answered through its own nameservers. ${flushAdvice(org.hub.hostname)}`,
-    );
+  // Each hostname on its own: the docs hostname can answer while the admin
+  // hostname's record or certificate is still being made (#75).
+  for (const host of [org.hub.hostname, ...(org.hub.adminHostname ? [org.hub.adminHostname] : [])]) {
+    log(`waiting for https://${host}/ to answer`);
+    const answeredBy = await wait(host, deployable(org.hub).access.teamDomain);
+    log(`deployed: https://${host}/`);
+    if (answeredBy === 'nameservers') {
+      log(
+        `this machine's resolver did not find ${host}; the hub answered through its own nameservers. ${flushAdvice(host)}`,
+      );
+    }
   }
   await retireLogos(org, logo, run, envFor(org, tokenFile), log);
 };

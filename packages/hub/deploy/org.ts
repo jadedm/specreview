@@ -10,6 +10,8 @@ import { type Logo, workerBrand } from './brand';
 export type HubJson = {
   accountId: string;
   hostname: string;
+  // The admin page's own hostname (#75); without it the hub has no admin page.
+  adminHostname?: string;
   worker: string;
   database: { name: string; id?: string };
   bucket: { name: string; created?: boolean };
@@ -23,6 +25,10 @@ export type HubJson = {
     // While any site is public (#20): the bypass for those sites' pages.
     publicPolicyId?: string;
     publicAppId?: string;
+    // With adminHostname (#75): admins only, on the admin hostname.
+    adminPolicyId?: string;
+    adminAppId?: string;
+    adminAud?: string;
   };
   // Written by deploy: the logo key the live Worker uses, and every logo key
   // uploaded and not yet deleted, so no stored logo is ever lost track of.
@@ -55,7 +61,17 @@ const WORKER = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const D1_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 // R2 bucket names: 3 to 63 lowercase letters, digits and dashes.
 const BUCKET = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
-const HUB_KEYS = new Set(['$schema', 'accountId', 'hostname', 'worker', 'database', 'bucket', 'access', 'brand']);
+const HUB_KEYS = new Set([
+  '$schema',
+  'accountId',
+  'hostname',
+  'adminHostname',
+  'worker',
+  'database',
+  'bucket',
+  'access',
+  'brand',
+]);
 const ACCESS_KEYS = new Set([
   'teamDomain',
   'policyId',
@@ -65,6 +81,9 @@ const ACCESS_KEYS = new Set([
   'publishAppId',
   'publicPolicyId',
   'publicAppId',
+  'adminPolicyId',
+  'adminAppId',
+  'adminAud',
 ]);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -87,6 +106,10 @@ export const hubProblems = (raw: unknown): string[] => {
   if (typeof raw.hostname !== 'string' || !HOSTNAME.test(raw.hostname)) {
     problems.push('hub.json hostname must be a bare lowercase hostname (no scheme, port or path)');
   }
+  if (raw.adminHostname !== undefined && (typeof raw.adminHostname !== 'string' || !HOSTNAME.test(raw.adminHostname)))
+    problems.push('hub.json adminHostname must be a bare lowercase hostname (no scheme, port or path)');
+  if (raw.adminHostname !== undefined && raw.adminHostname === raw.hostname)
+    problems.push('hub.json adminHostname must differ from hostname');
   if (typeof raw.worker !== 'string' || !WORKER.test(raw.worker)) {
     problems.push('hub.json worker must be a Worker name: lowercase letters, digits and dashes');
   }
@@ -130,7 +153,7 @@ export const loadOrg = (dir: string): Org => {
   const config = readJson(path.join(dir, 'specreview.config.json'));
   const problems = hubProblems(hub);
   if (!isObject(config)) problems.push('specreview.config.json is not a JSON object');
-  for (const key of ['accessTeamDomain', 'accessAud']) {
+  for (const key of ['accessTeamDomain', 'accessAud', 'hostname', 'adminHostname', 'accessAdminAud']) {
     if (isObject(config) && key in config) problems.push(`specreview.config.json sets ${key}; it belongs in hub.json`);
   }
   if (problems.length > 0) throw new DeployError(`the organisation folder has problems:\n  ${problems.join('\n  ')}`);
@@ -157,6 +180,10 @@ export const deployable = (hub: HubJson) => {
     !hub.access?.appId && 'access.appId',
     !hub.access?.publishPolicyId && 'access.publishPolicyId',
     !hub.access?.publishAppId && 'access.publishAppId',
+    // Only when the hub has an admin hostname (#75).
+    hub.adminHostname && !hub.access?.adminPolicyId && 'access.adminPolicyId',
+    hub.adminHostname && !hub.access?.adminAppId && 'access.adminAppId',
+    hub.adminHostname && !hub.access?.adminAud && 'access.adminAud',
   ].filter(Boolean);
   if (missing.length > 0) throw new DeployError(`run setup with --apply first; hub.json lacks ${missing.join(', ')}`);
   return hub as HubJson & {
@@ -168,12 +195,20 @@ export const deployable = (hub: HubJson) => {
 // The organisation's file as the Worker reads it: the logo file resolved to
 // its stored key, and the Access fields added. setup checks the same shape
 // with placeholder Access fields, so both refuse exactly what the Worker would.
-export const workerConfigOf = (org: Org, access: { teamDomain: string; aud: string }, logo?: Logo | null) => {
+export const workerConfigOf = (
+  org: Org,
+  access: { teamDomain: string; aud: string; adminAud?: string },
+  logo?: Logo | null,
+) => {
+  const admin = org.hub.adminHostname
+    ? { hostname: org.hub.hostname, adminHostname: org.hub.adminHostname, accessAdminAud: access.adminAud }
+    : {};
   const merged = {
     ...org.config,
     ...(org.config.brand === undefined ? {} : { brand: workerBrand(org, logo) }),
     accessTeamDomain: access.teamDomain,
     accessAud: access.aud,
+    ...admin,
   };
   const problems = problemsIn(merged);
   if (problems.length > 0) throw new DeployError(`specreview.config.json has problems:\n  ${problems.join('\n  ')}`);

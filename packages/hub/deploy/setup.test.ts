@@ -713,3 +713,217 @@ describe('20: public sites in Access', () => {
     }
   });
 });
+
+describe('#75: the admin hostname in Access', () => {
+  const ADMIN_HOST = 'specs-admin.acme.dev';
+  const withAdmin = (dir: { dir: string }) => {
+    const file = path.join(dir.dir, 'hub.json');
+    const hub = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...hub, adminHostname: ADMIN_HOST }));
+  };
+  const ADMINS = [{ email: { email: 'owner@acme.dev' } }];
+
+  it('11: an existing hub gaining it gets only an admins policy and an app for it; nothing else changes', async () => {
+    const { state, dir, hub: before } = await applied();
+    const othersBefore = structuredClone({ apps: state.apps, policies: state.policies });
+    withAdmin(dir);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
+      ['POST', '/access/policies'],
+      ['POST', '/access/apps'],
+    ]);
+    const policy = state.policies.find((p) => p.id === r.hubJson.access?.adminPolicyId)!;
+    expect([policy.name, policy.decision, policy.include]).toEqual([
+      `specreview ${ADMIN_HOST} admins`,
+      'allow',
+      ADMINS,
+    ]);
+    const app = state.apps.find((x) => x.id === r.hubJson.access?.adminAppId)!;
+    expect([app.domain, app.policies.map((p) => p.id), app.allowed_idps, app.aud]).toEqual([
+      ADMIN_HOST,
+      [policy.id],
+      [state.idps[0].id],
+      r.hubJson.access?.adminAud,
+    ]);
+    // The main, publish and any other resources and ids are as they were.
+    expect(state.apps.filter((x) => x.id !== app.id)).toEqual(othersBefore.apps);
+    expect(state.policies.filter((p) => p.id !== policy.id)).toEqual(othersBefore.policies);
+    const { adminPolicyId: _p, adminAppId: _a, adminAud: _d, ...restAccess } = r.hubJson.access ?? {};
+    expect(restAccess).toEqual(before.access);
+    expect(r.lines.at(-1)).toBe('hub.json updated; commit it');
+    const again = await run(state, { apply: true, dir });
+    expect(again.writes()).toEqual([]);
+    expect(again.lines.at(-1)).toBe('nothing to do');
+  });
+
+  it('11: the admins policy follows the config; the main policy keeps its own list', async () => {
+    const { state, dir } = await applied();
+    withAdmin(dir);
+    await run(state, { apply: true, dir });
+    const config = structuredClone(CONFIG);
+    config.admins = ['boss@acme.dev', 'owner@acme.dev'];
+    writeFileSync(path.join(dir.dir, 'specreview.config.json'), JSON.stringify(config));
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    const adminPolicy = state.policies.find((p) => p.id === r.hubJson.access?.adminPolicyId)!;
+    expect(adminPolicy.include).toEqual([
+      { email: { email: 'boss@acme.dev' } },
+      { email: { email: 'owner@acme.dev' } },
+    ]);
+  });
+
+  it('11: a conflict on the admin hostname is refused before anything is created', async () => {
+    const cases: [string, (s: FakeState) => void, RegExp][] = [
+      [
+        'a DNS record',
+        (s) => s.dns.z1.push({ name: ADMIN_HOST }),
+        new RegExp(`${ADMIN_HOST} already has a DNS record`),
+      ],
+      [
+        'another Worker',
+        (s) => s.workerDomains.push({ hostname: ADMIN_HOST, service: 'their-worker' }),
+        /custom domain of Worker their-worker/,
+      ],
+      ['no zone', (s) => s.zones.push({ id: 'z2', name: 'other.dev', status: 'active' }), /no zone/],
+    ];
+    for (const [name, change, why] of cases) {
+      const { state, dir } = await applied();
+      const host = name === 'no zone' ? 'admin.other-zone.example' : ADMIN_HOST;
+      const file = path.join(dir.dir, 'hub.json');
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), adminHostname: host }));
+      change(state);
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, name).toMatch(why);
+      expect(r.writes(), name).toEqual([]);
+    }
+  });
+
+  it('11: an admin app that lets other origins read it, or another app already on the hostname, is refused', async () => {
+    const { state, dir } = await applied();
+    withAdmin(dir);
+    const first = await run(state, { apply: true, dir });
+    const app = state.apps.find((x) => x.id === first.hubJson.access?.adminAppId)!;
+    for (const [setting, value] of [
+      ['cors_headers', { allowed_origins: ['https://specs.acme.dev'] }],
+      ['cors_headers', { allow_all_origins: true }],
+      ['options_preflight_bypass', true],
+    ] as const) {
+      (app as Record<string, unknown>)[setting] = value;
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, setting).toMatch(/lets other origins read it/);
+      expect(r.writes()).toEqual([]);
+      delete (app as Record<string, unknown>)[setting];
+    }
+    const fresh = await applied();
+    fresh.state.apps.push({
+      id: 'theirs',
+      domain: ADMIN_HOST,
+      type: 'self_hosted',
+      aud: 'x',
+      name: 'theirs',
+      policies: [],
+    });
+    withAdmin(fresh.dir);
+    const r = await run(fresh.state, { apply: true, dir: fresh.dir });
+    expect(r.error?.message).toMatch(new RegExp(`an Access app for ${ADMIN_HOST}`));
+  });
+
+  it('11: an admin app or admins policy changed by hand is refused, and nothing is written', async () => {
+    const edits: [string, (s: FakeState, ids: Record<string, string>) => void, RegExp][] = [
+      [
+        'another audience',
+        (s, ids) => (s.apps.find((x) => x.id === ids.adminAppId)!.aud = 'aud-other'),
+        /different audience/,
+      ],
+      [
+        'another policy',
+        (s, ids) => s.apps.find((x) => x.id === ids.adminAppId)!.policies.push({ id: 'pol-other' }),
+        /policies other than the one setup recorded/,
+      ],
+      [
+        'another login method',
+        (s, ids) => (s.apps.find((x) => x.id === ids.adminAppId)!.allowed_idps = ['idp-other']),
+        /login methods other than the one-time PIN/,
+      ],
+      [
+        'more than the hostname',
+        (s, ids) =>
+          s.apps.find((x) => x.id === ids.adminAppId)!.destinations!.push({ type: 'public', uri: 'specs.acme.dev' }),
+        /not only specs-admin.acme.dev/,
+      ],
+      [
+        'the policy on another app',
+        (s, ids) => s.apps.find((x) => x.domain === 'specs.acme.dev')!.policies.push({ id: ids.adminPolicyId }),
+        /not a plain allow policy/,
+      ],
+      [
+        'a require rule',
+        (s, ids) =>
+          (s.policies.find((p) => p.id === ids.adminPolicyId)!.require = [{ email: { email: 'x@acme.dev' } }]),
+        /not a plain allow policy/,
+      ],
+      [
+        'a non-email rule',
+        (s, ids) => s.policies.find((p) => p.id === ids.adminPolicyId)!.include.push({ everyone: {} }),
+        /not a plain allow policy/,
+      ],
+    ];
+    for (const [name, edit, why] of edits) {
+      const { state, dir } = await applied();
+      withAdmin(dir);
+      const on = await run(state, { apply: true, dir });
+      const ids = on.hubJson.access as Record<string, string>;
+      for (const app of state.apps) app.self_hosted_domains = app.destinations?.map((d) => d.uri);
+      edit(state, ids);
+      for (const app of state.apps) app.self_hosted_domains = app.destinations?.map((d) => d.uri);
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, name).toMatch(why);
+      expect(r.writes(), name).toEqual([]);
+    }
+  });
+
+  it('11: removal is refused while the admin app or policy is no longer only ours', async () => {
+    for (const share of ['app covers more', 'policy shared'] as const) {
+      const { state, dir } = await applied();
+      withAdmin(dir);
+      const on = await run(state, { apply: true, dir });
+      const ids = on.hubJson.access as Record<string, string>;
+      if (share === 'app covers more') {
+        const app = state.apps.find((x) => x.id === ids.adminAppId)!;
+        app.destinations!.push({ type: 'public', uri: 'other.acme.dev' });
+        app.self_hosted_domains = app.destinations!.map((d) => d.uri);
+      } else state.apps.find((x) => x.domain === 'specs.acme.dev')!.policies.push({ id: ids.adminPolicyId });
+      const file = path.join(dir.dir, 'hub.json');
+      const { adminHostname: _x, ...without } = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      writeFileSync(file, JSON.stringify(without));
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, share).toMatch(/setup will not delete it/);
+      expect(r.writes(), share).toEqual([]);
+    }
+  });
+
+  it('11: removing the admin hostname deletes its app and policy and forgets them', async () => {
+    const { state, dir } = await applied();
+    withAdmin(dir);
+    const on = await run(state, { apply: true, dir });
+    const { adminAppId, adminPolicyId } = on.hubJson.access ?? {};
+    const file = path.join(dir.dir, 'hub.json');
+    const { adminHostname: _x, ...without } = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify(without));
+    const others = structuredClone({
+      apps: state.apps.filter((x) => x.id !== adminAppId),
+      policies: state.policies.filter((p) => p.id !== adminPolicyId),
+    });
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect({ apps: state.apps, policies: state.policies }).toEqual(others);
+    expect(state.apps.some((x) => x.id === adminAppId)).toBe(false);
+    expect(state.policies.some((p) => p.id === adminPolicyId)).toBe(false);
+    expect([r.hubJson.access?.adminAppId, r.hubJson.access?.adminPolicyId, r.hubJson.access?.adminAud]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+});

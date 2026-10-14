@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import example from '../../../examples/publish-docs.yml?raw';
 import { workflowFor } from '../src/add-site';
 import { problemsIn } from '../src/config';
-import { appStub, call, CONFIG, github, HOST, installFetch, reset } from './helpers';
+import { appStub, call, CONFIG, github, HOST, installFetch, reset, ADMIN_HOST } from './helpers';
 
 // Adding a site from the admin page (#57), against a stand-in GitHub that
 // keeps repos, branches, files and pull requests in memory.
@@ -147,7 +147,7 @@ const add = (
     rawBody: form(fields),
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
-      ...(opts.origin === null ? {} : { origin: opts.origin ?? HOST }),
+      ...(opts.origin === null ? {} : { origin: opts.origin ?? ADMIN_HOST }),
     },
   });
 const html = (r: { body: unknown }) => r.body as unknown as string;
