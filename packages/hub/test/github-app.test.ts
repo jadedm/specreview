@@ -305,6 +305,15 @@ describe('#57: personal tokens', () => {
 });
 
 describe('#63: listing the installation repos', () => {
+  it('two asks at once share one listing', async () => {
+    github.app!.installations.set('acme/newdocs', 7);
+    const a = auth();
+    const [x, y] = await Promise.all([a.repos!('acme'), a.repos!('acme')]);
+    expect(x).toEqual(['globex', 'newdocs', 'sidecar']);
+    expect(y).toEqual(x);
+    expect(github.calls.filter((c) => c === 'GET /orgs/acme/installation')).toHaveLength(1);
+  });
+
   it('a listing that never settles is not waited on after 30 seconds', async () => {
     github.app!.installations.set('acme/newdocs', 7);
     const a = auth();

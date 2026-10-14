@@ -592,12 +592,21 @@ describe('#63: the form offers lists from GitHub', () => {
 });
 
 describe('#63 review fixes: listing', () => {
-  it('a failing listing is not repeated on every page load, and two at once make one listing', async () => {
+  it('a failing listing is remembered for a while, not repeated on every page load', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    github.app!.failLookups = [500];
+    // Only the org's installation lookup fails, and only the first time.
+    let lookups = 0;
+    const real = spy.getMockImplementation()!;
+    spy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(new Request(input, init).url);
+      if (url.pathname === '/orgs/acme/installation' && ++lookups === 1) return new Response('down', { status: 503 });
+      return real(input, init);
+    });
     const page = () => call('/_admin/', { raw: true, email: ADMIN, envOverride: env });
-    await Promise.all([page(), page()]);
-    await page();
-    expect(github.calls.filter((c) => c === 'GET /orgs/acme/installation')).toHaveLength(1);
+    const [first] = await Promise.all([page(), page()]);
+    expect(html(first)).toContain('GitHub did not list the repos in time, or could not');
+    // Within 30 seconds the failure is remembered: no new lookup, still the typed form.
+    expect(html(await page())).toContain('GitHub did not list the repos in time, or could not');
+    expect(lookups).toBe(1);
   });
 });
