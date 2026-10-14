@@ -109,6 +109,19 @@ const roleOf = async (email: string) =>
   ((await call('/api/me', { email, envOverride: env, site: 'sidecar' })).body as { role?: string }).role;
 const pendingRows = async () =>
   (await workerEnv.DB.prepare('SELECT site, list, entry FROM pending_removals').all()).results;
+const removedAt = async () =>
+  (await workerEnv.DB.prepare('SELECT removed_at FROM pending_removals').first<{ removed_at: number }>())!.removed_at;
+const restore = (entry: string, at: string, opts: { email?: string } = {}) =>
+  change({ site: 'sidecar', list: 'readers', action: 'restore', entry, removed_at: at }, opts);
+const adminPage = async (envOverride = env) => html(await call('/_admin/', { raw: true, email: ADMIN, envOverride }));
+// The live config once a removal of ana has been deployed.
+const envWithout = (entry: string) =>
+  envFor({
+    ...LIVE,
+    sites: LIVE.sites.map((s) =>
+      s.repo === 'sidecar' ? { ...s, readers: (s.readers as string[]).filter((r) => r !== entry) } : s,
+    ),
+  });
 
 describe('1: who may change the lists', () => {
   it('a non-admin, another origin, no app or no config repo: refused, nothing written', async () => {
@@ -365,7 +378,8 @@ describe('review fixes: only an admin clears a removal', () => {
         ),
       }),
     };
-    await add('readers', 'ana@partner.example');
+    const r = await add('readers', 'ana@partner.example');
+    expect(html(r)).toContain('already listed, but a recent removal still refuses them here');
     expect(await pendingRows()).toHaveLength(1);
     expect(await status('ana@partner.example')).toBe(403);
   });
@@ -382,7 +396,7 @@ describe('review fixes: only an admin clears a removal', () => {
   it('"Let back in" clears a removal and writes nothing', async () => {
     next = [500];
     await remove('readers', 'ana@partner.example');
-    const r = await change({ site: 'sidecar', list: 'readers', action: 'restore', entry: 'ana@partner.example' });
+    const r = await restore('ana@partner.example', String(await removedAt()));
     expect(r.status).toBe(200);
     expect(await pendingRows()).toEqual([]);
     expect(puts).toHaveLength(1);
@@ -452,5 +466,140 @@ describe('14: the page', () => {
     const p = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: env }));
     expect(p).toContain('The hub could not read the config from GitHub');
     expect(p).not.toContain('action="/_admin/access"');
+  });
+});
+
+describe('#67: finished removals and the clear races', () => {
+  it('1, 5: a removal listed nowhere is not shown, and its row is kept', async () => {
+    await remove('readers', 'ana@partner.example');
+    const p = await adminPage(envWithout('ana@partner.example'));
+    expect(p).toContain('<h2>Who reads and approves</h2>');
+    expect(p).toMatch(/@initech\.example<\/span><\/span><span><form class="inline"/);
+    expect(p).not.toContain('ana@partner.example');
+    expect(p).not.toContain('Let back in');
+    expect(await pendingRows()).toHaveLength(1);
+  });
+
+  it('2: if a config lists them again, the removal shows and still refuses them', async () => {
+    await remove('readers', 'ana@partner.example');
+    const c = fileConfig();
+    file = {
+      sha: 'rollback',
+      text: configText({
+        ...c,
+        sites: c.sites.map((s) =>
+          s.repo === 'sidecar' ? { ...s, readers: [...(s.readers as string[]), 'ana@partner.example'] } : s,
+        ),
+      }),
+    };
+    const p = await adminPage();
+    expect(p).toMatch(/ana@partner\.example<\/span><span class="meta">refused here by an earlier removal/);
+    expect(p).toContain(`<input type="hidden" name="removed_at" value="${await removedAt()}">`);
+    expect(await status('ana@partner.example')).toBe(403);
+  });
+
+  it('6: an add does not clear a removal recorded after it began', async () => {
+    github.repoApi = async (req, repo, path) => {
+      if (req.method === 'PUT')
+        await workerEnv.DB.prepare(
+          "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'zed@partner.example', 'other@acme.dev', ?)",
+        )
+          .bind(Date.now())
+          .run();
+      return standIn(req, repo, path);
+    };
+    expect((await add('readers', 'zed@partner.example')).status).toBe(200);
+    expect(await pendingRows()).toHaveLength(1);
+  });
+
+  it('7: an add clears a removal recorded before it began', async () => {
+    await workerEnv.DB.prepare(
+      "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'zed@partner.example', 'other@acme.dev', ?)",
+    )
+      .bind(Date.now() - 1000)
+      .run();
+    const r = await add('readers', 'zed@partner.example');
+    expect(r.status).toBe(200);
+    expect(html(r)).not.toContain('refuses them');
+    expect(html(r)).not.toContain('could not check');
+    expect(await pendingRows()).toEqual([]);
+  });
+
+  it('an add clears the removal it saw, even one stamped at or after its own start', async () => {
+    await workerEnv.DB.prepare(
+      "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'zed@partner.example', 'other@acme.dev', ?)",
+    )
+      .bind(Date.now() + 60_000)
+      .run();
+    expect((await add('readers', 'zed@partner.example')).status).toBe(200);
+    expect(await pendingRows()).toEqual([]);
+  });
+
+  it('an add does not clear a removal repeated while it was in flight', async () => {
+    await workerEnv.DB.prepare(
+      "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'zed@partner.example', 'other@acme.dev', ?)",
+    )
+      .bind(Date.now() - 1000)
+      .run();
+    github.repoApi = async (req, repo, path) => {
+      if (req.method === 'PUT') {
+        // Another admin removes zed meanwhile: not in git or deployed, so it
+        // commits nothing, but moves the row's time forward.
+        const again = await remove('readers', 'zed@partner.example');
+        expect(again.status).toBeLessThan(600);
+      }
+      return standIn(req, repo, path);
+    };
+    const r = await add('readers', 'zed@partner.example');
+    expect(r.status).toBe(200);
+    expect(html(r)).toContain('An earlier removal still refuses them here');
+    expect(await pendingRows()).toHaveLength(1);
+  });
+
+  it('an add the hub could not check for an earlier removal says so', async () => {
+    await workerEnv.DB.prepare('ALTER TABLE pending_removals RENAME TO pending_removals_away').run();
+    try {
+      const r = await add('readers', 'zed@partner.example');
+      expect(r.status).toBe(200);
+      expect(html(r)).toContain('The hub could not check for an earlier removal');
+    } finally {
+      await workerEnv.DB.prepare('ALTER TABLE pending_removals_away RENAME TO pending_removals').run();
+    }
+  });
+
+  it('9: Let back in from a page loaded before a newer removal clears nothing', async () => {
+    next = [500];
+    await remove('readers', 'ana@partner.example');
+    const seen = await removedAt();
+    next = [500];
+    await remove('readers', 'ana@partner.example');
+    expect(await removedAt()).toBeGreaterThan(seen);
+    const r = await restore('ana@partner.example', String(seen));
+    expect(html(r)).toContain('changed since the page was loaded; reload the admin page');
+    expect(await pendingRows()).toHaveLength(1);
+    expect(await status('ana@partner.example')).toBe(403);
+  });
+
+  it('a repeat removal moves the time forward even when the clock has not', async () => {
+    const ahead = Date.now() + 60_000;
+    await workerEnv.DB.prepare(
+      "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'ana@partner.example', 'other@acme.dev', ?)",
+    )
+      .bind(ahead)
+      .run();
+    next = [500];
+    await remove('readers', 'ana@partner.example');
+    expect(await removedAt()).toBe(ahead + 1);
+  });
+
+  it('10, 11: Let back in without a usable time, or by a non-admin, clears nothing', async () => {
+    next = [500];
+    await remove('readers', 'ana@partner.example');
+    const at = String(await removedAt());
+    expect((await restore('ana@partner.example', '')).status).toBe(400);
+    expect((await restore('ana@partner.example', 'soon')).status).toBe(400);
+    expect((await restore('ana@partner.example', '-5')).status).toBe(400);
+    expect((await restore('ana@partner.example', at, { email: 'dev@acme.dev' })).status).toBe(403);
+    expect(await pendingRows()).toHaveLength(1);
   });
 });

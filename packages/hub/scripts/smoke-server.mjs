@@ -452,6 +452,11 @@ http
     }
     if (url.pathname === '/rows')
       return send((await db.prepare('SELECT site, page, status, version FROM page_status').all()).results);
+    // Removals recorded on the admin page (#12, #67), shown or not.
+    if (url.pathname === '/pending')
+      return send(
+        (await db.prepare('SELECT site, list, entry, removed_at FROM pending_removals ORDER BY entry').all()).results,
+      );
     res.writeHead(404);
     res.end();
   })
