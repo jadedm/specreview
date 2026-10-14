@@ -15,7 +15,7 @@ Thanks for looking. specreview is small and run by one maintainer, so the proces
 3. **A branch from `develop`**, named `<prefix>/<issue>-<slug>`, for example `fix/42-empty-sidebar`. Prefixes: `feature`, `bugfix`, `hotfix`, `chore`, `fix`, `ci`, `infra`, `refactor`, `docs`.
 4. **Commits** follow Conventional Commits with one scope: `fix(hub): keep a site's own 404 page`. The body says what went wrong and why the fix is shaped the way it is, not what the diff shows.
 5. **The local gate** (below) passes before every push.
-6. **A pull request to `develop`.** The template asks for the issue, what changed and why, the tests, and the smoke run. Pull requests from forks run CI after a maintainer approves the run.
+6. **A pull request to `develop`.** The template asks for the issue, what changed and why, the tests, and the smoke run. Pull requests from outside contributors run CI after a maintainer approves the run. A maintainer checking out a fork's branch runs `node scripts/check-packages.mjs` before `pnpm install`.
 
 `main` takes releases only. Changes reach it from `develop`.
 
@@ -27,7 +27,7 @@ Node 22.13 or later, pnpm 10 (`corepack enable` gives you the version in `packag
 pnpm install --frozen-lockfile
 ```
 
-Installing sets up git hooks. They refuse a commit that adds an env file, a commit message that is not conventional, a push to `develop` or `main`, and a push from a branch named any other way; before a push they run `pnpm typecheck`. CI checks the same rules again.
+Installing sets up git hooks. They refuse a commit that adds an env file, a `.dev.vars` file or a `.pem` file, a commit message that is not conventional, a push to `develop` or `main`, and a push from a branch named any other way; before a push they run `pnpm typecheck`. CI checks the branch name, the commit messages and the secrets files again.
 
 ## The local gate
 

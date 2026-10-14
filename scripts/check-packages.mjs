@@ -14,12 +14,23 @@ const AGPL = new Set(['hub']);
 const AGPL_TEXT_SHA256 = '0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0';
 const root = path.join(import.meta.dirname, '..', 'packages');
 // Scripts pnpm runs on install for workspace packages whatever
-// onlyBuiltDependencies says (#8): a pull request adding one would run code on
-// the machine of whoever installs it. The root may only set up the git hooks.
-const INSTALL_SCRIPTS = ['preinstall', 'install', 'postinstall', 'preprepare', 'prepare', 'postprepare'];
+// onlyBuiltDependencies says (#8). This flags them before a merge, and CI runs
+// it before installing; a maintainer runs it before installing a fork's branch
+// (CONTRIBUTING.md). The root may only set up the git hooks.
+const INSTALL_SCRIPTS = [
+  'preinstall',
+  'install',
+  'postinstall',
+  'preprepare',
+  'prepare',
+  'postprepare',
+  'pnpm:devPreinstall',
+];
 const ROOT_ALLOWED = { prepare: 'husky' };
 
 const problems = [];
+// pnpm loads this file, and runs it, on every install.
+if (existsSync(path.join(root, '..', '.pnpmfile.cjs'))) problems.push('.pnpmfile.cjs runs code on install');
 const rootPkg = JSON.parse(readFileSync(path.join(root, '..', 'package.json'), 'utf8'));
 for (const s of INSTALL_SCRIPTS.filter((s) => (rootPkg.scripts ?? {})[s] !== undefined))
   if (rootPkg.scripts[s] !== ROOT_ALLOWED[s]) problems.push(`package.json runs "${s}" on install`);

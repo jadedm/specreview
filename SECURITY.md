@@ -14,6 +14,8 @@ The config's admins are trusted with the hub: the admin page lets them create an
 
 Whoever can write to an organisation's hub config repo can read its Cloudflare token (an Actions secret reaches workflows on any branch) and change what the hub deploys; the template's README says to give that access only to the hub's administrators. That token can change every Access application, D1 database, R2 bucket and Worker on the Cloudflare account, not only the hub's, because Cloudflare cannot scope those permissions to one resource; a separate account for the hub keeps that reach to the hub. The hub's GitHub App holds Workflows write on every repository it is installed on, the config repo included, so whoever holds the app's private key (a hub secret, or sealed in the hub's database) can also reach that token.
 
+A public site's pages are served with `public, max-age=60`, so after a site is made private, caches may serve its pages for up to a minute.
+
 Readers see the comments on any page they may read, including the bodies of threads whose quoted text has since changed (the quote itself is hidden from them) and threads resolved before they were given access.
 
 ## Supported versions

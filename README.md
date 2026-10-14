@@ -4,7 +4,7 @@ Review specs where they are rendered. A team keeps its specs as Markdown in each
 
 ## Status
 
-Early, with no releases yet. One organisation runs a hub in production. To run one, pin a commit of `develop`, as the organisation template below does. The plan and its order are on issue #1.
+Early, with no releases yet. One organisation runs a hub in production. To run one, pin a commit of `develop` in your hub repo's `specreview.commit`. The plan and its order are on issue #1.
 
 Built and tested:
 
@@ -12,7 +12,7 @@ Built and tested:
 - The admin page (`/_admin/` on the hub, for the config's admins): creates the organisation's GitHub App from a manifest and keeps its key in the hub's database, encrypted; adds a site by opening the pull requests it needs; edits each site's readers and approvers as commits to the organisation's config repo, with a removal taking effect at once.
 - The site build (`packages/site`): turns a repo's committed `docs/` into a site with the review UI, plus every page's earlier versions for the team to compare.
 - Publishing (`build/` and `publish/` actions): a GitHub Actions workflow builds the site and uploads it to the hub, authenticated by GitHub's own OIDC token, so a product repo holds no secret.
-- Running a hub (`examples/org/`, `packages/hub/deploy/`): the template for the organisation's private config repo. A first install from a laptop creates the Cloudflare resources and Access applications and deploys the Worker; after that, the repo's apply workflow applies every push to `main`, with a narrow Cloudflare token that `workflow-token` creates.
+- Running a hub (`examples/org/`, `packages/hub/deploy/`): the template for the organisation's private config repo. A first install from a laptop creates the Cloudflare resources and Access applications and deploys the Worker; after that, the repo's apply workflow applies every push to `main`, with a Cloudflare token that `workflow-token` creates, limited to the permissions a run needs (its reach is in the template's README).
 
 Not built yet:
 

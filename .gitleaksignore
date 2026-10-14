@@ -1,9 +1,0 @@
-# Test values, not secrets: PEM headers around keys the tests generate at run
-# time, and the build test's SECRET_ON_DISK=1 marker.
-1187726a76e406edf1a649f91e5e9dc38c3e3797:packages/hub/test/access.test.ts:private-key:16
-e0d4205aabfbb369b6c7cc4595319b9c72561f39:packages/hub/test/access.test.ts:private-key:16
-016e87bf9b002d257f62cf3ff1b37d0b5dea21ee:packages/hub/test/add-site.test.ts:private-key:18
-ca224456a8731909e10888945fc56ea8ca3acf15:packages/hub/test/add-site.test.ts:private-key:18
-b1b7ae4e69f8627d36f735ff1cdbe269521d018e:packages/hub/test/admin.test.ts:private-key:18
-aa261a61017d722c3ca4f3017de86a81ad1d5bfe:packages/hub/test/admin.test.ts:private-key:18
-ea732a53c1b43c3c5b4bd3806fda726c9872368a:packages/site/test/build.test.ts:generic-api-key:285
