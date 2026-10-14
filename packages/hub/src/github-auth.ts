@@ -9,13 +9,17 @@ import { findApp } from './stored-app';
 // GitHub rejected so the next ask mints a new one.
 // read and write are tickets and labels; the setup purposes add a site (#57),
 // on the product repo and on the repo holding the config.
-export type Purpose = 'read' | 'write' | 'setup-product' | 'setup-config';
+export type Purpose = 'read' | 'write' | 'setup-product' | 'setup-config' | 'browse';
 export type GitHubAuth = {
   tokenFor(repo: string, purpose: Purpose): Promise<string | null>;
   invalidate?(repo: string, purpose: Purpose): void;
   installed?(repo: string): Promise<boolean | null>;
   // Whether this is a GitHub App (only an app can add a site, #57).
   hasApp?(): Promise<boolean>;
+  // The org's repos the app's installation reaches (#63): names, sorted, no
+  // archived ones; 'too-many' past the listing limit; null when GitHub cannot
+  // say.
+  repos?(owner: string): Promise<string[] | 'too-many' | null>;
 };
 
 // Personal tokens serve tickets and labels only; adding a site needs the app.
@@ -24,6 +28,7 @@ const PERSONAL: Record<Purpose, (env: Env) => string | undefined> = {
   write: (env) => env.GITHUB_WRITE_TOKEN,
   'setup-product': () => undefined,
   'setup-config': () => undefined,
+  browse: () => undefined,
 };
 
 export const envTokens = (env: Env): GitHubAuth => ({
@@ -79,6 +84,7 @@ const storedOrTokens = (env: Env): GitHubAuth => {
     },
     installed: async (repo) => (await current()).installed?.(repo) ?? null,
     hasApp: async () => (await current()).hasApp?.() ?? false,
+    repos: async (owner) => (await current()).repos?.(owner) ?? null,
   };
 };
 

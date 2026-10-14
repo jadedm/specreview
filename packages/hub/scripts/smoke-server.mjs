@@ -99,7 +99,15 @@ const app = { lookups: 0, mints: [], refused: 0, issued: new Map(), converted: 0
 const bearer = (req) => req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
 // The app's own endpoints, then the token check on every repo call.
 const appAnswer = async (req, url) => {
-  const lookup = /^\/repos\/acme\/([^/]+)\/installation$/.exec(url.pathname);
+  const lookup =
+    /^\/repos\/acme\/([^/]+)\/installation$/.exec(url.pathname) ?? /^\/orgs\/acme\/installation$/.exec(url.pathname);
+  // #63: the repos a whole-installation token sees.
+  if (url.pathname === '/installation/repositories') {
+    if (app.issued.get(bearer(req))?.repo !== '*')
+      return Response.json({ message: 'Bad credentials' }, { status: 401 });
+    const names = ['sidecar', 'newdocs', 'docs-hub', 'handbook'];
+    return Response.json({ repositories: names.map((name) => ({ name, archived: false, owner: { login: 'acme' } })) });
+  }
   const mint = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(url.pathname);
   if (lookup || mint) {
     const ok = await jwtVerify(bearer(req), appPublic, { issuer: APP_ID, algorithms: ['RS256'] }).catch(() => null);
@@ -113,7 +121,10 @@ const appAnswer = async (req, url) => {
     const body = await req.json();
     app.mints.push(body);
     const token = `ghs_smoke_${randomUUID()}`;
-    app.issued.set(token, { repo: body.repositories?.[0], permissions: body.permissions ?? {} });
+    app.issued.set(token, {
+      repo: body.repositories ? body.repositories[0] : '*',
+      permissions: body.permissions ?? {},
+    });
     return Response.json({ token, expires_at: new Date(Date.now() + 3600_000).toISOString() }, { status: 201 });
   }
   const [, repo, rest = ''] = /^\/repos\/acme\/([^/]+)(\/.*)?$/.exec(url.pathname) ?? [];
@@ -199,6 +210,8 @@ const repoApi = async (req, url) => {
     const files = [...new Set([...a.keys(), ...b.keys()])].filter((f) => a.get(f)?.content !== b.get(f)?.content);
     return Response.json({ files: files.map((filename) => ({ filename })) });
   }
+  if (rest.startsWith('/branches') && req.method === 'GET')
+    return Response.json([...r.refs.keys()].sort().map((name) => ({ name })));
   if (rest === '/pulls' && req.method === 'GET') {
     const head = (url.searchParams.get('head') ?? '').split(':')[1];
     return Response.json(r.pulls.filter((p) => p.head === head).map((p) => ({ ...p, base: { ref: p.base } })));

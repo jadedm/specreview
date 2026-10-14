@@ -303,3 +303,24 @@ describe('#57: personal tokens', () => {
     expect(await t.tokenFor('acme/x', 'setup-config')).toBeNull();
   });
 });
+
+describe('#63: listing the installation repos', () => {
+  it('a listing that never settles is not waited on after 30 seconds', async () => {
+    github.app!.installations.set('acme/newdocs', 7);
+    const a = auth();
+    let hung = true;
+    const real = spy.getMockImplementation()!;
+    spy.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(new Request(input, init).url);
+      if (hung && url.pathname === '/orgs/acme/installation') {
+        hung = false;
+        return new Promise<Response>(() => {});
+      }
+      return real(input, init);
+    });
+    void a.repos!('acme');
+    clock += 31_000;
+    expect(await a.repos!('acme')).toEqual(['globex', 'newdocs', 'sidecar']);
+    expect(github.calls.filter((c) => c === 'GET /orgs/acme/installation')).toHaveLength(1);
+  });
+});

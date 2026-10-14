@@ -150,6 +150,9 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   }
   // The admin page (#56): unknown paths 404 before any identity check, as
   // under a site; admins only.
+  // The admin page's address without its slash (#62); nothing else is.
+  if (url.pathname === '/_admin')
+    return new Response(null, { status: 308, headers: { location: '/_admin/', 'cache-control': 'no-store' } });
   if (url.pathname.startsWith('/_admin/')) {
     const admin = adminRoute(url.pathname);
     if (!admin) throw new AppError(404, 'NOT_FOUND');
