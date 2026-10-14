@@ -19,6 +19,11 @@ const RESERVED = new Set(['_api', '_history', '_signin']);
 // VitePress copies docs/public/ to the site root as is. Only plain files may
 // go there: HTML, scripts or SVG would run in the site's origin.
 const PUBLIC_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'pdf', 'txt', 'csv', 'woff', 'woff2']);
+// Elsewhere in the docs folder a file is a page (lowercase .md, the only name
+// VitePress and the checks below treat as one) or a type Vite imports as a
+// plain asset (#73). Anything else a page could import Vite parses as code;
+// csv is safe only in public/, which is copied and never imported.
+export const ASSET_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'pdf', 'txt', 'woff', 'woff2']);
 // Written into every output folder, so a later build knows it may empty it.
 export const OUTPUT_MARK = '.specreview-output';
 
@@ -120,12 +125,15 @@ const pathProblem = (file: string): string | null => {
   // would be /<repo>/_signin.
   const first = served.length === 1 && served[0].endsWith('.md') ? served[0].slice(0, -3) : served[0];
   if (RESERVED.has(first)) return 'the path may not start with _api, _history or _signin';
-  if (parts[0] !== 'public') return null;
-  const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
-  if (served.join('/') === 'manifest.json' || !PUBLIC_TYPES.has(ext)) {
-    return `public/ takes only ${[...PUBLIC_TYPES].join(', ')} files`;
+  const name = parts[parts.length - 1];
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
+  if (parts[0] === 'public') {
+    if (served.join('/') === 'manifest.json' || !PUBLIC_TYPES.has(ext))
+      return `public/ takes only ${[...PUBLIC_TYPES].join(', ')} files`;
+    return null;
   }
-  return null;
+  if (name.endsWith('.md') || ASSET_TYPES.has(ext)) return null;
+  return `outside public/, the docs folder takes only .md pages and ${[...ASSET_TYPES].join(', ')} files`;
 };
 
 export const checkPaths = (files: string[]) => {

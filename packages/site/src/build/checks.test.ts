@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkArguments, checkPaths, forbiddenIn, OUTPUT_MARK } from './checks.js';
+import { docsAsPagesOrAssets } from './config.js';
 
 describe('20: Markdown features that pull in files or run code', () => {
   it.each([
@@ -84,6 +85,40 @@ describe('21: names the hub can serve', () => {
     expect(() => checkPaths(['index.md', file])).toThrow(file);
   });
 
+  // #73: outside public/, only pages and the same types public/ takes.
+  it.each([
+    ['probe.js'],
+    ['probe.mjs'],
+    ['probe.ts'],
+    ['probe.vue'],
+    ['probe.svg'],
+    ['probe.html'],
+    ['probe.css'],
+    ['probe.json'],
+    ['guide/deep/probe.js'],
+    ['img/probe.svg'],
+    ['notes'],
+    ['notes.v2/readme'],
+    ['data.csv'],
+    ['probe.MD'],
+    ['guide/probe.Md'],
+  ])('%s outside public/ is refused, naming the file', (file) => {
+    expect(() => checkPaths(['index.md', file])).toThrow(
+      `${file}: outside public/, the docs folder takes only .md pages and png, jpg, jpeg, gif, webp, ico, pdf, txt, woff, woff2 files`,
+    );
+  });
+
+  it('csv stays allowed in public/, which is copied and never imported', () => {
+    expect(() => checkPaths(['index.md', 'public/data.csv'])).not.toThrow();
+  });
+
+  it('pages and every asset type are accepted outside public/, assets in either case', () => {
+    const types = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'pdf', 'txt', 'woff', 'woff2'];
+    expect(() =>
+      checkPaths(['index.md', 'guide/a.md', ...types.map((t) => `img/x.${t}`), 'img/Shot.PNG']),
+    ).not.toThrow();
+  });
+
   it('_api deeper in the tree is an ordinary folder name', () => {
     expect(() => checkPaths(['guide/_api/x.md'])).not.toThrow();
   });
@@ -135,5 +170,50 @@ describe('24: arguments', () => {
     expect(() => checkArguments('x', paths('docs', 'src'))).toThrow('not an earlier build');
     writeFileSync(path.join(root, 'src', OUTPUT_MARK), '');
     expect(() => checkArguments('x', paths('docs', 'src'))).not.toThrow();
+  });
+});
+
+describe('#73: docs files load only as pages or plain assets', () => {
+  let docs: string;
+  let other: string;
+  beforeEach(() => {
+    docs = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'site-docs-')));
+    other = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'site-other-')));
+    for (const f of ['index.md', 'img.png', 'Shot.PNG', 'upper.MD', 'notes.txt'])
+      writeFileSync(path.join(docs, f), 'x');
+    writeFileSync(path.join(other, 'lib.js'), 'x');
+  });
+  afterEach(() => {
+    rmSync(docs, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  });
+  const load = (id: string) => docsAsPagesOrAssets(docs).load(id);
+
+  it('a page with any query, and a plain asset, load', () => {
+    expect(load(path.join(docs, 'index.md'))).toBeNull();
+    expect(load(`${path.join(docs, 'index.md')}?vue&type=script&lang.ts`)).toBeNull();
+    expect(load(path.join(docs, 'img.png'))).toBeNull();
+    expect(load(path.join(docs, 'Shot.PNG'))).toBeNull();
+    expect(load(path.join(docs, 'notes.txt'))).toBeNull();
+  });
+
+  it.each(['?worker', '?sharedworker', '?raw', '?url', '?inline', '?import'])('an asset with %s is refused', (q) => {
+    expect(() => load(`${path.join(docs, 'img.png')}${q}`)).toThrow(
+      'img.png: a page may use this file only as a plain image or link',
+    );
+  });
+
+  it.each(['?worker', '?raw', '?url'])('a page with %s is refused', (q) => {
+    expect(() => load(`${path.join(docs, 'index.md')}${q}`)).toThrow('index.md: a page may use this file only');
+  });
+
+  it('an upper-case .MD is not a page and is refused', () => {
+    expect(() => load(path.join(docs, 'upper.MD'))).toThrow('upper.MD: a page may use this file only');
+  });
+
+  it('files outside the docs folder and virtual modules are left to the other checks', () => {
+    expect(load(path.join(other, 'lib.js'))).toBeNull();
+    expect(load('\0virtual:thing')).toBeNull();
+    expect(load('vitepress/theme')).toBeNull();
   });
 });

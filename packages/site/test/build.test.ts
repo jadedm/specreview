@@ -286,6 +286,39 @@ describe('builds that must fail, naming the cause', () => {
     expect(html.match(/\{\{ 6\*7 \}\}|&#123;&#123; 6\*7 &#125;&#125;/g)?.length).toBe(3);
   });
 
+  it('#73: a file of another type in the docs folder stops the build before anything runs or is written', () => {
+    const repo = minimal();
+    const marker = path.join(scratch, `ran-${n}`);
+    write(
+      repo,
+      'docs/probe.js',
+      `globalThis.process?.getBuiltinModule?.('node:fs')?.writeFileSync(${JSON.stringify(marker)}, '1');\nexport default 1;\n`,
+    );
+    write(repo, 'docs/probe.md', page('Probe', '![p](./probe.js)'));
+    commit(repo, 'probe');
+    const r = build(repo);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('probe.js: outside public/, the docs folder takes only .md pages and');
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(path.join(repo, '.specreview', 'site'))).toBe(false);
+    expect(existsSync(path.join(repo, '.specreview', '.specreview-output'))).toBe(false);
+  });
+
+  it.each([
+    ['data.csv', '![d](./data.csv)', 'data.csv: outside public/'],
+    ['upper.MD', '![u](./upper.MD)', 'upper.MD: outside public/'],
+    ['img.png', '![i](./img.png?worker)', 'img.png: a page may use this file only as a plain image or link'],
+  ])('#73: %s used as %s is refused and nothing is published', (file, link, refusal) => {
+    const repo = minimal();
+    write(repo, `docs/${file}`, 'plain text\n');
+    write(repo, 'docs/use.md', page('Use', link));
+    commit(repo, 'use');
+    const r = build(repo);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(refusal);
+    expect(existsSync(path.join(repo, '.specreview', 'site'))).toBe(false);
+  });
+
   it('a page may not use a file from outside the docs folder; one inside is fine', () => {
     const inside = minimal();
     write(inside, 'docs/img/dot.png', 'not really a png');
