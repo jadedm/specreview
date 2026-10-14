@@ -8,14 +8,40 @@ const PER_PAGE = 50;
 
 export type CfError = { code?: number; message?: string };
 
+// Which token permission a call needs (#66), so a token without it is told
+// what to add. First match wins; the query is not part of the match.
+const NEEDS: [RegExp, string][] = [
+  [/^\/accounts\/[^/]+\/tokens(\/|$)/, 'Account API Tokens'],
+  [/^\/user\/tokens(\/|$)/, 'API Tokens'],
+  [/^\/accounts\/[^/]+\/access\/(apps|policies)(\/|$)/, 'Access: Apps and Policies'],
+  [
+    /^\/accounts\/[^/]+\/access\/(organizations|identity_providers)(\/|$)/,
+    'Access: Organizations, Identity Providers, and Groups',
+  ],
+  [/^\/accounts\/[^/]+\/d1\//, 'D1'],
+  [/^\/accounts\/[^/]+\/r2\//, 'Workers R2 Storage'],
+  [/^\/accounts\/[^/]+\/workers\/(scripts|domains)(\/|$)/, 'Workers Scripts'],
+  [/^\/zones\/[^/]+\/dns_records(\/|$)/, 'DNS'],
+  [/^\/zones$/, 'Zone'],
+  [/^\/accounts\/[^/]+$/, 'Account Settings'],
+];
+
+export const permissionFor = (method: string, path: string) => {
+  const bare = path.split('?')[0];
+  const found = NEEDS.find(([re]) => re.test(bare));
+  return found && `${found[1]} ${method === 'GET' ? 'Read' : 'Write'}`;
+};
+
 export class CloudflareError extends DeployError {
   constructor(
     readonly status: number,
     readonly errors: CfError[],
-    what: string,
+    method: string,
+    path: string,
   ) {
+    const needs = status === 403 ? permissionFor(method, path) : undefined;
     super(
-      `Cloudflare refused ${what} (${status}): ${errors.map((e) => `${e.code ?? ''} ${e.message ?? ''}`.trim()).join('; ') || 'no reason given'}`,
+      `Cloudflare refused ${method} ${path} (${status}): ${errors.map((e) => `${e.code ?? ''} ${e.message ?? ''}`.trim()).join('; ') || 'no reason given'}${needs ? `; the token may lack ${needs}` : ''}`,
     );
   }
 }
@@ -71,7 +97,7 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
     if (!envelope)
       throw new DeployError(`Cloudflare sent a response that is not JSON for ${method} ${path} (${res.status})`);
     if (!res.ok || envelope.success !== true)
-      throw new CloudflareError(res.status, envelope.errors ?? [], `${method} ${path}`);
+      throw new CloudflareError(res.status, envelope.errors ?? [], method, path);
     return envelope.result as T;
   };
   const list = async <T>(path: string): Promise<T[]> => {
@@ -83,7 +109,7 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
       if (!envelope)
         throw new DeployError(`Cloudflare sent a response that is not JSON for GET ${path} (${res.status})`);
       if (!res.ok || envelope.success !== true)
-        throw new CloudflareError(res.status, envelope.errors ?? [], `GET ${path}`);
+        throw new CloudflareError(res.status, envelope.errors ?? [], 'GET', path);
       const batch = Array.isArray(envelope.result) ? (envelope.result as T[]) : [];
       // A list that ignores page would hand back page 1 forever.
       const key = JSON.stringify(batch[0] ?? null);
@@ -102,8 +128,7 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
     const { res, envelope } = await request('GET', path);
     if (res.status === 404) return false;
     if (!envelope) throw new DeployError(`Cloudflare sent a response that is not JSON for GET ${path} (${res.status})`);
-    if (!res.ok || envelope.success !== true)
-      throw new CloudflareError(res.status, envelope.errors ?? [], `GET ${path}`);
+    if (!res.ok || envelope.success !== true) throw new CloudflareError(res.status, envelope.errors ?? [], 'GET', path);
     return true;
   };
   const page = async <T>(method: string, path: string) => {
@@ -111,7 +136,7 @@ export const cloudflare = (tokenFile: string, fetchImpl: typeof fetch = fetch): 
     if (!envelope)
       throw new DeployError(`Cloudflare sent a response that is not JSON for ${method} ${path} (${res.status})`);
     if (!res.ok || envelope.success !== true)
-      throw new CloudflareError(res.status, envelope.errors ?? [], `${method} ${path}`);
+      throw new CloudflareError(res.status, envelope.errors ?? [], method, path);
     return { result: envelope.result as T, cursor: envelope.result_info?.cursor || undefined };
   };
   return { call, list, exists, page };

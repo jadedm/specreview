@@ -41,7 +41,11 @@ const coveredBy = (app: App) =>
     (d): d is string => typeof d === 'string',
   );
 const coversOnly = (app: App, domain: string) => coveredBy(app).length === 1 && coveredBy(app)[0] === domain;
-type Zone = { id: string; name: string; status: string };
+export type Zone = { id: string; name: string; status: string };
+
+// The zone a hostname lives in: the longest zone name covering it.
+export const zoneCovering = (zones: Zone[], host: string) =>
+  zones.filter((z) => host === z.name || host.endsWith(`.${z.name}`)).sort((x, y) => y.name.length - x.name.length)[0];
 
 const ruleKey = (r: unknown) => JSON.stringify(r);
 // Code-point order, so the result is the same on every machine and locale.
@@ -133,9 +137,7 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   // The hostname: its zone is in this account and active, and nothing else
   // serves it. A custom domain already on this Worker is a previous deploy.
   const zones = await cf.list<Zone>(`/zones?account.id=${a}`);
-  const zone = zones
-    .filter((z) => host === z.name || host.endsWith(`.${z.name}`))
-    .sort((x, y) => y.name.length - x.name.length)[0];
+  const zone = zoneCovering(zones, host);
   if (!zone) refusals.push(`no zone in account ${a} covers ${host}`);
   if (zone && zone.status !== 'active') refusals.push(`zone ${zone.name} is ${zone.status}, not active`);
   if (zone) {
@@ -597,6 +599,7 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     log('nothing to do');
     return;
   }
+  const before = JSON.stringify(org.hub);
   for (const step of steps) {
     if (!opts.apply) {
       log(`plan: ${step.say}`);
@@ -606,5 +609,6 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
     log(`done: ${step.say}`);
   }
   if (!opts.apply) log('plan only; rerun with --apply to make these changes');
-  else log('hub.json updated; commit it');
+  // Only ids and the like are recorded; an update to a policy changes nothing here.
+  else log(JSON.stringify(org.hub) === before ? 'done; hub.json unchanged' : 'hub.json updated; commit it');
 };

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Runs specreview's setup, deploy or secret for this organisation, from a
-# checkout of specreview at the commit in specreview.commit.
+# Runs specreview's setup, deploy, secret or workflow-token for this
+# organisation, from a checkout of specreview at the commit in specreview.commit.
 #   ./run.sh setup  --token-file /tmp/.cf-token [--apply]
 #   ./run.sh deploy --token-file /tmp/.cf-token [--dry-run]
 #   ./run.sh secret --token-file /tmp/.cf-token --name GITHUB_APP_PRIVATE_KEY --value-file /tmp/.gh-app.pem
+#   ./run.sh workflow-token --token-file /tmp/.cf-token --out /tmp/.cf-workflow-token
 set -euo pipefail
 ORG=$(cd "$(dirname "$0")" && pwd)
 COMMIT=$(tr -d '[:space:]' < "$ORG/specreview.commit")
