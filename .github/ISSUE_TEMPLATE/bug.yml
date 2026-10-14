@@ -1,0 +1,44 @@
+name: Bug
+description: Something specreview does wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: A vulnerability does not go here; see SECURITY.md and use the Security tab.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Part
+      options:
+        - The hub (pages, comments, status, labels, admin page)
+        - The site build or the review panel
+        - Publishing (the build and publish actions)
+        - Setting up or deploying a hub (deploy tooling, the org template)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, with any error text as it appeared.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that shows it. Leave out tokens, keys and private names.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: specreview commit
+      description: The commit you run, from your hub repo's specreview.commit or `git rev-parse HEAD`.

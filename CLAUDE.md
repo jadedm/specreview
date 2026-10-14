@@ -10,7 +10,7 @@ Every change: an issue first, then a test plan on the issue before code, a branc
 
 ## Branches
 
-Gitflow. `develop` is the integration branch and the GitHub default; `main` takes releases only. Branches are `<prefix>/<issue>-<slug>` (prefix one of feature, bugfix, hotfix, chore, fix, ci, infra, refactor, docs) or `release/<x.y.z>`, cut from `develop`; always pass `--base develop` to `gh pr create`. Husky refuses env files at commit, non-conventional commit messages, and pushes to `develop`, `main` or a badly named branch (tags pass), and runs `pnpm typecheck` before every push. Hooks are installed by `pnpm install` and can be skipped, so CI (`.github/workflows/ci.yml`, one `verify` job) checks the branch name and the commit messages again on every PR, then runs `check:packages`, `lint:check`, `format:check`, `typecheck`, `test` and `build`, and fails if `publish/dist/` differs from a fresh build.
+Gitflow. `develop` is the integration branch and the GitHub default; `main` takes releases only. Branches are `<prefix>/<issue>-<slug>` (prefix one of feature, bugfix, hotfix, chore, fix, ci, infra, refactor, docs) or `release/<x.y.z>`, cut from `develop`; always pass `--base develop` to `gh pr create`. Husky refuses env files, `.dev.vars` and `.pem` files at commit, non-conventional commit messages, and pushes to `develop`, `main` or a badly named branch (tags pass), and runs `pnpm typecheck` before every push. Hooks are installed by `pnpm install` and can be skipped, so CI (`.github/workflows/ci.yml`, one `verify` job) runs `scripts/check-packages.mjs` before installing (it reads only `package.json` files, and install is when a package's scripts would run), checks the branch name, the commit messages and that no secrets file is added on every PR, then runs `lint:check`, `format:check`, `typecheck`, `test` and `build`, and fails if `publish/dist/` differs from a fresh build.
 
 Solo repo for now: loop step 12 (team review) is N/A.
 
@@ -33,7 +33,7 @@ pnpm install --frozen-lockfile
 pnpm lint            # autofix
 pnpm lint:check      # assert clean; CI uses this, never lint
 pnpm format:check
-pnpm check:packages  # fails if a package lacks typecheck, test or build (pnpm -r would skip it)
+pnpm check:packages  # fails if a package lacks typecheck, test or build (pnpm -r would skip it), or runs a script on install
 pnpm typecheck       # tsc in every package, separate from any bundler
 pnpm test            # vitest in every package; the hub runs in workerd
 pnpm build

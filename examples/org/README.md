@@ -16,7 +16,7 @@ The template for the private repo an organisation keeps for its specreview hub. 
 1. Create a private repo in the organisation's GitHub account from this template (or copy this folder into one, hidden files included: `.github/` and `.gitignore`). Until step 6, the apply workflow's runs (on this first push, or any push to `main`) fail for want of the token; that is expected.
 2. Enable Zero Trust on the Cloudflare account (dashboard: Zero Trust, then the Free plan), and create the install token (below). Keep it in a file on your laptop; it never goes into GitHub.
 3. Edit `hub.json`: `accountId` (the 32-character id on the Cloudflare dashboard) and `hostname` (where the hub will live, in a zone on that account). Leave the rest; setup writes the ids.
-4. Edit `specreview.config.json` for your sites and people, and set `specreview.commit` to a release commit of specreview (run.sh stops with "set specreview.commit" until you do).
+4. Edit `specreview.config.json` for your sites and people, and set `specreview.commit` to a commit of specreview's `develop` (run.sh stops with "set specreview.commit" until you do).
 5. From a laptop, with the install token: `./run.sh setup --token-file <file> --apply` (creates the Access apps and policy, the one-time PIN login, the database and the bucket, and records their ids in `hub.json`), then `./run.sh deploy --token-file <file>`.
 6. Create the workflow's token: `./run.sh workflow-token --token-file <install token file> --out <new file>`, naming a file outside this repo (`/tmp/.cf-workflow-token`, say). It writes the new token to that file and nothing else, and prints the command that stores it as this repo's `CLOUDFLARE_API_TOKEN` Actions secret. Run that, then delete the file.
 7. Commit and push to `main`. From now on the apply workflow applies every push.
@@ -46,7 +46,7 @@ What `workflow-token` creates, scoped to this account and the hostname's zone: e
 - Account: Account Settings Read; Access: Apps and Policies Write; Access: Organizations, Identity Providers, and Groups Read; D1 Write; Workers R2 Storage Write; Workers Scripts Write.
 - Zone: Zone Read; DNS Read; Workers Routes Write.
 
-Workers Scripts Write cannot be limited to one Worker, so this token can change any Worker on the account; a separate Cloudflare account for the hub is the way to avoid that. To replace it: run `workflow-token` again with a new file, store the new value, then delete the old token in the dashboard.
+Cloudflare cannot limit these permissions to the hub's own resources, so this token can change every Access application, D1 database, R2 bucket and Worker on the account; a separate Cloudflare account for the hub is the way to keep that reach to the hub. To replace it: run `workflow-token` again with a new file, store the new value, then delete the old token in the dashboard.
 
 ## GitHub
 
