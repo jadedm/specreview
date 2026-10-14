@@ -379,7 +379,7 @@ describe('review fixes: only an admin clears a removal', () => {
       }),
     };
     const r = await add('readers', 'ana@partner.example');
-    expect(html(r)).toContain('already listed, but a recent removal still refuses them here');
+    expect(html(r)).toContain('already listed, but a removal still refuses them here');
     expect(await pendingRows()).toHaveLength(1);
     expect(await status('ana@partner.example')).toBe(403);
   });
@@ -552,7 +552,7 @@ describe('#67: finished removals and the clear races', () => {
     };
     const r = await add('readers', 'zed@partner.example');
     expect(r.status).toBe(200);
-    expect(html(r)).toContain('An earlier removal still refuses them here');
+    expect(html(r)).toContain('A removal still refuses them here');
     expect(await pendingRows()).toHaveLength(1);
   });
 
@@ -561,9 +561,85 @@ describe('#67: finished removals and the clear races', () => {
     try {
       const r = await add('readers', 'zed@partner.example');
       expect(r.status).toBe(200);
-      expect(html(r)).toContain('The hub could not check for an earlier removal');
+      expect(html(r)).toContain('The hub could not check for a removal');
     } finally {
       await workerEnv.DB.prepare('ALTER TABLE pending_removals_away RENAME TO pending_removals').run();
+    }
+  });
+
+  it('#69 1: a removal made by another admin while the add is in flight is reported', async () => {
+    github.repoApi = async (req, repo, path) => {
+      if (req.method === 'PUT') await remove('readers', 'zed@partner.example');
+      return standIn(req, repo, path);
+    };
+    const r = await add('readers', 'zed@partner.example');
+    expect(r.status).toBe(200);
+    expect(html(r)).toContain('A removal still refuses them here');
+    expect(await pendingRows()).toHaveLength(1);
+  });
+
+  it('#69 2: a removal let back in by another admin while the add is in flight is not reported', async () => {
+    await workerEnv.DB.prepare(
+      "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'zed@partner.example', 'other@acme.dev', ?)",
+    )
+      .bind(Date.now() - 1000)
+      .run();
+    github.repoApi = async (req, repo, path) => {
+      if (req.method === 'PUT') await restore('zed@partner.example', String(await removedAt()));
+      return standIn(req, repo, path);
+    };
+    const r = await add('readers', 'zed@partner.example');
+    expect(r.status).toBe(200);
+    expect(html(r)).not.toContain('refuses them');
+    expect(html(r)).not.toContain('could not check');
+    expect(await pendingRows()).toEqual([]);
+  });
+
+  it('#69 3: already listed, and removed by another admin meanwhile: reported as refused', async () => {
+    const c = fileConfig();
+    file = {
+      sha: 'listed',
+      text: configText({
+        ...c,
+        sites: c.sites.map((s) =>
+          s.repo === 'sidecar' ? { ...s, readers: [...(s.readers as string[]), 'zed@partner.example'] } : s,
+        ),
+      }),
+    };
+    let once = false;
+    github.repoApi = async (req, repo, path) => {
+      if (req.method === 'GET' && path.startsWith('/contents/') && !once) {
+        once = true;
+        await workerEnv.DB.prepare(
+          "INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES ('acme/sidecar', 'readers', 'zed@partner.example', 'other@acme.dev', ?)",
+        )
+          .bind(Date.now())
+          .run();
+      }
+      return standIn(req, repo, path);
+    };
+    const r = await add('readers', 'zed@partner.example');
+    expect(html(r)).toContain('already listed, but a removal still refuses them here');
+    expect(await pendingRows()).toHaveLength(1);
+  });
+
+  it('#69 7: the database unreadable as the add began but readable after: the read after decides', async () => {
+    await workerEnv.DB.prepare('ALTER TABLE pending_removals RENAME TO pending_removals_away').run();
+    let back = false;
+    try {
+      github.repoApi = async (req, repo, path) => {
+        if (req.method === 'PUT' && !back) {
+          back = true;
+          await workerEnv.DB.prepare('ALTER TABLE pending_removals_away RENAME TO pending_removals').run();
+        }
+        return standIn(req, repo, path);
+      };
+      const r = await add('readers', 'zed@partner.example');
+      expect(r.status).toBe(200);
+      expect(html(r)).not.toContain('could not check');
+      expect(html(r)).not.toContain('refuses them');
+    } finally {
+      if (!back) await workerEnv.DB.prepare('ALTER TABLE pending_removals_away RENAME TO pending_removals').run();
     }
   });
 

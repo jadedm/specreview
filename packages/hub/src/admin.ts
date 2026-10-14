@@ -343,7 +343,7 @@ const accessPost = async (a: Admin) => {
         a,
         200,
         action === 'add' ? 'Added' : 'Removed',
-        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still read through ${escapeHtml(outcome.still)}.</p>` : ''}${outcome.kind === 'done' && outcome.refused ? `<p class="note">${outcome.refused === true ? 'An earlier removal still refuses them here; the admin page offers Let back in.' : 'The hub could not check for an earlier removal; reload the admin page to see whether one still refuses them.'}</p>` : ''}`,
+        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still read through ${escapeHtml(outcome.still)}.</p>` : ''}${outcome.kind === 'done' && outcome.refused ? `<p class="note">${outcome.refused === true ? 'A removal still refuses them here; the admin page offers Let back in.' : 'The hub could not check for a removal; reload the admin page to see whether one still refuses them.'}</p>` : ''}`,
       ),
     unchanged: () =>
       say(a, 200, 'Nothing to change', `<p>${escapeHtml(outcome.kind === 'unchanged' ? outcome.why : '')}.</p>`),

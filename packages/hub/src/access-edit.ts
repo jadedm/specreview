@@ -22,7 +22,7 @@ export type AccessChange = {
   removedAt?: number;
 };
 export type Outcome =
-  // refused: an earlier removal still refuses them here ('unknown' when the
+  // refused: a removal refuses them here now ('unknown' when the
   // hub could not check), so the result must not say they are let in.
   | { kind: 'done'; still?: string; note?: string; refused?: true | 'unknown' }
   | { kind: 'unchanged'; why: string }
@@ -119,9 +119,12 @@ export const changeAccess = async (
     typeof seen === 'number' && seen < olderThan
       ? clearPendingAt(env, site.key, change.list, change.entry, seen).catch(() => false)
       : Promise.resolve(false);
-  // After clearing: whether an earlier removal still refuses them here.
-  const stillRefused = (cleared: boolean): true | 'unknown' | undefined =>
-    seen === null ? 'unknown' : typeof seen === 'number' && !cleared ? true : undefined;
+  // After clearing, read again: whether a removal refuses them here now, so
+  // the result reports what another admin did meanwhile too (#69).
+  const refusalNow = async (): Promise<true | 'unknown' | undefined> => {
+    const now = await pendingAt(env, site.key, change.list, change.entry);
+    return now === null ? 'unknown' : now === undefined ? undefined : true;
+  };
   const configRepo = config.configRepo;
   if (!configRepo) return { kind: 'refused', status: 409, why: 'the hub does not know its config repo' };
   if (!(await auth.hasApp?.())) return { kind: 'refused', status: 409, why: 'the hub has no GitHub App' };
@@ -142,10 +145,11 @@ export const changeAccess = async (
     const has = lists[change.list].includes(change.entry);
     if (!removing && has) {
       // Already in git: an old removal no longer should keep them out.
-      const refused = stillRefused(await clearSeen(Date.now() - IN_FLIGHT_MS));
+      await clearSeen(Date.now() - IN_FLIGHT_MS);
+      const refused = await refusalNow();
       const why = {
-        yes: `${change.entry} is already listed, but a recent removal still refuses them here; the admin page offers Let back in`,
-        unknown: `${change.entry} is already listed; the hub could not check for an earlier removal, so reload the admin page to see whether one still refuses them`,
+        yes: `${change.entry} is already listed, but a removal still refuses them here; the admin page offers Let back in`,
+        unknown: `${change.entry} is already listed; the hub could not check for a removal, so reload the admin page to see whether one still refuses them`,
         no: `${change.entry} is already listed; the hub lets them in`,
       }[refused === true ? 'yes' : (refused ?? 'no')];
       return { kind: 'unchanged', why };
@@ -170,7 +174,8 @@ export const changeAccess = async (
       author: { name: email, email },
     }).catch(() => null);
     if (res?.status === 200 || res?.status === 201) {
-      const refused = removing ? undefined : stillRefused(await clearSeen());
+      if (!removing) await clearSeen();
+      const refused = removing ? undefined : await refusalNow();
       return { kind: 'done', still: stillReads(next.config, change), ...(refused && { refused }) };
     }
     if (res?.status === 409) return 'conflict';
