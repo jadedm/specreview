@@ -465,6 +465,24 @@ describe('20: public sites in Access', () => {
     expect(state.apps.some((x) => x.name === `specreview ${HOST} public`)).toBe(false);
   });
 
+  it('19 (#56): the admin paths stay behind the main app; no bypass covers them, with or without a public site', async () => {
+    const { state, dir } = await privateHub();
+    setPublic(dir, ['sidecar']);
+    expect((await run(state, { apply: true, dir })).error).toBeNull();
+    const hub = JSON.parse(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')) as HubJson;
+    expect(covered(state, hub.access?.appId)).toContain(HOST);
+    // An Access destination ending in /* covers everything under it.
+    const matches = (uri: string, target: string) =>
+      uri.endsWith('/*') ? target.startsWith(uri.slice(0, -1)) : uri === target;
+    const bypasses = state.apps
+      .filter((x) => x.id !== hub.access?.appId)
+      .flatMap((x) => [x.domain, ...(x.destinations ?? []).map((d) => d.uri)]);
+    expect(bypasses.length).toBeGreaterThan(1);
+    for (const target of [`${HOST}/_admin/`, `${HOST}/_admin/github/created`, `${HOST}/_admin/github/forget`]) {
+      expect(bypasses.filter((uri) => matches(uri, target))).toEqual([]);
+    }
+  });
+
   it('15, 20: the first public site: plan writes nothing, then apply creates the bypass and grows the main app', async () => {
     const { state, dir } = await privateHub();
     setPublic(dir, ['sidecar']);

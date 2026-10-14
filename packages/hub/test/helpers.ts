@@ -299,8 +299,14 @@ export const github = {
   // and label calls take only the tokens it issued, for their repo, and a
   // read token only for GET.
   app: null as AppStub | null,
+  // GitHub's app-manifest conversion (#56): the answer for a code, and the
+  // codes asked for.
+  conversion: null as ((code: string) => Response) | null,
+  conversions: [] as string[],
   reset() {
     this.app = null;
+    this.conversion = null;
+    this.conversions = [];
     this.repos = freshRepos();
     this.calls = [];
     this.labelDefs = new Map();
@@ -389,6 +395,13 @@ const appRefusal = (app: AppStub, req: Request, repo: string): Response | null =
 
 const githubResponse = async (req: Request, url: URL): Promise<Response> => {
   github.calls.push(`${req.method} ${url.pathname}${url.search}`);
+  const converting = /^\/app-manifests\/([^/]+)\/conversions$/.exec(url.pathname);
+  if (converting && req.method === 'POST') {
+    github.conversions.push(converting[1]);
+    return github.conversion
+      ? github.conversion(converting[1])
+      : Response.json({ message: 'Not Found' }, { status: 404 });
+  }
   const fromApp = github.app && (await appResponse(github.app, req, url));
   if (fromApp) return fromApp;
   const scoped = /^\/repos\/([^/]+\/[^/]+)(\/.*)$/.exec(url.pathname);
@@ -492,9 +505,16 @@ export const reset = async () => {
   forgetLabelSetup();
   forgetGitHubAppForTests();
   await env.DB.batch(
-    ['replies', 'threads', 'status_history', 'page_status', 'ticket_cache', 'write_log'].map((t) =>
-      env.DB.prepare(`DELETE FROM ${t}`),
-    ),
+    [
+      'replies',
+      'threads',
+      'status_history',
+      'page_status',
+      'ticket_cache',
+      'write_log',
+      'github_app',
+      'admin_states',
+    ].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   );
 };
 

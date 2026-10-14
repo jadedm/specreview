@@ -3,6 +3,7 @@
 // only as CLOUDFLARE_API_TOKEN in its environment; it is never an argument,
 // never in the generated config, and never printed.
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -56,8 +57,8 @@ const envFor = (org: Org, tokenFile: string): NodeJS.ProcessEnv => ({
   CLOUDFLARE_ACCOUNT_ID: org.hub.accountId,
 });
 
-const step = async (run: Run, args: string[], env: NodeJS.ProcessEnv, what: string) => {
-  const code = await run(args, { env });
+const step = async (run: Run, args: string[], env: NodeJS.ProcessEnv, what: string, input?: string) => {
+  const code = await run(args, { env, input });
   if (code !== 0) throw new DeployError(`${what} failed (wrangler exit ${code}); nothing after it ran`);
 };
 
@@ -148,7 +149,8 @@ export const deploy = async ({
   hubDir,
   dryRun,
   wait = waitForHost,
-}: Common & { dryRun: boolean; wait?: typeof waitForHost }) => {
+  cf,
+}: Common & { dryRun: boolean; wait?: typeof waitForHost; cf?: Cloudflare }) => {
   deployable(org.hub);
   // Read once: the file is not looked at again while deploy runs.
   const logo = logoOf(org);
@@ -202,6 +204,8 @@ export const deploy = async ({
       await step(run, ['deploy', '--config', configPath], env, 'wrangler deploy');
       // The new Worker is live from here, whatever the wait says next.
       recordBrand(org, { logoKey: logo?.key ?? null });
+      if (!cf) throw new DeployError('deploy needs the Cloudflare API to check the hub key');
+      await setHubKey(org, cf, run, configPath, env, log);
     },
     logo,
   );
@@ -215,6 +219,34 @@ export const deploy = async ({
     );
   }
   await retireLogos(org, logo, run, envFor(org, tokenFile), log);
+};
+
+// The hub key seals what the hub keeps in D1 (#56): a new key could not open
+// what the old one sealed, so it is set only when the Worker has none, asked
+// of Cloudflare each time rather than remembered (a put that failed after
+// setting it, or a hub.json never pushed, must not lead to a second key). Set
+// after the Worker exists (secret put would create one), on stdin.
+const setHubKey = async (
+  org: Org,
+  cf: Cloudflare,
+  run: Run,
+  configPath: string,
+  env: NodeJS.ProcessEnv,
+  log: (l: string) => void,
+) => {
+  const secrets = await cf.call<{ name: string }[]>(
+    'GET',
+    `/accounts/${org.hub.accountId}/workers/scripts/${org.hub.worker}/secrets`,
+  );
+  if (secrets.some((s) => s.name === 'SPECREVIEW_KEY')) return;
+  await step(
+    run,
+    ['secret', 'put', 'SPECREVIEW_KEY', '--config', configPath],
+    env,
+    'setting the hub key',
+    randomBytes(32).toString('base64'),
+  );
+  log('hub key set');
 };
 
 // hub.json's record of stored logos: `keys` gains what is given, `logoKey`

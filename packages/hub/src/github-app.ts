@@ -187,6 +187,16 @@ export const appAuth = ({
   };
 
   return {
+    // For the admin page: whether the app is installed on the repo; null when
+    // GitHub cannot be asked.
+    installed: async (repo) => {
+      try {
+        return (await installationFor(repo)) !== null;
+      } catch {
+        // tokenFor logs a broken key; this answer only says it could not ask.
+        return null;
+      }
+    },
     tokenFor: async (repo, purpose) => {
       const cacheKey = `${repo} ${purpose}`;
       const cached = tokens.get(cacheKey);

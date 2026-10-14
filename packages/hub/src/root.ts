@@ -30,6 +30,14 @@ const STYLE = [
   'a:focus-visible{outline:2px solid #1f1f1f;outline-offset:2px}',
   '.title{display:block;font-size:18px;font-weight:600;line-height:1.4}',
   '.meta{display:block;font-size:14px;color:#6b6b6b}',
+  // The admin page's buttons (#56): a dark fill, the same focus ring.
+  'form{margin:24px 0}',
+  'button{font:inherit;font-size:15px;font-weight:600;color:#fff;background:#1f1f1f;border:0;border-radius:6px;padding:10px 16px;cursor:pointer}',
+  'button:hover{background:#3d3d3d}',
+  'button:focus-visible{outline:2px solid #1f1f1f;outline-offset:2px}',
+  '.quiet{color:#1f1f1f;background:#fff;border:1px solid #c4c4c4}',
+  '.quiet:hover{background:#f6f6f6}',
+  'h2{font-size:18px;font-weight:600;margin:32px 0 8px}',
   '@media (max-width:640px){.bar{padding:0 16px}main{margin:32px auto;padding:0 16px}h1{font-size:24px}}',
 ].join('');
 
@@ -38,11 +46,13 @@ const sha256 = async (text: string) => {
   return btoa(String.fromCharCode(...new Uint8Array(digest)));
 };
 
-const escapeHtml = (s: string) =>
+export const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
-// HEAD gets the same status and headers with no body, as pages.ts does.
-const page = async (status: number, name: string, main: string, head: boolean) =>
+// HEAD gets the same status and headers with no body, as pages.ts does. A
+// page with forms names where they may post (form-action does not fall back
+// to default-src).
+export const page = async (status: number, name: string, main: string, head: boolean, formAction?: string) =>
   new Response(
     head
       ? null
@@ -50,7 +60,9 @@ const page = async (status: number, name: string, main: string, head: boolean) =
     {
       status,
       headers: {
-        ...protectedHeaders(`default-src 'none'; style-src 'sha256-${await sha256(STYLE)}'`),
+        ...protectedHeaders(
+          `default-src 'none'; style-src 'sha256-${await sha256(STYLE)}'${formAction ? `; form-action ${formAction}` : ''}`,
+        ),
         'content-type': 'text/html; charset=utf-8',
       },
     },

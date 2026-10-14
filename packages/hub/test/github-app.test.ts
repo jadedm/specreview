@@ -89,6 +89,13 @@ describe('4: keys', () => {
     expect(mints()).toEqual([]);
   });
 
+  it("#56: the admin page's installation check does not silence a broken key's log line", async () => {
+    const a = auth('not a key');
+    expect(await a.installed!('acme/sidecar')).toBeNull();
+    expect(await a.tokenFor('acme/sidecar', 'read')).toBeNull();
+    expect(lines).toEqual([expect.stringMatching(/AppKeyError: not a PEM RSA private key/)]);
+  });
+
   it('a broken key is imported once and logged once', async () => {
     const importKey = vi.spyOn(crypto.subtle, 'importKey');
     const a = auth('not a key');
