@@ -123,8 +123,12 @@ describe('9: setup', () => {
     const plan = await run(state, { dir });
     expect(plan.writes()).toEqual([]);
     expect(plan.lines).toContain('plan: Access policy specreview specs.acme.dev: update');
+    const hubBytes = readFileSync(path.join(dir.dir, 'hub.json'), 'utf8');
     const r = await run(state, { apply: true, dir });
     expect(r.error).toBeNull();
+    // #66: an update records no id, so hub.json is untouched and setup says so.
+    expect(r.lines.at(-1)).toBe('done; hub.json unchanged');
+    expect(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')).toBe(hubBytes);
     expect(r.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
       ['PUT', `/access/policies/${state.policies[0].id}`],
     ]);

@@ -1,4 +1,4 @@
-// node packages/hub/dist/deploy.mjs <setup|deploy|secret> --org <dir> --token-file <file> [...]
+// node packages/hub/dist/deploy.mjs <setup|deploy|secret|workflow-token> --org <dir> --token-file <file> [...]
 import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,14 +6,16 @@ import { cloudflare, readToken } from './cloudflare';
 import { deploy, runWrangler, secret } from './deploy';
 import { DeployError, loadOrg } from './org';
 import { setup } from './setup';
+import { workflowToken } from './workflow-token';
 
 const USAGE = `usage:
   deploy.mjs setup  --org <dir> --token-file <file> [--apply]
   deploy.mjs deploy --org <dir> --token-file <file> [--dry-run]
-  deploy.mjs secret --org <dir> --token-file <file> --name GITHUB_APP_ID|GITHUB_APP_PRIVATE_KEY|GITHUB_READ_TOKEN|GITHUB_WRITE_TOKEN --value-file <file>`;
+  deploy.mjs secret --org <dir> --token-file <file> --name GITHUB_APP_ID|GITHUB_APP_PRIVATE_KEY|GITHUB_READ_TOKEN|GITHUB_WRITE_TOKEN --value-file <file>
+  deploy.mjs workflow-token --org <dir> --token-file <install token file> --out <new file>`;
 
 const FLAGS = new Set(['--apply', '--dry-run']);
-const OPTIONS = new Set(['--org', '--token-file', '--name', '--value-file']);
+const OPTIONS = new Set(['--org', '--token-file', '--name', '--value-file', '--out']);
 
 export const parseArgs = (argv: string[]) => {
   const [command, ...rest] = argv;
@@ -25,7 +27,7 @@ export const parseArgs = (argv: string[]) => {
     else if (OPTIONS.has(arg) && rest[i + 1] !== undefined) options.set(arg, rest[++i]);
     else throw new DeployError(`unknown or incomplete argument: ${arg}\n${USAGE}`);
   }
-  if (!['setup', 'deploy', 'secret'].includes(command ?? '')) throw new DeployError(USAGE);
+  if (!['setup', 'deploy', 'secret', 'workflow-token'].includes(command ?? '')) throw new DeployError(USAGE);
   const need = (name: string) => {
     const v = options.get(name);
     if (!v) throw new DeployError(`${command} needs ${name}\n${USAGE}`);
@@ -49,6 +51,8 @@ export const main = async (
   if (command === 'setup') return setup(org, cloudflare(tokenFile), { apply: flags.has('--apply'), log });
   if (command === 'deploy')
     return deploy({ org, tokenFile, run, log, dryRun, cf: dryRun ? undefined : cloudflare(tokenFile) });
+  if (command === 'workflow-token')
+    return workflowToken({ org, tokenFile, out: path.resolve(need('--out')), cf: cloudflare(tokenFile), log });
   return secret({
     org,
     tokenFile,
