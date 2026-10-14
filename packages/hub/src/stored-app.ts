@@ -32,12 +32,13 @@ export const findApp = async (env: Env): Promise<Found> => {
 // Inserts only when no app is stored: a second app never replaces the first.
 export const saveApp = async (env: Env, app: OpenedApp) => {
   const sealed = await seal(env.SPECREVIEW_KEY, PURPOSE, app.privateKey);
-  const result = await env.DB.prepare(
-    'INSERT INTO github_app (one, app_id, slug, sealed_key, created_by, created_at) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT (one) DO NOTHING',
+  // RETURNING gives a row only when this statement inserted one.
+  const inserted = await env.DB.prepare(
+    'INSERT INTO github_app (one, app_id, slug, sealed_key, created_by, created_at) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT (one) DO NOTHING RETURNING one',
   )
     .bind(app.appId, app.slug, sealed, app.createdBy, app.createdAt)
-    .run();
-  return result.meta.changes === 1;
+    .first();
+  return inserted !== null;
 };
 
 export const forgetApp = async (env: Env) => {

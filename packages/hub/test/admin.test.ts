@@ -213,6 +213,23 @@ describe('5 to 10: GitHub sends the admin back', () => {
     expect((await states()).map((s) => s.state)).toEqual([second]);
   });
 
+  it('8b: another return storing an app between the check and the save is answered 409, not as a failure', async () => {
+    github.conversion = () => conversion();
+    const state = await startFlow();
+    // The other return lands at the moment of this one's insert.
+    await env.DB.prepare(
+      "CREATE TRIGGER race BEFORE INSERT ON github_app WHEN NEW.slug = 'specreview-acme' BEGIN INSERT INTO github_app (one, app_id, slug, sealed_key, created_by, created_at) VALUES (1, 9, 'raced', 'x', 'other@acme.dev', 1); END",
+    ).run();
+    try {
+      const r = await finish(state);
+      expect(r.status).toBe(409);
+      expect(html(r)).toContain('Another app was stored a moment ago');
+      expect((await storedRow())!.slug).toBe('raced');
+    } finally {
+      await env.DB.prepare('DROP TRIGGER race').run();
+    }
+  });
+
   it.each([
     ['an expired code', 404],
     ['GitHub down', 503],
