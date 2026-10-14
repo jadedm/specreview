@@ -1,6 +1,7 @@
 import { jwtVerify, decodeProtectedHeader, decodeJwt } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { appAuth, appJwt, importAppKey, pkcs8FromPkcs1 } from '../src/github-app';
+import { envTokens } from '../src/github-auth';
 import { appStub, call, deps, github, installFetch, LIVE_HASH, PAGE, reset } from './helpers';
 
 const APP_ID = '123456';
@@ -288,5 +289,17 @@ describe('the hub with the app configured', () => {
     ]);
     expect(issueCalls()).toBe(0);
     expect(errors.mock.calls.map((c) => c.join(' '))).toContain('github app: GITHUB_APP_PRIVATE_KEY is not set');
+  });
+});
+
+describe('#57: personal tokens', () => {
+  it('serve tickets and labels, never adding a site', async () => {
+    const t = envTokens({ GITHUB_READ_TOKEN: 'r', GITHUB_WRITE_TOKEN: 'w' } as unknown as Parameters<
+      typeof envTokens
+    >[0]);
+    expect(await t.tokenFor('acme/x', 'read')).toBe('r');
+    expect(await t.tokenFor('acme/x', 'write')).toBe('w');
+    expect(await t.tokenFor('acme/x', 'setup-product')).toBeNull();
+    expect(await t.tokenFor('acme/x', 'setup-config')).toBeNull();
   });
 });

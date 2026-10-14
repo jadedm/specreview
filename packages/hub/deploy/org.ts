@@ -34,6 +34,16 @@ export type Org = {
   hub: HubJson;
   // specreview.config.json as written, without the Access fields.
   config: Record<string, unknown>;
+  // specreview.commit when it names a real commit (#57); null for a missing
+  // file or the template's all-zero placeholder.
+  commit: string | null;
+};
+
+const commitOf = (dir: string) => {
+  const file = path.join(dir, 'specreview.commit');
+  if (!existsSync(file)) return null;
+  const commit = readFileSync(file, 'utf8').trim();
+  return /^[0-9a-f]{40}$/.test(commit) && !/^0+$/.test(commit) ? commit : null;
 };
 
 export class DeployError extends Error {}
@@ -124,7 +134,7 @@ export const loadOrg = (dir: string): Org => {
     if (isObject(config) && key in config) problems.push(`specreview.config.json sets ${key}; it belongs in hub.json`);
   }
   if (problems.length > 0) throw new DeployError(`the organisation folder has problems:\n  ${problems.join('\n  ')}`);
-  return { dir, hub: hub as HubJson, config: config as Record<string, unknown> };
+  return { dir, hub: hub as HubJson, config: config as Record<string, unknown>, commit: commitOf(dir) };
 };
 
 // setup records each resource as soon as it exists, so a failed run resumes.

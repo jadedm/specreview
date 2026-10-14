@@ -7,15 +7,27 @@ import { findApp } from './stored-app';
 // stored in D1 (#56), the personal tokens. Callers ask for a token and treat
 // none as "unavailable", never as an error to throw; they invalidate a token
 // GitHub rejected so the next ask mints a new one.
-export type Purpose = 'read' | 'write';
+// read and write are tickets and labels; the setup purposes add a site (#57),
+// on the product repo and on the repo holding the config.
+export type Purpose = 'read' | 'write' | 'setup-product' | 'setup-config';
 export type GitHubAuth = {
   tokenFor(repo: string, purpose: Purpose): Promise<string | null>;
   invalidate?(repo: string, purpose: Purpose): void;
   installed?(repo: string): Promise<boolean | null>;
+  // Whether this is a GitHub App (only an app can add a site, #57).
+  hasApp?(): Promise<boolean>;
+};
+
+// Personal tokens serve tickets and labels only; adding a site needs the app.
+const PERSONAL: Record<Purpose, (env: Env) => string | undefined> = {
+  read: (env) => env.GITHUB_READ_TOKEN,
+  write: (env) => env.GITHUB_WRITE_TOKEN,
+  'setup-product': () => undefined,
+  'setup-config': () => undefined,
 };
 
 export const envTokens = (env: Env): GitHubAuth => ({
-  tokenFor: async (_repo, purpose) => (purpose === 'read' ? env.GITHUB_READ_TOKEN : env.GITHUB_WRITE_TOKEN) ?? null,
+  tokenFor: async (_repo, purpose) => PERSONAL[purpose](env) ?? null,
 });
 
 const noTokens: GitHubAuth = { tokenFor: async () => null };
@@ -66,6 +78,7 @@ const storedOrTokens = (env: Env): GitHubAuth => {
       void current().then((a) => a.invalidate?.(repo, purpose));
     },
     installed: async (repo) => (await current()).installed?.(repo) ?? null,
+    hasApp: async () => (await current()).hasApp?.() ?? false,
   };
 };
 

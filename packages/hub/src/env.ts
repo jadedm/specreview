@@ -13,6 +13,9 @@ export type Env = {
   // The hub key: 32 random bytes in base64 that seal what the hub keeps in D1
   // (the GitHub App created from the admin page, #56). deploy sets it once.
   SPECREVIEW_KEY?: string;
+  // The specreview commit this hub runs, from the org's specreview.commit;
+  // deploy sets it. Pull requests that add a site pin the actions to it (#57).
+  SPECREVIEW_COMMIT?: string;
   // Personal tokens, for a hub without the app: read is Issues read, write is
   // Issues read and write. Secrets, set by a person.
   GITHUB_READ_TOKEN?: string;

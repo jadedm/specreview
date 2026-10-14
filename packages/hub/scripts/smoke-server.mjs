@@ -44,6 +44,7 @@ const config = {
   accessAud: AUD,
   admins: ['owner@acme.dev'],
   ownerId: '1001',
+  configRepo: 'docs-hub',
   sites: [
     {
       repo: 'sidecar',
@@ -112,15 +113,103 @@ const appAnswer = async (req, url) => {
     const body = await req.json();
     app.mints.push(body);
     const token = `ghs_smoke_${randomUUID()}`;
-    app.issued.set(token, { repo: body.repositories?.[0], permission: body.permissions?.issues });
+    app.issued.set(token, { repo: body.repositories?.[0], permissions: body.permissions ?? {} });
     return Response.json({ token, expires_at: new Date(Date.now() + 3600_000).toISOString() }, { status: 201 });
   }
-  const repo = /^\/repos\/acme\/([^/]+)\//.exec(url.pathname)?.[1];
+  const [, repo, rest = ''] = /^\/repos\/acme\/([^/]+)(\/.*)?$/.exec(url.pathname) ?? [];
   const issued = app.issued.get(bearer(req));
-  const allowed = issued && issued.repo === repo && (req.method === 'GET' || issued.permission === 'write');
+  const allowed =
+    issued && issued.repo === repo && neededFor(req.method, rest).every((p) => grants(issued, p, req.method));
   if (allowed) return null;
   app.refused++;
   return Response.json({ message: 'Bad credentials' }, { status: 401 });
+};
+
+// What a token must hold per path (#57): Issues for tickets and labels,
+// Contents for files and branches (and Workflows for a workflow file), Pull
+// requests for pulls.
+const neededFor = (method, rest) => {
+  if (rest.startsWith('/issues') || rest.startsWith('/labels')) return ['issues'];
+  if (rest.startsWith('/pulls')) return ['pull_requests'];
+  if (method === 'PUT' && rest.startsWith('/contents/.github/workflows/')) return ['contents', 'workflows'];
+  return rest === '' ? [] : ['contents'];
+};
+const grants = (issued, p, method) =>
+  issued.permissions[p] === 'write' || (method === 'GET' && issued.permissions[p] === 'read');
+
+// Two repos for adding a site (#57): newdocs, and docs-hub holding the config.
+let shaSeq = 0;
+const sha = () => `smokesha${++shaSeq}`;
+const repoWith = (id, files) => ({
+  id,
+  refs: new Map([['main', sha()]]),
+  files: new Map([
+    [
+      'main',
+      new Map(Object.entries(files).map(([k, t]) => [k, { sha: sha(), content: Buffer.from(t).toString('base64') }])),
+    ],
+  ]),
+  pulls: [],
+});
+// The org's file as docs-hub holds it: no Access fields (deploy adds them).
+const orgFile = { ...config };
+delete orgFile.accessTeamDomain;
+delete orgFile.accessAud;
+const repoState = {
+  newdocs: repoWith(3001, { 'README.md': '# newdocs\n' }),
+  'docs-hub': repoWith(4001, {
+    'specreview.config.json': `${JSON.stringify({ ...orgFile, brand: { name: 'Acme', logo: 'logo.png' } }, null, 2)}\n`,
+  }),
+};
+const repoApi = async (req, url) => {
+  const m = /^\/repos\/acme\/(newdocs|docs-hub)(\/.*)?$/.exec(url.pathname);
+  if (!m) return null;
+  const r = repoState[m[1]];
+  const rest = m[2] ?? '';
+  if (rest === '' && req.method === 'GET') return Response.json({ id: r.id, default_branch: 'main' });
+  const ref = /^\/git\/ref\/heads\/(.+)$/.exec(rest);
+  if (ref)
+    return r.refs.has(ref[1])
+      ? Response.json({ object: { sha: r.refs.get(ref[1]) } })
+      : Response.json({}, { status: 404 });
+  if (rest === '/git/refs' && req.method === 'POST') {
+    const { ref: name, sha: at } = await req.json();
+    const b = name.replace('refs/heads/', '');
+    if (r.refs.has(b)) return Response.json({ message: 'Reference already exists' }, { status: 422 });
+    r.refs.set(b, at);
+    r.files.set(b, new Map(r.files.get('main')));
+    return Response.json({ ref: name }, { status: 201 });
+  }
+  const c = /^\/contents\/(.+)$/.exec(rest);
+  if (c && req.method === 'GET') {
+    const f = r.files.get(url.searchParams.get('ref') ?? 'main')?.get(c[1]);
+    return f ? Response.json(f) : Response.json({}, { status: 404 });
+  }
+  if (c && req.method === 'PUT') {
+    const body = await req.json();
+    const files = r.files.get(body.branch);
+    if (files.get(c[1])?.sha !== body.sha) return Response.json({ message: 'sha mismatch' }, { status: 409 });
+    files.set(c[1], { sha: sha(), content: body.content });
+    return Response.json({}, { status: 201 });
+  }
+  const compare = /^\/compare\/(.+)\.\.\.(.+)$/.exec(rest);
+  if (compare && req.method === 'GET') {
+    const a = r.files.get(decodeURIComponent(compare[1])) ?? new Map();
+    const b = r.files.get(decodeURIComponent(compare[2])) ?? new Map();
+    const files = [...new Set([...a.keys(), ...b.keys()])].filter((f) => a.get(f)?.content !== b.get(f)?.content);
+    return Response.json({ files: files.map((filename) => ({ filename })) });
+  }
+  if (rest === '/pulls' && req.method === 'GET') {
+    const head = (url.searchParams.get('head') ?? '').split(':')[1];
+    return Response.json(r.pulls.filter((p) => p.head === head).map((p) => ({ ...p, base: { ref: p.base } })));
+  }
+  if (rest === '/pulls' && req.method === 'POST') {
+    const body = await req.json();
+    const pull = { ...body, html_url: `https://github.com/acme/${m[1]}/pull/${r.pulls.length + 1}` };
+    r.pulls.push(pull);
+    return Response.json(pull, { status: 201 });
+  }
+  return null;
 };
 
 const github = async (req, url) => {
@@ -140,6 +229,8 @@ const github = async (req, url) => {
   }
   const fromApp = (APP || app.converted > 0) && (await appAnswer(req, url));
   if (fromApp) return fromApp;
+  const fromRepos = await repoApi(req, url);
+  if (fromRepos) return fromRepos;
   if (/^\/repos\/acme\/[^/]+\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
   // The cron lists tickets carrying each of our labels; only sidecar has tickets.
   const listing = /^\/repos\/acme\/([^/]+)\/issues$/.exec(url.pathname);
@@ -190,6 +281,7 @@ const mf = new Miniflare({
       bindings: {
         SPECREVIEW_CONFIG: JSON.stringify(config),
         SPECREVIEW_KEY: randomBytes(32).toString('base64'),
+        SPECREVIEW_COMMIT: 'c'.repeat(40),
         ...(APP
           ? { GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: appKeys.privateKey }
           : { GITHUB_READ_TOKEN: 'smoke-read', GITHUB_WRITE_TOKEN: 'smoke-write' }),
@@ -326,6 +418,24 @@ http
           (err) => `threw: ${err instanceof Error ? err.message : String(err)}`,
         );
       return send({ outcome: ran });
+    }
+    if (url.pathname === '/repos') {
+      const view = Object.fromEntries(
+        Object.entries(repoState).map(([name, r]) => [
+          name,
+          {
+            branches: [...r.refs.keys()],
+            work: [...(r.files.get('specreview/add-newdocs')?.keys() ?? [])],
+            pulls: r.pulls.map((p) => `${p.head} -> ${p.base}: ${p.title}`),
+          },
+        ]),
+      );
+      return send(view);
+    }
+    if (url.pathname === '/repo-file') {
+      const r = repoState[url.searchParams.get('repo')];
+      const f = r?.files.get(url.searchParams.get('ref'))?.get(url.searchParams.get('path'));
+      return send(f ? Buffer.from(f.content, 'base64').toString('utf8') : null);
     }
     if (url.pathname === '/rows')
       return send((await db.prepare('SELECT site, page, status, version FROM page_status').all()).results);

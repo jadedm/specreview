@@ -260,3 +260,17 @@ describe('config rules, one at a time', () => {
     });
   }
 });
+
+describe('14 (#57): configRepo', () => {
+  it('is optional, a bare lowercase repo name, and qualified with the org', async () => {
+    expect(problemsIn({ ...CONFIG, configRepo: 'docs-hub' })).toEqual([]);
+    for (const bad of ['acme/docs-hub', 'Docs-Hub', '', 7]) {
+      expect(problemsIn({ ...CONFIG, configRepo: bad }).join('\n')).toMatch(
+        /configRepo must be the bare lowercase name/,
+      );
+    }
+    const { configOf } = await import('../src/config');
+    expect(configOf(JSON.stringify({ ...CONFIG, configRepo: 'docs-hub' })).configRepo).toBe('acme/docs-hub');
+    expect(configOf(JSON.stringify(CONFIG)).configRepo).toBeNull();
+  });
+});

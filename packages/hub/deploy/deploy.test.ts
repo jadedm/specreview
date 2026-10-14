@@ -449,6 +449,24 @@ describe('9: deploy', () => {
   );
 });
 
+describe('13 (#57): the commit the hub runs', () => {
+  it('is a Worker var only when specreview.commit names a real commit', () => {
+    const commit = 'a'.repeat(40);
+    const cases: [string | null, string | undefined][] = [
+      [`${commit}\n`, commit],
+      ['0'.repeat(40), undefined],
+      ['not a commit', undefined],
+      [null, undefined],
+    ];
+    for (const [file, want] of cases) {
+      const dir = finishedExample();
+      if (file !== null) writeFileSync(path.join(dir, 'specreview.commit'), file);
+      const vars = (wranglerConfig(loadOrg(dir)) as { vars: Record<string, string> }).vars;
+      expect(vars.SPECREVIEW_COMMIT).toBe(want);
+    }
+  });
+});
+
 describe('9: secret', () => {
   const setUp = (scripts: string[], value: string) => {
     const { dir, tokenFile } = orgDir(exampleHub());

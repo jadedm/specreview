@@ -108,7 +108,13 @@ describe('3 and 14: no app yet', () => {
       hook_attributes: { url: HOST, active: false },
       redirect_url: `${HOST}/_admin/github/created`,
       public: false,
-      default_permissions: { issues: 'write', metadata: 'read' },
+      default_permissions: {
+        issues: 'write',
+        metadata: 'read',
+        contents: 'write',
+        pull_requests: 'write',
+        workflows: 'write',
+      },
       default_events: [],
     });
     expect(r.headers.get('content-security-policy')).toMatch(/form-action 'self' https:\/\/github.com$/);
