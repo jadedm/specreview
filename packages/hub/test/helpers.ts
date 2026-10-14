@@ -585,6 +585,7 @@ export const reset = async () => {
       'write_log',
       'github_app',
       'admin_states',
+      'pending_removals',
     ].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   );
 };

@@ -7,6 +7,7 @@ import type { HubConfig, Site } from './config';
 import type { Env } from './env';
 import { snapshotOf } from './manifest';
 import { protectedHeaders } from './pages';
+import { withPending } from './pending';
 import { canRead, roleOf } from './roles';
 import { effectiveStatus, readSiteStatuses } from './status-read';
 import type { SiteStore } from './store';
@@ -43,6 +44,9 @@ const STYLE = [
   'label{font-weight:600;font-size:15px}',
   'ol{padding-left:20px}',
   'code{font-size:14px}',
+  // The admin page's list rows with a remove button (#12).
+  '.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0}',
+  'form.inline{margin:0}',
   '@media (max-width:640px){.bar{padding:0 16px}main{margin:32px auto;padding:0 16px}h1{font-size:24px}}',
 ].join('');
 
@@ -130,7 +134,13 @@ export const serveRoot = async (
   env: Env,
 ): Promise<Response> => {
   const head = method === 'HEAD';
-  const readable = [...config.sites.values()].filter((site) => canRead(roleOf(email, site)));
+  // Removals made on the admin page (#12). If the database is slow or failing
+  // the index fails closed: readers and approvers are left out (the team,
+  // by domain, still sees its sites) rather than listing a removed reader.
+  const sites = await Promise.all(
+    [...config.sites.values()].map((site) => within(withPending(env, site), { ...site, readers: [], approvers: [] })),
+  );
+  const readable = sites.filter((site) => canRead(roleOf(email, site)));
   const name = escapeHtml(config.brand?.name ?? config.org);
   if (readable.length === 0) {
     // Access's own sign-out ends the session, so the next visit asks for an

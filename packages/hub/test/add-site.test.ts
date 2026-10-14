@@ -181,7 +181,8 @@ describe('1 to 3: who and when', () => {
       const r = await add(NEW, { envOverride: e });
       expect(r.status).toBe(409);
       expect(html(r)).toContain(refusal);
-      expect(calls).toEqual([]);
+      // Nothing written; the page may read the config for the access lists (#12).
+      expect(calls.filter((c) => !c.startsWith('GET '))).toEqual([]);
     },
   );
 
@@ -506,6 +507,9 @@ describe('#63: the form offers lists from GitHub', () => {
   it('3: step 1 lists the repos the app reaches, less sites, the config repo and archived ones; Next is a GET', async () => {
     github.app!.installations.set('acme/oldthing', 7);
     github.app!.archived.add('oldthing');
+    // GitHub's organisation profile and settings repos are never docs sites (#12).
+    github.app!.installations.set('acme/.github', 7);
+    github.app!.installations.set('acme/.github-private', 7);
     const p = await page();
     expect(p).toContain('<form method="get" action="/_admin/">');
     expect(options(p, 'repo')).toEqual(['newdocs']);

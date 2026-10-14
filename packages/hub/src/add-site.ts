@@ -11,7 +11,7 @@ import type { GitHubAuth, Purpose } from './github-auth';
 
 const API = 'https://api.github.com';
 export const WORKFLOW = '.github/workflows/docs.yml';
-const CONFIG_FILE = 'specreview.config.json';
+export const CONFIG_FILE = 'specreview.config.json';
 
 export type SiteInput = { repo: string; branch: string; docs: string; ticketRepo: string; teamDomain: string };
 export type Made = { what: string; url?: string };
@@ -45,13 +45,13 @@ export const inputProblem = (input: SiteInput, config: HubConfig): string | null
 };
 
 // In chunks: spreading a large file into one call overflows the stack.
-const b64 = (text: string) => {
+export const b64 = (text: string) => {
   const bytes = new TextEncoder().encode(text);
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);
 };
-const unb64 = (text: string) =>
+export const unb64 = (text: string) =>
   new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s+/g, '')), (c) => c.charCodeAt(0)));
 
 export const workflowFor = (input: SiteInput, branch: string, origin: string, commit: string) =>
@@ -112,9 +112,9 @@ jobs:
 const STARTER = (repo: string) =>
   `# ${repo}\n\nThe first page of ${repo}'s docs. Add pages as Markdown files in this folder; folders become sections.\n`;
 
-type Call = (repo: string, purpose: Purpose, method: string, path: string, body?: unknown) => Promise<Response>;
+export type Call = (repo: string, purpose: Purpose, method: string, path: string, body?: unknown) => Promise<Response>;
 
-const caller =
+export const caller =
   (auth: GitHubAuth): Call =>
   async (repo, purpose, method, path, body) => {
     const token = await auth.tokenFor(repo, purpose);
