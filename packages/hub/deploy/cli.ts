@@ -47,7 +47,8 @@ export const main = async (
   if (tokenFile) readToken(tokenFile);
   const run = runWrangler();
   if (command === 'setup') return setup(org, cloudflare(tokenFile), { apply: flags.has('--apply'), log });
-  if (command === 'deploy') return deploy({ org, tokenFile, run, log, dryRun });
+  if (command === 'deploy')
+    return deploy({ org, tokenFile, run, log, dryRun, cf: dryRun ? undefined : cloudflare(tokenFile) });
   return secret({
     org,
     tokenFile,

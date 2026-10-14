@@ -10,6 +10,9 @@ export type Env = {
   // personal tokens.
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
+  // The hub key: 32 random bytes in base64 that seal what the hub keeps in D1
+  // (the GitHub App created from the admin page, #56). deploy sets it once.
+  SPECREVIEW_KEY?: string;
   // Personal tokens, for a hub without the app: read is Issues read, write is
   // Issues read and write. Secrets, set by a person.
   GITHUB_READ_TOKEN?: string;

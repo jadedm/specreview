@@ -30,6 +30,14 @@ const recorder = (codes: number[] = []) => {
   return { run, calls };
 };
 const noWait = async () => 'resolver' as const;
+// Cloudflare as deploy asks it about the hub key (#56): the Worker exists
+// and, unless told otherwise, already has the key.
+const cfFor = (tokenFile: string, secrets: string[] = ['SPECREVIEW_KEY']) => {
+  const state = emptyAccount();
+  state.scripts = ['specreview-hub'];
+  state.secrets = { 'specreview-hub': secrets };
+  return cloudflare(tokenFile, fakeCloudflare(state).fetchImpl);
+};
 
 describe('9: the organisation folder', () => {
   it('3: hub.json problems are named', () => {
@@ -91,7 +99,7 @@ describe('9: the organisation folder', () => {
     const { dir, tokenFile } = orgDir(exampleHub(), config);
     const { run, calls } = recorder();
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run, log: () => {}, dryRun: false, wait: noWait }),
+      deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run, log: () => {}, dryRun: false, wait: noWait }),
     ).rejects.toThrow(/approvers has an email outside/);
     expect(calls).toEqual([]);
   });
@@ -100,7 +108,7 @@ describe('9: the organisation folder', () => {
     const { dir, tokenFile } = orgDir();
     const { run, calls } = recorder();
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run, log: () => {}, dryRun: false, wait: noWait }),
+      deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run, log: () => {}, dryRun: false, wait: noWait }),
     ).rejects.toThrow(/run setup with --apply first; hub.json lacks database.id, bucket.created, access.teamDomain/);
     expect(calls).toEqual([]);
   });
@@ -116,7 +124,15 @@ describe('9: deploy', () => {
     const { dir, tokenFile } = orgDir(exampleHub());
     const { run, calls } = recorder();
     const lines: string[] = [];
-    await deploy({ org: loadOrg(dir), tokenFile, run, log: (l) => lines.push(l), dryRun: false, wait: noWait });
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run,
+      log: (l) => lines.push(l),
+      dryRun: false,
+      wait: noWait,
+    });
     expect(calls.map((c) => c.args[0])).toEqual(['d1', 'deploy']);
     expect(calls[0].args.slice(0, 4)).toEqual(['d1', 'migrations', 'apply', 'DB']);
     expect(calls[1].args).toEqual(['deploy', '--config', expect.any(String)]);
@@ -131,19 +147,113 @@ describe('9: deploy', () => {
     expect(lines.at(-1)).toBe('deployed: https://specs.acme.dev/');
   });
 
+  it('15 (#56): a Worker without the hub key gets one, on stdin, never printed; one that has it is left alone', async () => {
+    const { dir, tokenFile } = orgDir(exampleHub());
+    const { run, calls } = recorder();
+    const lines: string[] = [];
+    const cf = cfFor(tokenFile, []);
+    await deploy({ org: loadOrg(dir), tokenFile, cf, run, log: (l) => lines.push(l), dryRun: false, wait: noWait });
+    expect(calls.map((c) => c.args[0])).toEqual(['d1', 'deploy', 'secret']);
+    expect(calls[2].args).toEqual(['secret', 'put', 'SPECREVIEW_KEY', '--config', expect.any(String)]);
+    const key = calls[2].input ?? '';
+    expect(Buffer.from(key, 'base64')).toHaveLength(32);
+    expect(calls[2].args.join(' ') + lines.join('\n') + calls[2].config).not.toContain(key);
+    expect(lines).toContain('hub key set');
+    const again = recorder();
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run: again.run,
+      log: () => {},
+      dryRun: false,
+      wait: noWait,
+    });
+    expect(again.calls.map((c) => c.args[0])).toEqual(['d1', 'deploy']);
+  });
+
+  it('15 (#56): a key put that reports failure after setting the key is not followed by a second key', async () => {
+    const { dir, tokenFile } = orgDir(exampleHub());
+    await expect(
+      deploy({
+        org: loadOrg(dir),
+        tokenFile,
+        cf: cfFor(tokenFile, []),
+        run: recorder([0, 0, 1]).run,
+        log: () => {},
+        dryRun: false,
+        wait: noWait,
+      }),
+    ).rejects.toThrow(/setting the hub key failed/);
+    // Cloudflare has the key after all: the rerun asks, and leaves it.
+    const again = recorder();
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run: again.run,
+      log: () => {},
+      dryRun: false,
+      wait: noWait,
+    });
+    expect(again.calls.map((c) => c.args[0])).toEqual(['d1', 'deploy']);
+  });
+
+  it('15 (#56): if Cloudflare cannot say whether the key exists, no key is set and deploy fails', async () => {
+    const { dir, tokenFile } = orgDir(exampleHub());
+    const state = emptyAccount();
+    const { run, calls } = recorder();
+    await expect(
+      deploy({
+        org: loadOrg(dir),
+        tokenFile,
+        cf: cloudflare(tokenFile, fakeCloudflare(state).fetchImpl),
+        run,
+        log: () => {},
+        dryRun: false,
+        wait: noWait,
+      }),
+    ).rejects.toThrow(/script not found/);
+    expect(calls.map((c) => c.args[0])).toEqual(['d1', 'deploy']);
+  });
+
   it('5 and 28: a failing step stops the rest; a rerun applies and deploys again', async () => {
     const { dir, tokenFile } = orgDir(exampleHub());
     const first = recorder([0, 1]);
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run: first.run, log: () => {}, dryRun: false, wait: noWait }),
+      deploy({
+        org: loadOrg(dir),
+        tokenFile,
+        cf: cfFor(tokenFile),
+        run: first.run,
+        log: () => {},
+        dryRun: false,
+        wait: noWait,
+      }),
     ).rejects.toThrow(/wrangler deploy failed \(wrangler exit 1\)/);
     const migrationsFail = recorder([7]);
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run: migrationsFail.run, log: () => {}, dryRun: false, wait: noWait }),
+      deploy({
+        org: loadOrg(dir),
+        tokenFile,
+        cf: cfFor(tokenFile),
+        run: migrationsFail.run,
+        log: () => {},
+        dryRun: false,
+        wait: noWait,
+      }),
     ).rejects.toThrow(/applying D1 migrations failed \(wrangler exit 7\); nothing after it ran/);
     expect(migrationsFail.calls).toHaveLength(1);
     const again = recorder();
-    await deploy({ org: loadOrg(dir), tokenFile, run: again.run, log: () => {}, dryRun: false, wait: noWait });
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run: again.run,
+      log: () => {},
+      dryRun: false,
+      wait: noWait,
+    });
     expect(again.calls).toHaveLength(2);
   });
 
@@ -152,7 +262,7 @@ describe('9: deploy', () => {
     writeFileSync(tokenFile, '\n');
     const { run, calls } = recorder();
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run, log: () => {}, dryRun: false, wait: noWait }),
+      deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run, log: () => {}, dryRun: false, wait: noWait }),
     ).rejects.toThrow(/--token-file must name a readable file/);
     await expect(
       deploy({
@@ -281,7 +391,15 @@ describe('9: deploy', () => {
     const { dir, tokenFile } = orgDir(exampleHub());
     const lines: string[] = [];
     const deployOnce = (wait: () => Promise<'resolver' | 'nameservers'>) =>
-      deploy({ org: loadOrg(dir), tokenFile, run: recorder().run, log: (l) => lines.push(l), dryRun: false, wait });
+      deploy({
+        org: loadOrg(dir),
+        tokenFile,
+        cf: cfFor(tokenFile),
+        run: recorder().run,
+        log: (l) => lines.push(l),
+        dryRun: false,
+        wait,
+      });
     await deployOnce(async () => 'nameservers');
     expect(lines.some((l) => l.includes("this machine's resolver did not find") && l.includes('dig +trace'))).toBe(
       true,

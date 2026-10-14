@@ -6,8 +6,16 @@ import { logoOf, MAX_LOGO_BYTES } from './brand';
 import { deploy, type Run } from './deploy';
 import { loadOrg } from './org';
 import { HUB_DIR, wranglerConfig } from './wrangler-config';
-import { CONFIG, orgDir } from './test-helpers';
+import { cloudflare } from './cloudflare';
+import { CONFIG, emptyAccount, fakeCloudflare, orgDir } from './test-helpers';
 
+// Cloudflare as deploy asks it about the hub key (#56): the Worker has it.
+const cfFor = (tokenFile: string) => {
+  const state = emptyAccount();
+  state.scripts = ['specreview-hub'];
+  state.secrets = { 'specreview-hub': ['SPECREVIEW_KEY'] };
+  return cloudflare(tokenFile, fakeCloudflare(state).fetchImpl);
+};
 // examples/org is the blank template (#55); this is the same org after setup.
 const exampleHub = () =>
   JSON.parse(readFileSync(path.join(HUB_DIR, 'deploy', 'fixtures', 'finished-hub.json'), 'utf8')) as Record<
@@ -89,7 +97,15 @@ describe('33: the logo file', () => {
 
 describe('33: deploy order', () => {
   const run = (dir: string, tokenFile: string, r: ReturnType<typeof recorder>, lines: string[] = []) =>
-    deploy({ org: loadOrg(dir), tokenFile, run: r.run, log: (l) => lines.push(l), dryRun: false, wait: noWait });
+    deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run: r.run,
+      log: (l) => lines.push(l),
+      dryRun: false,
+      wait: noWait,
+    });
 
   it('1: the logo is uploaded first, then migrations and the Worker; hub.json records the key', async () => {
     const { dir, tokenFile } = brandedOrg({ name: 'Acme', logo: 'logo.png' }, { 'logo.png': PNG });
@@ -110,12 +126,19 @@ describe('33: deploy order', () => {
     const { dir, tokenFile } = brandedOrg({ name: 'Acme', logo: 'logo.png' }, { 'logo.png': PNG });
     const before = readFileSync(path.join(dir, 'hub.json'), 'utf8');
     const calls: string[][] = [];
-    await deploy({ org: loadOrg(dir), tokenFile, run: async (a) => (calls.push(a), 0), log: () => {}, dryRun: true });
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run: async (a) => (calls.push(a), 0),
+      log: () => {},
+      dryRun: true,
+    });
     expect(calls.map((c) => c[0])).toEqual(['deploy']);
     expect(readFileSync(path.join(dir, 'hub.json'), 'utf8')).toBe(before);
     writeFileSync(path.join(dir, 'logo.png'), '<svg/>');
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run: async () => 0, log: () => {}, dryRun: true }),
+      deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run: async () => 0, log: () => {}, dryRun: true }),
     ).rejects.toThrow(/not a PNG file/);
   });
 
@@ -131,7 +154,15 @@ describe('33: deploy order', () => {
       throw new Error('did not answer');
     };
     await expect(
-      deploy({ org: loadOrg(dir), tokenFile, run: r.run, log: () => {}, dryRun: false, wait: failingWait }),
+      deploy({
+        org: loadOrg(dir),
+        tokenFile,
+        cf: cfFor(tokenFile),
+        run: r.run,
+        log: () => {},
+        dryRun: false,
+        wait: failingWait,
+      }),
     ).rejects.toThrow(/did not answer/);
     expect(r.calls.some((c) => c[2] === 'delete')).toBe(false);
     const after = hubJson(dir).brand as { logoKey: string; keys: string[] };
@@ -163,7 +194,15 @@ describe('33: deploy order', () => {
       }
       return 0;
     };
-    await deploy({ org: loadOrg(dir), tokenFile, run, log: () => {}, dryRun: false, wait: noWait });
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run,
+      log: () => {},
+      dryRun: false,
+      wait: noWait,
+    });
     expect(uploaded).toEqual(PNG);
     expect(namedKey).toBe(uploadedKey);
     expect(hubJson(dir).brand).toEqual({ logoKey: uploadedKey });

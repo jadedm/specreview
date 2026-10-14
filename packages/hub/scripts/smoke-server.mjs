@@ -11,10 +11,14 @@
 // as the app's endpoints: it verifies the app JWT, mints tokens for one repo
 // and permission, and refuses any other token. Control /app reports them.
 //
+// The admin page (#56): the Worker has a hub key, and the GitHub stand-in
+// answers the app-manifest conversion with an app owned by the smoke org,
+// whose endpoints then answer as SMOKE_APP's do. owner@acme.dev is the admin.
+//
 // Miniflare 4 is pinned: the 5.x alpha under wrangler takes a different
 // options shape, and its workerd predates the deploy compatibility date.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { SignJWT, exportJWK, generateKeyPair, importSPKI, jwtVerify } from 'jose';
@@ -90,7 +94,7 @@ const appKeys = generateKeyPairSync('rsa', {
   publicKeyEncoding: { type: 'spki', format: 'pem' },
 });
 const appPublic = await importSPKI(appKeys.publicKey, 'RS256');
-const app = { lookups: 0, mints: [], refused: 0, issued: new Map() };
+const app = { lookups: 0, mints: [], refused: 0, issued: new Map(), converted: 0 };
 const bearer = (req) => req.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
 // The app's own endpoints, then the token check on every repo call.
 const appAnswer = async (req, url) => {
@@ -121,7 +125,20 @@ const appAnswer = async (req, url) => {
 
 const github = async (req, url) => {
   if (githubHidden) return Response.json({ message: 'Not Found' }, { status: 404 });
-  const fromApp = APP && (await appAnswer(req, url));
+  const converting = /^\/app-manifests\/([^/]+)\/conversions$/.exec(url.pathname);
+  if (converting && req.method === 'POST') {
+    app.converted++;
+    return Response.json(
+      {
+        id: Number(APP_ID),
+        slug: 'specreview-acme',
+        pem: appKeys.privateKey,
+        owner: { id: 1001, type: 'Organization', login: 'acme' },
+      },
+      { status: 201 },
+    );
+  }
+  const fromApp = (APP || app.converted > 0) && (await appAnswer(req, url));
   if (fromApp) return fromApp;
   if (/^\/repos\/acme\/[^/]+\/labels/.test(url.pathname)) return Response.json({}, { status: 201 });
   // The cron lists tickets carrying each of our labels; only sidecar has tickets.
@@ -172,6 +189,7 @@ const mf = new Miniflare({
       r2Buckets: ['SITES'],
       bindings: {
         SPECREVIEW_CONFIG: JSON.stringify(config),
+        SPECREVIEW_KEY: randomBytes(32).toString('base64'),
         ...(APP
           ? { GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: appKeys.privateKey }
           : { GITHUB_READ_TOKEN: 'smoke-read', GITHUB_WRITE_TOKEN: 'smoke-write' }),
@@ -259,7 +277,14 @@ if (process.env.SMOKE_SITE) {
 }
 
 const tokens = {};
-for (const e of ['riya@initech.example', 'dev@acme.dev', 'pm@acme.dev', 'x@stranger.example', 'Riya@INITECH.example'])
+for (const e of [
+  'riya@initech.example',
+  'dev@acme.dev',
+  'pm@acme.dev',
+  'owner@acme.dev',
+  'x@stranger.example',
+  'Riya@INITECH.example',
+])
   tokens[e] = await sign(e);
 tokens.otherApp = await sign('dev@acme.dev', 'aud-other');
 writeFileSync(path.join(here, 'tokens.json'), JSON.stringify(tokens));
@@ -285,7 +310,8 @@ http
       return send({ ok: true });
     }
     if (url.pathname === '/labels') return send(issues.get(52).labels);
-    if (url.pathname === '/app') return send({ on: APP, lookups: app.lookups, mints: app.mints, refused: app.refused });
+    if (url.pathname === '/app')
+      return send({ on: APP, converted: app.converted, lookups: app.lookups, mints: app.mints, refused: app.refused });
     if (url.pathname === '/github-hidden') {
       githubHidden = url.searchParams.get('on') === '1';
       return send({ githubHidden });

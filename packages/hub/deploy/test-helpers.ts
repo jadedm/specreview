@@ -42,6 +42,8 @@ export type FakeState = {
   policies: Policy[];
   apps: App[];
   scripts: string[];
+  // Secret names per Worker.
+  secrets: Record<string, string[]>;
 };
 
 export const emptyAccount = (): FakeState => ({
@@ -57,6 +59,7 @@ export const emptyAccount = (): FakeState => ({
   policies: [],
   apps: [],
   scripts: [],
+  secrets: {},
 });
 
 export type Request = { method: string; path: string; body?: unknown; auth: string | null };
@@ -250,6 +253,10 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
         ...app,
         policies: app.policies.map((r) => ({ ...(state.policies.find((x) => x.id === r.id) ?? {}), ...r })),
       });
+    }
+    if ((m = /\/workers\/scripts\/([^/]+)\/secrets$/.exec(p)) && method === 'GET') {
+      if (!state.scripts.includes(m[1])) return refuse(404, 'script not found', 10007);
+      return ok((state.secrets[m[1]] ?? []).map((name) => ({ name, type: 'secret_text' })));
     }
     if ((m = /\/workers\/scripts\/([^/]+)\/settings$/.exec(p))) {
       return state.scripts.includes(m[1]) ? ok({}) : refuse(404, 'script not found', 10007);

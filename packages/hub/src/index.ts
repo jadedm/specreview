@@ -1,3 +1,4 @@
+import { adminRoute, serveAdmin } from './admin';
 import { identify } from './auth';
 import { createComment, listComments, reopenThread, replyTo, resolveThread } from './comments';
 import { configOf, type HubConfig } from './config';
@@ -146,6 +147,14 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   // The bare address shows a signed-in visitor an index of their sites (#43, #45).
   if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
     return serveRoot(config, await identify(request, config), request.method, deps.store, env);
+  }
+  // The admin page (#56): unknown paths 404 before any identity check, as
+  // under a site; admins only.
+  if (url.pathname.startsWith('/_admin/')) {
+    const admin = adminRoute(url.pathname);
+    if (!admin) throw new AppError(404, 'NOT_FOUND');
+    const email = await identify(request, config);
+    return serveAdmin(admin, { request, url, env, config, email, deps });
   }
   const route: Route | null = routeOf(url.pathname, config);
   // No site, or nothing under it: 404 before any identity check.
