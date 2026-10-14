@@ -4,28 +4,31 @@ Review specs where they are rendered. A team keeps its specs as Markdown in each
 
 ## Status
 
-Work in progress, not yet ready to adopt. The plan and its order are on issue #1.
+Early, with no releases yet. One organisation runs a hub in production. To run one, pin a commit of `develop`, as the organisation template below does. The plan and its order are on issue #1.
 
 Built and tested:
 
-- The hub (`packages/hub`): serving sites, comments and replies, page status, ticket labels, who may see what.
+- The hub (`packages/hub`): serving sites, comments and replies, page status, ticket labels, who may see what; an index page of the sites a person may read; public sites, readable without signing in, per site; the organisation's name and logo in each site's header.
+- The admin page (`/_admin/` on the hub, for the config's admins): creates the organisation's GitHub App from a manifest and keeps its key in the hub's database, encrypted; adds a site by opening the pull requests it needs; edits each site's readers and approvers as commits to the organisation's config repo, with a removal taking effect at once.
 - The site build (`packages/site`): turns a repo's committed `docs/` into a site with the review UI, plus every page's earlier versions for the team to compare.
 - Publishing (`build/` and `publish/` actions): a GitHub Actions workflow builds the site and uploads it to the hub, authenticated by GitHub's own OIDC token, so a product repo holds no secret.
-- Setting up and deploying a hub (`packages/hub/deploy/`): run by a person from the organisation's own private repo, shaped like `examples/org/`. It creates the Cloudflare resources and the Access applications, then deploys the Worker on the organisation's hostname.
+- Running a hub (`examples/org/`, `packages/hub/deploy/`): the template for the organisation's private config repo. A first install from a laptop creates the Cloudflare resources and Access applications and deploys the Worker; after that, the repo's apply workflow applies every push to `main`, with a narrow Cloudflare token that `workflow-token` creates.
 
 Not built yet:
 
-- A guided setup command (#7). Today setup and deploy are the scripts above, driven by files the organisation writes.
-- A GitHub App for ticket labels (#6). Today the hub uses GitHub tokens set as Worker secrets.
-- An admin page for readers and approvers (#12). Today they are listed in the hub's config.
-- Public sites, readable without signing in (#20).
+- A guided setup command (#7). Today an organisation copies `examples/org/` and follows its README.
 
 ## How it fits together
 
-- **One hub per organisation.** A Cloudflare Worker with one D1 database (comments, status) and one R2 bucket (built sites), behind one Cloudflare Access application on the organisation's own domain. Each repo is a site at `/<repo>/`. Organisations are kept apart by being separate deployments.
-- **Who sees what.** Cloudflare Access signs people in. Someone at one of a site's team domains is team; listed approvers can mark pages ready; listed readers (an exact email or a whole domain) can read and comment. Readers never see other people's email addresses or ticket titles.
-- **Publishing.** On a push to the docs branch, the product repo's workflow runs the `build` action, then the `publish` action uploads the build to `POST /_publish/<repo>`. The hub accepts it only from that repository's configured workflow and branch, checks the build whole, and makes its pages live together by moving one pointer; earlier page versions are written just after. `examples/publish-docs.yml` is the workflow to copy.
+- **One hub per organisation.** A Cloudflare Worker with one D1 database (comments, status, the admin page's records) and one R2 bucket (built sites), behind one Cloudflare Access application on the organisation's own domain. Each repo is a site at `/<repo>/`. Organisations are kept apart by being separate deployments.
+- **Who sees what.** Cloudflare Access signs people in. Someone at one of a site's team domains is team; listed approvers can mark pages ready; listed readers (an exact email or a whole domain) can read and comment. Readers never see other people's email addresses or ticket titles. The lists live in the organisation's config file; the admin page changes them by committing to it.
+- **Publishing.** On a push to the docs branch, the product repo's workflow runs the `build` action, then the `publish` action uploads the build to `POST /_publish/<repo>`. The hub accepts it only from that repository's configured workflow and branch, checks the build whole, and makes its pages live together by moving one pointer; earlier page versions are written just after. `examples/publish-docs.yml` is the workflow to copy, and the admin page writes it into a new site's repo.
 - **The site build keeps code out of Markdown.** It refuses scripts and styles in pages, includes, symlinks, and front matter other than `title`, `order` and `issues`, and strips any rendered HTML outside an allowlist, so approving a docs pull request never means reading it for code. The hub does not re-check what a build contains: anyone who can push to a site's configured branch can change its workflow and publish anything, so treat that access as access to every site on the hub.
+- **GitHub.** The hub reads tickets and sets labels as the organisation's GitHub App, with a token per repository and purpose. The same app opens the pull requests and commits the admin page makes.
+
+## Run a hub
+
+`examples/org/README.md` is the guide: a Cloudflare account with Zero Trust on its free plan, a zone for the hub's hostname, and a private GitHub repo made from `examples/org/`.
 
 ## Packages
 
@@ -51,7 +54,7 @@ pnpm test
 pnpm build
 ```
 
-The hub's tests run inside workerd, the Workers runtime, with a local D1 database. `CLAUDE.md` is the maintainers' working notes: the details of each part and how to run the local smoke tests. A contributing guide is coming with #8; until then, open an issue before a pull request, and branch from `develop`.
+The hub's tests run inside workerd, the Workers runtime, with a local D1 database. `CONTRIBUTING.md` says how to propose a change and run the local smoke tests; `CLAUDE.md` holds the maintainers' detailed notes on each part.
 
 ## Security
 
