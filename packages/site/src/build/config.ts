@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { UserConfig } from 'vitepress';
-import { BuildError, filesIn, isInside } from './checks.js';
+import { ASSET_TYPES, BuildError, filesIn, isInside } from './checks.js';
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
 import { sanitizeRendered } from './sanitize.js';
 import { readPage, sidebarOf } from './sidebar.js';
@@ -86,6 +86,34 @@ export const confineTo = (allowed: string[]) => ({
   },
 });
 
+// A file from the docs folder may load only as a page or as a plain asset
+// (#73): a query (?raw, ?url, ?worker and the like) or a type Vite does not
+// treat as an asset would hand its bytes to Vite as code or as a script to
+// emit. checkPaths refuses such files by name; this refuses such uses.
+export const docsAsPagesOrAssets = (docs: string) => ({
+  name: 'specreview-docs-assets',
+  enforce: 'pre' as const,
+  load(id: string) {
+    const at = id.indexOf('?');
+    const file = at < 0 ? id : id.slice(0, at);
+    if (file.startsWith('\0') || !path.isAbsolute(file)) return null;
+    const real = (() => {
+      try {
+        return realpathSync.native(file);
+      } catch {
+        return null;
+      }
+    })();
+    if (real === null || !isInside(real, docs)) return null;
+    // A page, as VitePress loads it: bare, or with the Vue compiler's own query.
+    if (file.endsWith('.md') && (at < 0 || id.slice(at + 1).startsWith('vue'))) return null;
+    const name = path.basename(file);
+    const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
+    if (at < 0 && ASSET_TYPES.has(ext)) return null;
+    throw new Error(`${path.relative(docs, real)}: a page may use this file only as a plain image or link`);
+  },
+});
+
 // VitePress runs any string in its site data that starts with this prefix as
 // a function, during the build. Titles, headings and folder names all reach
 // the site data, so the finished site title and theme config are searched.
@@ -148,7 +176,10 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptio
     buildEnd: buildEndFor(collected, historyDirOf(out), root, docsRel),
     vite: {
       resolve: { alias: { vue: vueDir } },
-      plugins: [confineTo([realpathSync.native(docs), packageDir, sharedDir, modulesDir, realpathSync.native(vpRoot)])],
+      plugins: [
+        confineTo([realpathSync.native(docs), packageDir, sharedDir, modulesDir, realpathSync.native(vpRoot)]),
+        docsAsPagesOrAssets(realpathSync.native(docs)),
+      ],
     },
   };
 };
