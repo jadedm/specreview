@@ -1,8 +1,9 @@
 # Applies specreview.config.json to the hub on every push to main, and on
 # "Run workflow" for the first install. Needs the CLOUDFLARE_API_TOKEN secret.
-# A repository secret reaches workflows on any branch, and a writer can
-# change this file on theirs: anyone with write access to this repo can get
-# the token. Give write access only to the people who administer the hub.
+# A repository secret reaches workflows on any branch, and every push to
+# main runs this repo's apply.sh with it: anyone with write access to this
+# repo can get the token. Give write access only to the people who
+# administer the hub; the README says what paid plans add.
 name: apply
 
 on:
