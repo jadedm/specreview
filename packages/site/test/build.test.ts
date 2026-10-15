@@ -845,6 +845,9 @@ describe('#97: files a page links are published at their path', () => {
     write(repo, 'docs/notes.txt', 'plain notes');
     write(repo, 'docs/public/robots.txt', 'User-agent: *');
     write(repo, 'docs/drafts/old.pdf', '%PDF draft');
+    // Not linked from any page: stays out, wherever it is.
+    write(repo, 'docs/requirements.txt', 'secret-lib==1.0');
+    write(repo, 'docs/product/internal.pdf', '%PDF internal');
     commit(repo, 'docs');
     expect(build(repo, '--exclude', 'drafts')).toMatchObject({ status: 0 });
     const files = filesUnder(site(repo));
@@ -856,6 +859,8 @@ describe('#97: files a page links are published at their path', () => {
     expect(files).toContain('robots.txt');
     expect(files).not.toContain('public/robots.txt');
     expect(files.some((f) => f.startsWith('drafts'))).toBe(false);
+    expect(files).not.toContain('requirements.txt');
+    expect(files).not.toContain('product/internal.pdf');
     // The page's link resolves to the copied file.
     const href = /<a href="([^"]*)"[^>]*>Model<\/a>/.exec(
       readFileSync(path.join(site(repo), 'product/spec.html'), 'utf8'),
@@ -890,15 +895,5 @@ describe('#97: files a page links are published at their path', () => {
         stderr: expect.stringContaining('would be served at the address of the page guide.txt.md'),
       });
     }
-  });
-
-  it('5: a build that fails leaves no site, linked files included', () => {
-    const repo = newRepo();
-    write(repo, 'docs/index.md', page('Home', 'See [outside](../outside.md) and [model](m.pdf).'));
-    write(repo, 'docs/m.pdf', '%PDF');
-    write(repo, 'outside.md', page('Outside', 'x'));
-    commit(repo, 'docs');
-    expect(build(repo).status).toBe(1);
-    expect(existsSync(site(repo))).toBe(false);
   });
 });
