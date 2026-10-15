@@ -20,11 +20,13 @@ runs:
       with:
         node-version: 22
     # The build tool comes from this action's own checkout, at the commit the
-    # caller pinned. This job holds no OIDC permission.
+    # caller pinned. This job holds no OIDC permission. Only the site build,
+    # what it depends on and the root (TypeScript) are installed, not the
+    # hub's runtime or the other packages.
     - name: Install the build tool
       shell: bash
       working-directory: ${{ github.action_path }}/..
-      run: pnpm install --frozen-lockfile && pnpm --filter "@specreview/site..." build
+      run: pnpm install --frozen-lockfile --filter . --filter "@specreview/site..." && pnpm --filter "@specreview/site..." build
     - name: Build the site
       shell: bash
       env:

@@ -33,6 +33,19 @@ export const hubOrigin = (hub: string): string => {
 const REPO = /^[a-z0-9._-]{1,100}$/;
 const VERSION = /^[0-9a-f]{40}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{8}$/;
 
+// Text from the hub, the network or the inputs, printed in the job's log.
+// GitHub reads a line starting with :: as a workflow command, and ##[ as the
+// older form anywhere in a line: line breaks and other control characters
+// become spaces and every :: and ## is broken up; at most max characters.
+// The site build's CLI does the same (packages/site/src/build/cli.ts).
+export const inert = (text: string, max = 300): string =>
+  text
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/:(?=:)/g, ': ')
+    .replace(/#(?=#)/g, '# ')
+    .slice(0, max);
+
 type Env = Record<string, string | undefined>;
 type Fetch = typeof fetch;
 
@@ -103,7 +116,7 @@ export const publishBuild = async ({
     // hub. A missing permission is not.
     const token = await actionsToken(origin, env, fetchImpl).catch((e: unknown) => {
       if (e instanceof PublishError && e.message.includes('id-token: write')) throw e;
-      last = e instanceof Error ? e.message : String(e);
+      last = inert(e instanceof Error ? e.message : String(e));
       return null;
     });
     if (token === null) {
@@ -117,7 +130,7 @@ export const publishBuild = async ({
       body: form,
       redirect: 'error',
     }).catch((e: unknown) => {
-      last = `network error: ${e instanceof Error ? e.message : String(e)}`;
+      last = `network error: ${inert(e instanceof Error ? e.message : String(e))}`;
       return null;
     });
     const body = res
@@ -133,7 +146,7 @@ export const publishBuild = async ({
     }
     // A later run has already published: nothing to do.
     if (res?.status === 409 && body?.error?.code === 'SUPERSEDED') return { superseded: true };
-    if (res) last = `${res.status} ${body?.error?.code ?? ''} ${body?.error?.message ?? ''}`.trim();
+    if (res) last = `${res.status} ${inert(`${body?.error?.code ?? ''} ${body?.error?.message ?? ''}`)}`.trim();
     // BUSY: another publish kept moving the pointer; a fresh attempt can win.
     const retryable = res === null || res.status >= 500 || (res.status === 409 && body?.error?.code === 'BUSY');
     if (!retryable || attempt === ATTEMPTS) break;

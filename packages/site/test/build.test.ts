@@ -252,6 +252,17 @@ describe('builds that must fail, naming the cause', () => {
     }
   });
 
+  it('#79: a refused name in the log cannot start a workflow command', () => {
+    const r = minimal();
+    write(r, 'docs/x\n::error::y ##[warning]z.md', page('X', 'x'));
+    commit(r, 'x');
+    const out = build(r);
+    expect(out.status).toBe(1);
+    expect(out.stderr).toContain(': :error: :y # #[warning]z.md');
+    for (const line of out.stderr.split('\n')) expect(line.trimStart().startsWith('::'), line).toBe(false);
+    expect(out.stderr).not.toContain('##[');
+  });
+
   it('19: only what HEAD holds is published: no uncommitted, untracked or ignored file', () => {
     const repo = minimal();
     write(repo, '.gitignore', 'docs/ignored.md\ndocs/public/ign.txt\n');

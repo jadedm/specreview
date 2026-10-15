@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { actionsToken, filesOf, hubOrigin, publishBuild, PublishError } from './publish.js';
+import { actionsToken, filesOf, hubOrigin, inert, publishBuild, PublishError } from './publish.js';
 
 let out: string;
 beforeEach(() => {
@@ -189,5 +189,81 @@ describe('14: publishing', () => {
       publishBuild({ hub: 'https://h.example', repo: 'sidecar', out, env: ENV, fetch: fetchImpl }),
     ).rejects.toThrow('run the build first');
     expect(calls).toEqual([]);
+  });
+});
+
+describe('#79: text from the hub or the network cannot start a workflow command', () => {
+  const failWith = async (answer: () => Response | Promise<Response>) => {
+    const { fetchImpl } = stub([answer, answer, answer]);
+    const err = await publishBuild({
+      hub: 'https://h.example',
+      repo: 'sidecar',
+      out,
+      env: ENV,
+      fetch: fetchImpl,
+      wait: noWait,
+    }).catch((e: Error) => e);
+    return (err as Error).message;
+  };
+  const isInert = (line: string) => {
+    expect(line).not.toMatch(/[\r\n\u2028\u2029]/);
+    expect(line).not.toContain('::');
+    expect(line).not.toContain('##[');
+  };
+
+  it('4: a hub message and code with line breaks and ::', async () => {
+    const line = await failWith(() =>
+      Response.json(
+        { error: { code: 'X\n::add-mask::y', message: 'bad\r\n::error file=a::owned\n::stop-commands::t' } },
+        { status: 422 },
+      ),
+    );
+    isInert(line);
+    expect(line).toContain('422 X : :add-mask: :y bad : :error file=a: :owned : :stop-commands: :t');
+  });
+
+  it('4a: the older ##[ form, runs of colons, and %0A are broken up or harmless', async () => {
+    const line = await failWith(() =>
+      Response.json(
+        { error: { code: 'C', message: 'a ##[error]x ###[stop-commands]t ::: b%0A::warning::w' } },
+        { status: 422 },
+      ),
+    );
+    isInert(line);
+    expect(line).not.toContain('##');
+    expect(line).toContain('a # #[error]x # # #[stop-commands]t : : : b%0A: :warning: :w');
+  });
+
+  it('5: a network error and a failing token endpoint', async () => {
+    const network = await failWith(() => {
+      throw new TypeError('down\n::warning::x');
+    });
+    isInert(network);
+    expect(network).toContain('network error: down : :warning: :x');
+    let calls = 0;
+    const tokenDown = (async (input: string | URL | Request) => {
+      calls++;
+      if (String(input).startsWith('https://token.example/')) throw new TypeError('no\u2028::debug::x');
+      throw new Error('unreachable');
+    }) as typeof fetch;
+    const err = await publishBuild({
+      hub: 'https://h.example',
+      repo: 'sidecar',
+      out,
+      env: ENV,
+      fetch: tokenDown,
+      wait: noWait,
+    }).catch((e: Error) => e);
+    isInert((err as Error).message);
+    expect(calls).toBe(3);
+  });
+
+  it('6: a long message is cut to 300 characters', async () => {
+    const line = await failWith(() =>
+      Response.json({ error: { code: 'C', message: 'm'.repeat(400) } }, { status: 422 }),
+    );
+    expect(line).toContain(`422 C ${'m'.repeat(298)}`);
+    expect(line).not.toContain('m'.repeat(299));
+    expect(inert('a'.repeat(400))).toHaveLength(300);
   });
 });
