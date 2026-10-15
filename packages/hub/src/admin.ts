@@ -9,13 +9,13 @@ import { AppError, readLimited } from './http';
 import { escapeHtml, page } from './root';
 import { seal } from './seal';
 import { findApp, forgetApp, saveApp, type Found } from './stored-app';
+import { API, githubFetch } from './github-fetch';
 
 // The hub's admin page (#56), for the config's admins only: create the
 // organisation's GitHub App with GitHub's app-manifest flow, see where it is
 // installed, or forget it. Access covers these paths like every other but
 // /_publish/* and public sites' pages; the hub checks the admin itself.
 
-const API = 'https://api.github.com';
 const STATE_TTL_MS = 60 * 60_000;
 const STATES_PER_ADMIN = 10;
 const INSTALLED_WAIT_MS = 3_000;
@@ -443,7 +443,7 @@ type Conversion = {
 };
 
 const convert = async (code: string) => {
-  const res = await fetch(`${API}/app-manifests/${code}/conversions`, {
+  const res = await githubFetch(`${API}/app-manifests/${code}/conversions`, {
     method: 'POST',
     headers: {
       accept: 'application/vnd.github+json',

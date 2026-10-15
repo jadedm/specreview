@@ -76,6 +76,8 @@ describe('20: a public site without a sign-in', () => {
     const r = await anon(`/${SIDECAR}/assets/app.js`);
     expect([r.status, r.headers.get('cache-control')]).toEqual([200, 'public, max-age=60']);
     expect(String(r.body)).toBe('console.log("<head></head>")');
+    // #77: served without a sign-in, it still runs nothing on its own.
+    expect(r.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
   });
 
   it('review: a POST to a public page without a sign-in is 401', async () => {

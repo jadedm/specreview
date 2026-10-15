@@ -52,6 +52,8 @@ const candidates = (path: string, directory: boolean): string[] => {
   return [`${path}.html`, `${path}/index.html`, path];
 };
 
+const INERT = "default-src 'none'; sandbox";
+
 // The manifest holds history metadata (authors, PRs) that only the team sees.
 const HIDDEN = new Set(['manifest.json']);
 
@@ -63,12 +65,15 @@ export const servePage = async (ctx: Ctx, method: string, path: string, director
     if (!obj) continue;
     const ext = extensionOf(candidate);
     const known = Object.hasOwn(TYPES, ext);
+    // Only pages run anything: every other file, opened on its own, gets a
+    // policy that runs nothing (an SVG or XML file can hold script).
     const headers: Record<string, string> = {
-      ...protectedHeaders(cspOf(snapshot)),
+      ...protectedHeaders(ext === 'html' ? cspOf(snapshot) : INERT),
       'content-type': known ? TYPES[ext] : 'application/octet-stream',
     };
-    // Anything not in the table downloads instead of rendering in the origin.
-    if (!known) headers['content-disposition'] = 'attachment';
+    // Anything not in the table, and SVG, downloads instead of rendering in
+    // the origin; an <img> of an SVG still shows it.
+    if (!known || ext === 'svg') headers['content-disposition'] = 'attachment';
     if (method === 'HEAD') {
       await obj.body?.cancel();
       return new Response(null, { headers });

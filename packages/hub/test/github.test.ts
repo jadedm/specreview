@@ -129,3 +129,17 @@ describe('stray labels beyond the first page of results', () => {
     expect(left).toEqual([]);
   });
 });
+
+describe('#77: a redirected ticket', () => {
+  it('2: is shown as unavailable, not followed', async () => {
+    github.answer = (m, _r, path) =>
+      m === 'GET' && path === '/issues/23'
+        ? new Response('moved', {
+            status: 301,
+            headers: { location: 'https://api.github.com/repos/acme/other/issues/1' },
+          })
+        : null;
+    expect((await tickets())[1]).toEqual({ number: 23, unavailable: true });
+    expect(github.calls.some((c) => c.includes('acme/other'))).toBe(false);
+  });
+});

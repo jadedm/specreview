@@ -290,6 +290,9 @@ export const github = {
     return this.repos.get('acme/sidecar')!;
   },
   calls: [] as string[],
+  // Calls made without redirect: 'manual' (#77); the setup file fails any
+  // test that leaves one here.
+  followed: [] as string[],
   // Label definitions per repo; repos start with ours missing.
   labelDefs: new Map<string, Set<string>>(),
   // Fail only the label-definition endpoints: 'down' answers 503, 'invalid' a
@@ -565,6 +568,8 @@ export const installFetch = () =>
       if (certs.down) return new Response('down', { status: 503 });
       return Response.json({ keys: [publicJwk] });
     }
+    if (url.host === 'api.github.com' && req.redirect !== 'manual')
+      github.followed.push(`${req.method} ${url.pathname}`);
     if (url.host === 'api.github.com') return githubResponse(req, url);
     if (url.host === 'token.actions.githubusercontent.com' && url.pathname === '/.well-known/jwks') {
       if (githubKeys.down) return new Response('down', { status: 503 });

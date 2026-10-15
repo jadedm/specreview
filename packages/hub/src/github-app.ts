@@ -1,11 +1,11 @@
 import type { GitHubAuth, Purpose } from './github-auth';
+import { API, githubFetch } from './github-fetch';
 
 // The hub as a GitHub App: an app JWT finds the installation on a ticket repo
 // and mints an installation token for that repo alone, with Issues read or
 // write by purpose. Caches live in this isolate only. Failures give no token
 // ("unavailable" to callers) and one log line, never the key or a token.
 
-const API = 'https://api.github.com';
 const HEADERS = {
   accept: 'application/vnd.github+json',
   'x-github-api-version': '2022-11-28',
@@ -135,7 +135,7 @@ export const appAuth = ({
   };
 
   const app = async (path: string, init: RequestInit = {}) =>
-    fetch(`${API}${path}`, {
+    githubFetch(`${API}${path}`, {
       ...init,
       headers: {
         ...HEADERS,
@@ -219,7 +219,7 @@ export const appAuth = ({
     const { token } = (await minted.json()) as { token: string };
     const names: string[] = [];
     for (let page = 1; page <= LIST_PAGES; page++) {
-      const res = await fetch(`${API}/installation/repositories?per_page=100&page=${page}`, {
+      const res = await githubFetch(`${API}/installation/repositories?per_page=100&page=${page}`, {
         headers: { ...HEADERS, authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(5_000),
       });

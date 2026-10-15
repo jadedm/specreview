@@ -149,6 +149,7 @@ describe('5 and 2a: installation and token per repo and purpose', () => {
     const token = await a.tokenFor('acme/sidecar', 'read');
     const res = await fetch('https://api.github.com/repos/acme/globex/issues/52', {
       headers: { authorization: `Bearer ${token}` },
+      redirect: 'manual',
     });
     expect(res.status).toBe(404);
   });
@@ -331,5 +332,25 @@ describe('#63: listing the installation repos', () => {
     clock += 31_000;
     expect(await a.repos!('acme')).toEqual(['globex', 'newdocs', 'sidecar']);
     expect(github.calls.filter((c) => c === 'GET /orgs/acme/installation')).toHaveLength(1);
+  });
+});
+
+describe('#77: redirects from the app endpoints', () => {
+  it('6: a redirected installation lookup gives no token and is not remembered as "not installed"', async () => {
+    github.app!.failLookups.push(301);
+    const a = auth();
+    expect(await a.tokenFor('acme/sidecar', 'read')).toBeNull();
+    expect(lines.some((l) => l.includes('not installed'))).toBe(false);
+    expect(await a.tokenFor('acme/sidecar', 'read')).toBeTruthy();
+    expect(lookups()).toBe(2);
+  });
+
+  it('6a: a redirected mint gives no token and is not retried as a lost installation', async () => {
+    github.app!.failMints.push(301);
+    const a = auth();
+    expect(await a.tokenFor('acme/sidecar', 'read')).toBeNull();
+    // One mint asked for, one installation lookup: no start-over with a new JWT.
+    expect(mints()).toHaveLength(1);
+    expect(lookups()).toBe(1);
   });
 });

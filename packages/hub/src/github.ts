@@ -7,10 +7,10 @@ import { AppError } from './http';
 import { snapshotOf, type Snapshot } from './manifest';
 import { isTeam, type Role } from './roles';
 import { effectiveStatus, readSiteStatuses } from './status-read';
+import { API, githubFetch, redirectOf } from './github-fetch';
 
 const ownedLabels: string[] = Object.values(STATUS_LABEL);
 
-const API = 'https://api.github.com';
 export const TICKET_TTL_MS = 5 * 60_000;
 
 type Issue = { number: number; title: string; state: string; html_url: string; labels: { name: string }[] };
@@ -26,7 +26,7 @@ type Hub = { env: Env; deps: Deps; config: HubConfig };
 class NoToken extends Error {}
 
 const send = (token: string, repo: string, path: string, init: RequestInit) =>
-  fetch(`${API}/repos/${repo}${path}`, {
+  githubFetch(`${API}/repos/${repo}${path}`, {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
@@ -94,7 +94,8 @@ const githubMessage = async (res: Response) => {
 // A request whose answer was not what the step needed; always false.
 const failed = async (problems: Problems, method: string, path: string, res: Response) => {
   const message = await githubMessage(res);
-  const hint = hintFor(res.status, path);
+  // A redirect's message says what happened; it was not GitHub's error.
+  const hint = redirectOf(res) ? undefined : hintFor(res.status, path);
   problems.push(`${method} ${path} -> ${res.status}${message ? ` ${message}` : ''}${hint ? ` (${hint})` : ''}`);
   return false;
 };
