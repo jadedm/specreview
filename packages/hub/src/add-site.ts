@@ -36,7 +36,9 @@ const refPath = (branch: string) => branch.split('/').map(encodeURIComponent).jo
 export const inputProblem = (input: SiteInput, config: HubConfig): string | null => {
   if (!isRepoName(input.repo) || input.repo.startsWith('_')) return 'repo: a lowercase repo name';
   if (input.branch && !BRANCH.test(input.branch)) return 'branch: a branch name';
-  if (!FOLDER.test(input.docs) || input.docs.length > 100) return 'docs folder: a folder path in the repo';
+  // `.` is the whole repo (#87).
+  if ((input.docs !== '.' && !FOLDER.test(input.docs)) || input.docs.length > 100)
+    return 'docs folder: a folder path in the repo, or . for the whole repo';
   if (!isRepoName(input.ticketRepo)) return 'ticket repo: a lowercase repo name';
   if (!/^[a-z0-9.-]{1,253}$/.test(input.teamDomain)) return 'team domain: a lowercase domain';
   if (config.configRepo === `${config.org}/${input.repo}`)
@@ -354,9 +356,14 @@ export const addSite = async (
     `Adds ${input.repo} to the hub's sites, requested on the admin page by ${ctx.email}.\n\nMerge this first and wait for the apply workflow to finish green. Then merge the docs pull request on ${product}; its push publishes the site.`,
   );
 
-  const index = `${input.docs}/index.md`;
-  // The first page is one of ours only when it will be written.
-  const needsIndex = !(await gh.fileAt(product, 'setup-product', index, branch));
+  const inDocs = (name: string) => (input.docs === '.' ? name : `${input.docs}/${name}`);
+  const index = inDocs('index.md');
+  // The first page is one of ours only when it will be written: not when the
+  // folder has a home page already, index.md or a README.md (#87).
+  const hasHome =
+    (await gh.fileAt(product, 'setup-product', index, branch)) ||
+    (await gh.fileAt(product, 'setup-product', inDocs('README.md'), branch));
+  const needsIndex = !hasHome;
   await gh.branchAt(product, 'setup-product', work, branch, productHead, needsIndex ? [WORKFLOW, index] : [WORKFLOW]);
   await gh.write(product, 'setup-product', WORKFLOW, work, workflow, 'ci: publish docs to specreview');
   if (needsIndex)
@@ -367,7 +374,7 @@ export const addSite = async (
     work,
     branch,
     'Publish docs to specreview',
-    `Adds the workflow that builds \`${input.docs}/\` and publishes it to ${origin}/${input.repo}/, requested on the admin page by ${ctx.email}.\n\nMerge ${configPull} first and wait for its apply workflow to finish green, then merge this. If the docs run on the merge is refused because the hub does not know the site yet, re-run it once the hub is deployed.`,
+    `Adds the workflow that builds ${input.docs === '.' ? 'the whole repo' : `\`${input.docs}/\``} and publishes it to ${origin}/${input.repo}/, requested on the admin page by ${ctx.email}.\n\nMerge ${configPull} first and wait for its apply workflow to finish green, then merge this. If the docs run on the merge is refused because the hub does not know the site yet, re-run it once the hub is deployed.`,
   );
   return { config: configPull, product: productPull, made };
 };

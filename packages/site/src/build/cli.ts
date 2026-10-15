@@ -40,17 +40,32 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   // The repository is the one the command runs in.
   checkGit(cwd);
   const root = realpathSync.native(git(cwd, ['rev-parse', '--show-toplevel']).trim());
+  // With the docs folder at the root, a committed --out would be published:
+  // said before checkArguments, which would only call it not empty.
+  const atRoot = realpathSync.native(docsArg) === root;
+  const outRel = path.relative(root, out).split(path.sep).join('/');
+  const committed =
+    atRoot &&
+    outRel !== '' &&
+    !outRel.startsWith('..') &&
+    git(root, ['ls-tree', '--name-only', 'HEAD', '--', outRel]).trim() !== '';
+  if (committed)
+    throw new BuildError(
+      `--out ${values.out} is committed in the repository; with the docs folder at the root it would be published`,
+    );
   checkArguments(values.repo, { root, docs: docsArg, out });
   const docsRel = path.relative(root, realpathSync.native(docsArg)).split(path.sep).join('/');
 
   const exported = exportDocs(root, docsRel);
   try {
     const files = filesIn(exported.docs);
-    if (!files.includes('index.md')) throw new BuildError(`${values.docs}/index.md is required, committed at HEAD`);
+    // The home page is index.md, or a README.md at the top when there is none (#87).
+    const home = files.includes('index.md') ? 'index.md' : files.includes('README.md') ? 'README.md' : null;
+    if (!home) throw new BuildError(`${values.docs}/index.md or README.md is required, committed at HEAD`);
     checkPaths(files);
     checkMarkdown(exported.docs, files);
     // Front matter, titles and the sidebar, checked before VitePress runs.
-    siteShape(exported.docs, values.repo);
+    siteShape(exported.docs, values.repo, home);
 
     // A fresh output every time, so nothing from an earlier build survives;
     // checkArguments allowed emptying it.
@@ -59,7 +74,7 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     writeFileSync(path.join(out, OUTPUT_MARK), 'Written by specreview-site build; emptied by the next build.\n');
     const vpRoot = path.join(out, '.root');
     mkdirSync(path.join(vpRoot, '.vitepress', 'theme'), { recursive: true });
-    const options = { repo: values.repo, docs: exported.docs, root, docsRel, out, vpRoot };
+    const options = { repo: values.repo, docs: exported.docs, root, docsRel, out, vpRoot, home };
     writeFileSync(
       path.join(vpRoot, '.vitepress', 'config.mjs'),
       `import { siteConfig } from ${JSON.stringify(path.join(here, 'config.js'))};\n` +

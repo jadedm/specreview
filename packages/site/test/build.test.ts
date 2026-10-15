@@ -243,7 +243,10 @@ describe('builds that must fail, naming the cause', () => {
     const repo = newRepo();
     write(repo, 'docs/a.md', page('A', 'x'));
     commit(repo, 'a');
-    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('index.md is required') });
+    expect(build(repo)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('index.md or README.md is required'),
+    });
     for (const issues of ['"52"', '[52, 52]', '[0]']) {
       const r = minimal();
       write(r, 'docs/a.md', page('A', 'x', `issues: ${issues}\n`));
@@ -606,5 +609,99 @@ describe('15, 18: where the docs are, and git states', () => {
     git(clone, 'fetch', '-q', '--unshallow');
     expect(build(clone).status).toBe(0);
     expect(manifestOf(clone).pages.index.history).toHaveLength(2);
+  });
+});
+
+describe('#87: the whole repo as the docs folder, and a README home page', () => {
+  const site = (repo: string, out = '.specreview') => path.join(repo, out, 'site');
+  const minimal = () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'Text.'));
+    commit(repo, 'docs: home');
+    return repo;
+  };
+
+  it('1, 4, 7, 7a: a root build drops dot entries, serves the README as home with its history, and links to it resolve', () => {
+    const repo = newRepo();
+    write(repo, 'README.md', page('Team docs', 'Start here.'));
+    commit(repo, 'docs: readme');
+    write(repo, 'README.md', page('Team docs', 'Start here, again.'));
+    write(repo, 'guide/a.md', page('A', 'Back to [the start](../README.md).'));
+    write(repo, '.github/workflows/x.yml', 'name: x\n');
+    write(repo, '.gitignore', '.specreview\n');
+    const head = commit(repo, 'docs: a guide');
+    const r = build(repo, '--docs', '.');
+    expect(r).toMatchObject({ status: 0 });
+    const files = filesUnder(site(repo));
+    expect(files).toContain('index.html');
+    expect(files).toContain('guide/a.html');
+    expect(files.some((f) => f.startsWith('.') || f.includes('README'))).toBe(false);
+    expect(readFileSync(path.join(site(repo), 'guide/a.html'), 'utf8')).toMatch(/href="\/fixture\/"/);
+    const m = manifestOf(repo);
+    expect(m.pages.index.title).toBe('Team docs');
+    expect(m.pages.index.history.map((h) => h.path)).toEqual(['README.md', 'README.md']);
+    expect(existsSync(path.join(repo, '.specreview', 'history', head, 'README.md'))).toBe(true);
+    expect(Object.keys(m.pages).sort()).toEqual(['guide/a', 'index']);
+  });
+
+  it('1a, 2: at the root, --out may not be committed, the repo itself or under .git', () => {
+    const repo = newRepo();
+    write(repo, 'index.md', page('Home', 'x'));
+    write(repo, 'build/keep.md', page('Kept', 'x'));
+    commit(repo, 'docs');
+    expect(build(repo, '--docs', '.', '--out', 'build')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('--out build is committed in the repository'),
+    });
+    for (const out of ['.', '.git/x'])
+      expect(build(repo, '--docs', '.', '--out', out), out).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining('--out must be a folder inside the repository'),
+      });
+  });
+
+  it('3: below the root, --out inside the docs folder is still refused', () => {
+    const repo = minimal();
+    expect(build(repo, '--out', 'docs/x')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('--out must be a folder inside the repository, outside the docs folder'),
+    });
+  });
+
+  it('5: any other file at the root goes through the checks', () => {
+    const repo = newRepo();
+    write(repo, 'index.md', page('Home', 'x'));
+    write(repo, 'LICENSE', 'MIT\n');
+    commit(repo, 'docs');
+    expect(build(repo, '--docs', '.')).toMatchObject({ status: 1, stderr: expect.stringContaining('LICENSE') });
+  });
+
+  it('7b: a README home page linking out of the site fails the build and leaves no site', () => {
+    const repo = newRepo();
+    write(repo, 'docs/README.md', page('Home', 'See [outside](../outside.md).'));
+    write(repo, 'outside.md', page('Outside', 'x'));
+    commit(repo, 'docs');
+    expect(build(repo).status).toBe(1);
+    expect(existsSync(site(repo))).toBe(false);
+  });
+
+  it('8, 10: with index.md, a README is an ordinary page, at the top and in a folder', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/README.md', page('Readme', 'x'));
+    write(repo, 'docs/guide/README.md', page('Guide readme', 'x'));
+    commit(repo, 'docs');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    expect(Object.keys(manifestOf(repo).pages).sort()).toEqual(['README', 'guide/README', 'index']);
+    expect(manifestOf(repo).pages.index.title).toBe('Home');
+  });
+
+  it('15: pages under dist or node_modules are refused, since VitePress never builds them', () => {
+    for (const folder of ['dist', 'node_modules', 'a/dist']) {
+      const repo = minimal();
+      write(repo, `docs/${folder}/x.md`, page('X', 'x'));
+      commit(repo, 'x');
+      expect(build(repo), folder).toMatchObject({ status: 1, stderr: expect.stringContaining(`${folder}/x.md`) });
+    }
   });
 });

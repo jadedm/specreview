@@ -39,6 +39,8 @@ export type SiteOptions = {
   docsRel: string;
   out: string;
   vpRoot: string;
+  // The home page's source: index.md, or a top-level README.md without one (#87).
+  home?: string | null;
 };
 
 // The markdown-it instance VitePress hands to markdown.config.
@@ -132,10 +134,12 @@ export const assertNoFunctionStrings = (value: unknown, where: string): void => 
 
 // The site title and theme config, from the pages: computed by the command
 // before VitePress starts (so a refusal is reported as it is) and again here.
-export const siteShape = (docs: string, repo: string) => {
+export const siteShape = (docs: string, repo: string, home?: string | null) => {
+  // A README.md home page is index.md to the sidebar, as VitePress's rewrite makes it.
   const pages = filesIn(docs)
     .filter((f) => f.endsWith('.md'))
-    .map((f) => readPage(docs, f));
+    .map((f) => readPage(docs, f))
+    .map((p) => (home === 'README.md' && p.file === 'README.md' ? { ...p, file: 'index.md' } : p));
   for (const p of pages) parseIssues(p.file, p.issues);
   const title = pages.find((p) => p.file === 'index.md')?.title ?? repo;
   // The 404 page in plain words (#52): what happened and where to go.
@@ -150,13 +154,15 @@ export const siteShape = (docs: string, repo: string) => {
   return { title, themeConfig };
 };
 
-export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptions): UserConfig => {
-  const { title, themeConfig } = siteShape(docs, repo);
+export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home }: SiteOptions): UserConfig => {
+  const { title, themeConfig } = siteShape(docs, repo, home);
   const collected: Collected = new Map();
   return {
     title,
     base: `/${repo}/`,
     srcDir: docs,
+    // VitePress serves the README as the home page and resolves links to it there.
+    ...(home === 'README.md' ? { rewrites: { 'README.md': 'index.md' } } : {}),
     outDir: siteDirOf(out),
     cacheDir: path.join(out, '.cache'),
     cleanUrls: true,
