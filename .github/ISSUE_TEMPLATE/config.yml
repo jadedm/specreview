@@ -3,6 +3,3 @@ contact_links:
   - name: Question or idea
     url: https://github.com/jadedm/specreview/discussions
     about: Ask in Discussions.
-  - name: Vulnerability
-    url: https://github.com/jadedm/specreview/security/advisories/new
-    about: Report it privately through the Security tab, not as an issue.
