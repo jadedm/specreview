@@ -75,10 +75,14 @@ export const readmeHome = (md: MarkdownIt) => {
     for (const block of state.tokens)
       for (const token of block.children ?? []) {
         const href = token.type === 'link_open' ? token.attrGet('href') : null;
-        if (!href || /^[a-z][a-z0-9+.-]*:|^[#/]/i.test(href)) continue;
+        if (!href || /^[a-z][a-z0-9+.-]*:|^#/i.test(href)) continue;
         const [, target, rest] = /^([^?#]*)(.*)$/.exec(href)!;
-        if (path.posix.normalize(path.posix.join(dir, target)) !== 'README.md') continue;
-        token.attrSet('href', `${path.posix.relative(dir, 'index.md') || 'index.md'}${rest}`);
+        // A link starting with / is from the docs folder's top.
+        const absolute = target.startsWith('/');
+        const resolved = path.posix.normalize(absolute ? target.slice(1) : path.posix.join(dir, target));
+        if (resolved !== 'README.md') continue;
+        const home = absolute ? '/index.md' : path.posix.relative(dir, 'index.md') || 'index.md';
+        token.attrSet('href', `${home}${rest}`);
       }
   });
 };
