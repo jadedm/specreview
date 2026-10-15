@@ -10,9 +10,17 @@ ORG=$(cd "$(dirname "$0")" && pwd)
 COMMIT=$(tr -d '[:space:]' < "$ORG/specreview.commit")
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ && ! "$COMMIT" =~ ^0+$ ]] ||
   { echo "run.sh: set specreview.commit to a full commit of jadedm/specreview" >&2; exit 2; }
-CHECKOUT="$ORG/.specreview"
-[ -d "$CHECKOUT/.git" ] || git clone -q https://github.com/jadedm/specreview.git "$CHECKOUT"
-git -C "$CHECKOUT" fetch -q origin
+# A fresh clone of the pinned commit for every run, deleted after: what is
+# built and run here gets the Cloudflare token, so nothing is reused from an
+# earlier run (a kept checkout's ignored files and git settings can run code).
+CHECKOUT=$(mktemp -d)
+trap 'rm -rf "$CHECKOUT"' EXIT
+# Branches only, file contents fetched as checked out: GitHub would hand over
+# a commit that exists only in a fork if asked for it by name, so the pin must
+# be on one of specreview's own branches.
+git clone -q --filter=blob:none --no-checkout https://github.com/jadedm/specreview.git "$CHECKOUT"
+[ -n "$(git -C "$CHECKOUT" branch -r --contains "$COMMIT" 2>/dev/null)" ] ||
+  { echo "run.sh: $COMMIT is not on a branch of jadedm/specreview" >&2; exit 2; }
 git -C "$CHECKOUT" checkout -q --detach "$COMMIT"
 (cd "$CHECKOUT" && pnpm install --frozen-lockfile --silent && pnpm --filter @specreview/shared build >/dev/null && pnpm --filter @specreview/hub build >/dev/null)
-exec node "$CHECKOUT/packages/hub/dist/deploy.mjs" "$@" --org "$ORG"
+node "$CHECKOUT/packages/hub/dist/deploy.mjs" "$@" --org "$ORG"

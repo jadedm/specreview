@@ -9,14 +9,14 @@ The template for the private repo an organisation keeps for its specreview hub. 
 | `specreview.commit`           | the full specreview commit to run                                                      | you                    |
 | `.github/workflows/apply.yml` | runs `apply.sh` on pushes to `main` and by hand                                        | copied                 |
 | `apply.sh`                    | setup, then deploy, committing `hub.json` after each                                   | copied                 |
-| `run.sh`                      | checks out that commit, builds the hub, runs one command; also for use on a laptop     | copied                 |
+| `run.sh`                      | fetches that commit fresh, builds the hub, runs one command; also for use on a laptop  | copied                 |
 
 ## Install
 
 1. Create a private repo in the organisation's GitHub account from this template (or copy this folder into one, hidden files included: `.github/` and `.gitignore`). Until step 6, the apply workflow's runs (on this first push, or any push to `main`) fail for want of the token; that is expected.
 2. Enable Zero Trust on the Cloudflare account (dashboard: Zero Trust, then the Free plan), and create the install token (below). Keep it in a file on your laptop; it never goes into GitHub.
 3. Edit `hub.json`: `accountId` (the 32-character id on the Cloudflare dashboard), `hostname` (where the docs sites will live, in a zone on that account) and `adminHostname` (the admin page's own hostname, also in a zone on the account; a sibling such as `specs-admin.example.com` beside `specs.example.com` reads clearly). Leave the rest; setup writes the ids.
-4. Edit `specreview.config.json` for your sites and people, and set `specreview.commit` to a commit of specreview's `develop` (run.sh stops with "set specreview.commit" until you do).
+4. Edit `specreview.config.json` for your sites and people, and set `specreview.commit` to a commit of specreview's `develop` (run.sh refuses a commit that is on no branch of specreview, such as one whose branch was deleted) (run.sh stops with "set specreview.commit" until you do).
 5. From a laptop, with the install token: `./run.sh setup --token-file <file> --apply` (creates the Access apps and policy, the one-time PIN login, the database and the bucket, and records their ids in `hub.json`), then `./run.sh deploy --token-file <file>`.
 6. Create the workflow's token: `./run.sh workflow-token --token-file <install token file> --out <new file>`, naming a file outside this repo (`/tmp/.cf-workflow-token`, say). It writes the new token to that file and nothing else, and prints the command that stores it as this repo's `CLOUDFLARE_API_TOKEN` Actions secret. Run that, then delete the file.
 7. Commit and push to `main`. From now on the apply workflow applies every push.
@@ -83,6 +83,6 @@ Edit and commit to `main`; the workflow applies it.
 ./run.sh workflow-token --token-file <file> --out <new file>  # the workflow's token, into a new file
 ```
 
-Run setup from one place at a time: not from a laptop while the workflow runs.
+Run setup from one place at a time: not from a laptop while the workflow runs. Each run fetches the pinned commit into a new temporary folder and deletes it after; a `.specreview` folder left by an older `run.sh` is no longer used and can be deleted.
 
-setup refuses, and changes nothing, when it finds something it did not create where it expects its own resources: an Access app, D1 database or bucket with the expected name but no id in `hub.json`, extra Access policies or rules, or a hostname another Worker or DNS record already uses.
+setup refuses, and changes nothing, when it finds something it did not create where it expects its own resources: an Access app, D1 database or bucket with the expected name but no id in `hub.json`, extra Access policies or rules, a hostname another Worker or DNS record already uses, any other Access app over the hub's hostnames or a path under them (it could open or shadow part of the hub), or sign-in through WARP on the hostname's or the admin app.

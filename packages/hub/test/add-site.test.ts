@@ -382,6 +382,10 @@ describe('the review fixes', () => {
     expect(got[at - 1]).toBe('          repo: "newdocs"');
     got.splice(at, 1);
     expect(got).toEqual(expected);
+    // #78: only a push keeps the build, for a day; pull requests build and stop.
+    const upload = got.findIndex((l) => l.includes('actions/upload-artifact@'));
+    expect(got[upload - 1]).toBe("      - if: github.event_name == 'push'");
+    expect(got.slice(upload, upload + 6)).toContain('          retention-days: 1');
   });
 
   it('edits to an existing first page on a pre-made branch are refused, since that page is not written', async () => {

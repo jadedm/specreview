@@ -34,14 +34,33 @@ type App = AppSummary & {
   self_hosted_domains?: string[];
   cors_headers?: { allow_all_origins?: boolean; allowed_origins?: string[] };
   options_preflight_bypass?: boolean;
+  allow_authenticate_via_warp?: boolean;
+  allow_iframe?: boolean;
 };
 
 // Every hostname or path an app covers: since destinations, an app protects
-// (or, for a bypass, opens) each of them, not only its domain.
+// (or, for a bypass, opens) each of them, not only its domain. Cloudflare
+// ignores self_hosted_domains on an app that has destinations.
 const coveredBy = (app: App) =>
-  [...new Set([app.domain, ...(app.self_hosted_domains ?? []), ...(app.destinations ?? []).map((d) => d.uri)])].filter(
-    (d): d is string => typeof d === 'string',
-  );
+  [
+    ...new Set([
+      app.domain,
+      ...(app.destinations?.length ? app.destinations.map((d) => d.uri) : (app.self_hosted_domains ?? [])),
+    ]),
+  ].filter((d): d is string => typeof d === 'string');
+// Settings that let more in or let other sites read, which setup keeps on
+// the hostname's app without checking.
+const widenedBy = (app: App) =>
+  [
+    [
+      Boolean(app.cors_headers?.allow_all_origins || app.cors_headers?.allowed_origins?.length),
+      'CORS allowing other origins',
+    ],
+    [app.options_preflight_bypass === true, 'preflight bypass'],
+    [app.allow_iframe === true, 'framing allowed'],
+  ]
+    .filter(([on]) => on)
+    .map(([, what]) => what as string);
 const coversOnly = (app: App, domain: string) => coveredBy(app).length === 1 && coveredBy(app)[0] === domain;
 export type Zone = { id: string; name: string; status: string };
 
@@ -237,7 +256,7 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   // Access: two reusable policies and the two applications that use them.
   const access = (hub.access ??= {});
   const policies = await cf.list<Policy>(`/accounts/${a}/access/policies`);
-  const apps = await cf.list<AppSummary>(`/accounts/${a}/access/apps`);
+  const apps = await cf.list<App>(`/accounts/${a}/access/apps`);
   const appOf = async (id: string) =>
     apps.some((x) => x.id === id) ? cf.call<App>('GET', `/accounts/${a}/access/apps/${id}`) : null;
 
@@ -384,9 +403,15 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
       // Without the PIN login there is nothing to compare against, and an
       // empty list means every login method: refuse rather than guess.
       [!otp || !sameIds(mainApp.allowed_idps, otp ? [otp] : []), 'allows login methods other than the one-time PIN'],
+      // A WARP session signs in past the login methods above.
+      [mainApp.allow_authenticate_via_warp === true, 'allows sign-in through a WARP session'],
     ]);
   if (mainApp && mainAppProblem) refusals.push(`Access app ${mainApp.id} ${mainAppProblem}; setup will not change it`);
   if (mainApp && !mainAppProblem) log(`Access app for ${host}: exists`);
+  // Settings setup keeps on an update and does not check; said, not refused.
+  const widened = mainApp && !mainAppProblem ? widenedBy(mainApp) : [];
+  if (widened.length > 0)
+    log(`Access app for ${host}: note, it has ${widened.join(', ')}; setup keeps these as they are`);
   // An app adopted by its id (after a lost create) has no audience recorded yet.
   if (mainApp && !mainAppProblem && !access.aud)
     steps.push({
@@ -549,6 +574,7 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
         ],
         [!otp || !sameIds(adminApp.allowed_idps, otp ? [otp] : []), 'allows login methods other than the one-time PIN'],
         [corsOpen(adminApp), 'lets other origins read it (CORS) or skips Access for preflights'],
+        [adminApp.allow_authenticate_via_warp === true, 'allows sign-in through a WARP session'],
       ]);
     if (adminApp && adminAppProblem)
       refusals.push(`Access app ${adminApp.id} ${adminAppProblem}; setup will not change it`);
@@ -747,6 +773,36 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
         saveHub(org);
       },
     });
+
+  // Any other app over the hub's hostnames or a path under them: Access
+  // applies the most specific match, so it could open or shadow part of the
+  // hub. Apps already refused above as possibly this hub's are not repeated.
+  const recorded = new Set([access.appId, access.publishAppId, access.publicAppId, access.adminAppId]);
+  const hubHosts = [host, ...(adminHost ? [adminHost] : [])];
+  // An exact host, a path under it, or a wildcard host with a path (more
+  // specific than the hub's own app, so it wins); a bare *.example.com app
+  // does not take a hostname from an app made for it.
+  const overHub = (entry: string) => {
+    const d = entry.toLowerCase();
+    const [name, ...rest] = d.split('/');
+    const wildcard = name.startsWith('*.') && rest.length > 0;
+    return hubHosts.some(
+      (h) => d === h || d.startsWith(`${h}/`) || d.startsWith(`${h}*`) || (wildcard && h.endsWith(name.slice(1))),
+    );
+  };
+  const reportedAbove = (x: App) =>
+    (!access.appId && x.domain === host) ||
+    (!access.publishAppId && x.domain === publishDomain) ||
+    (Boolean(adminHost) && !access.adminAppId && x.domain === adminHost) ||
+    (publicAppNamed && x.name === publicAppName);
+  // A bookmark only lists a link; it protects and opens nothing.
+  for (const x of apps.filter((x) => !recorded.has(x.id) && !reportedAbove(x) && x.type !== 'bookmark')) {
+    const over = coveredBy(x).filter(overHub);
+    if (over.length > 0)
+      refusals.push(
+        `Access app ${x.id}${x.name ? ` ("${x.name}")` : ''} covers ${over.join(', ')} and is not recorded in hub.json; it could open or shadow part of the hub, so remove it or take those paths out of it`,
+      );
+  }
 
   if (refusals.length > 0) throw new DeployError(`setup stopped before changing anything:\n  ${refusals.join('\n  ')}`);
 

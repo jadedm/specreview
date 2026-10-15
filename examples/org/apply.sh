@@ -22,6 +22,7 @@ fail() {
 # behind another must see the hub.json ids that run recorded.
 git fetch -q origin "$BRANCH" || fail "could not fetch $BRANCH"
 git checkout -q -B "$BRANCH" "origin/$BRANCH" || fail "could not check out origin/$BRANCH"
+START=$(git rev-parse HEAD)
 
 # The Actions bot commits hub.json; a fresh runner has no git identity, and
 # a rebase rewrites the commit, so both need it.
@@ -57,6 +58,15 @@ status=0
 ./run.sh setup --token-file "$TOKEN_FILE" --apply || status=$?
 save "setup's resources" || [ "$status" -ne 0 ] || status=1
 [ "$status" -eq 0 ] || exit "$status"
+# Saving may have rebased onto a newer main. If that brought anything besides
+# hub.json, the files here are not what setup applied: deploying them would
+# skip setup's half. A push by a person or by the hub's GitHub App starts a
+# run of its own, queued behind this one, which applies both; a push made
+# with a workflow's GITHUB_TOKEN starts none.
+if ! git diff --quiet "$START" HEAD -- . ':(exclude)hub.json'; then
+  echo "apply: main moved on during setup (more than hub.json changed); the deploy is left to the run that push queued (if none is queued, run this workflow by hand)"
+  exit 0
+fi
 ./run.sh deploy --token-file "$TOKEN_FILE" || status=$?
 save "the deploy" || [ "$status" -ne 0 ] || status=1
 exit "$status"

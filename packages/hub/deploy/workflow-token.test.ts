@@ -36,6 +36,10 @@ const ok = (result: unknown) => Response.json({ success: true, errors: [], resul
 const no = (status: number, message: string) =>
   Response.json({ success: false, errors: [{ code: 9109, message }], result: null }, { status });
 
+// Late in the day in UTC: the name takes the UTC time.
+const NOW = new Date('2026-10-15T23:30:00Z');
+const NAME = 'specreview apply specs.acme.dev 2026-10-15T23:30:00Z';
+
 const run = async (
   token: string,
   {
@@ -67,6 +71,7 @@ const run = async (
     cf: cloudflare(o.tokenFile, fake.fetchImpl),
     log: (l) => lines.push(l),
     write,
+    now: NOW,
   }).then(
     () => null,
     (e: Error) => e,
@@ -88,7 +93,7 @@ describe('#66 workflow-token', () => {
     expect(r.creates).toHaveLength(1);
     expect(r.creates[0].path).toBe(`/accounts/${ACCOUNT}/tokens`);
     expect(r.creates[0].body).toEqual({
-      name: 'specreview apply specs.acme.dev',
+      name: NAME,
       policies: [
         {
           effect: 'allow',
@@ -104,7 +109,7 @@ describe('#66 workflow-token', () => {
     });
     expect(readFileSync(r.outFile, 'utf8')).toBe(`${NEW_VALUE}\n`);
     expect(statSync(r.outFile).mode & 0o777).toBe(0o600);
-    expect(r.lines[0]).toBe(`created token "specreview apply specs.acme.dev" (tok-1), value in ${r.outFile}`);
+    expect(r.lines[0]).toBe(`created token "${NAME}" (tok-1), value in ${r.outFile}`);
     expect(r.lines.at(-1)).toBe(`next, from this repo: gh secret set CLOUDFLARE_API_TOKEN < ${r.outFile}`);
     noLeak(r);
   });
@@ -145,7 +150,7 @@ describe('#66 workflow-token', () => {
     const r = await run('cfat_x', { stand: { create: () => ok({ value: NEW_VALUE }) } });
     expect(r.error).toBeNull();
     expect(readFileSync(r.outFile, 'utf8')).toBe(`${NEW_VALUE}\n`);
-    expect(r.lines[0]).toBe(`created token "specreview apply specs.acme.dev", value in ${r.outFile}`);
+    expect(r.lines[0]).toBe(`created token "${NAME}", value in ${r.outFile}`);
     noLeak(r);
   });
 
@@ -261,7 +266,9 @@ describe('#66 workflow-token', () => {
     expect(empty.error?.message).toBe('Cloudflare created token tok-7 but sent no value; delete it in the dashboard');
     expect(existsSync(empty.outFile)).toBe(false);
     const nothing = await run('cfat_x', { stand: { create: () => ok(null) } });
-    expect(nothing.error?.message).toBe('Cloudflare sent no token in its answer');
+    expect(nothing.error?.message).toBe(
+      `Cloudflare sent no token in its answer; a token named "${NAME}" may exist: delete it in the dashboard before running again`,
+    );
   });
 
   it('11: --out is required', () => {
@@ -311,5 +318,78 @@ describe('#66 README', () => {
     expect(listed(zoneLine)).toEqual([...WORKFLOW_PERMISSIONS.zone]);
     expect(readme).toContain('Account API Tokens Write');
     expect(readme).toContain('API Tokens Write (for a user token)');
+  });
+});
+
+describe('#78 workflow-token', () => {
+  it('9: a create with no answer, a reply that is not JSON or a server error names the token that may exist', async () => {
+    const answers: (() => Response)[] = [
+      () => {
+        throw new TypeError('fetch failed');
+      },
+      () => new Response('<html>bad gateway</html>', { status: 502 }),
+      () => no(502, 'Bad gateway'),
+    ];
+    for (const answer of answers) {
+      const r = await run('cfat_x', { stand: { create: answer } });
+      expect(r.error?.message).toMatch(
+        new RegExp(
+          `^Cloudflare did not answer the token create \\(.+\\); a token named "${NAME}" may exist: delete it in the dashboard before running again$`,
+        ),
+      );
+      expect(r.creates).toHaveLength(1);
+      expect(existsSync(r.outFile)).toBe(false);
+      noLeak(r);
+    }
+  });
+
+  it('9a: a 200 that says it failed is not taken as nothing made', async () => {
+    const r = await run('cfat_x', { stand: { create: () => no(200, 'Odd') } });
+    expect(r.error?.message).toContain(`a token named "${NAME}" may exist`);
+  });
+
+  it('10: a create Cloudflare refuses made nothing, and says so as before', async () => {
+    for (const status of [400, 403]) {
+      const r = await run('cfat_x', { stand: { create: () => no(status, 'Refused') } });
+      expect(r.error?.message).toMatch(
+        new RegExp(`^Cloudflare refused POST /accounts/${ACCOUNT}/tokens \\(${status}\\)`),
+      );
+      expect(r.error?.message).not.toContain('may exist');
+      expect(existsSync(r.outFile)).toBe(false);
+    }
+  });
+});
+
+describe('#78 the token name', () => {
+  it('11: stamped to the second in UTC, and at most 120 characters for a long hostname', async () => {
+    const r = await run('cfat_x');
+    expect((r.creates[0].body as { name: string }).name).toBe(NAME);
+    const o = orgDir();
+    writeFileSync(o.tokenFile, 'cfat_x\n');
+    const long = `${'a'.repeat(60)}.${'b'.repeat(60)}.acme.dev`;
+    const hub = JSON.parse(readFileSync(path.join(o.dir, 'hub.json'), 'utf8')) as { hostname: string };
+    hub.hostname = long;
+    writeFileSync(path.join(o.dir, 'hub.json'), JSON.stringify(hub));
+    const state = emptyAccount();
+    const fake = fakeCloudflare(state, {
+      raw: (req) =>
+        req.path.split('?')[0] === `/accounts/${ACCOUNT}/tokens/permission_groups`
+          ? ok(catalogue())
+          : req.path === `/accounts/${ACCOUNT}/tokens` && req.method === 'POST'
+            ? ok({ id: 'tok-2', name: (req.body as { name: string }).name, value: NEW_VALUE })
+            : null,
+    });
+    await workflowToken({
+      org: loadOrg(o.dir),
+      tokenFile: o.tokenFile,
+      out: path.join(o.dir, 'long-token'),
+      cf: cloudflare(o.tokenFile, fake.fetchImpl),
+      log: () => {},
+      now: NOW,
+    });
+    const name = (fake.requests.find((x) => x.method === 'POST')!.body as { name: string }).name;
+    expect(name.length).toBeLessThanOrEqual(120);
+    expect(name.endsWith(' 2026-10-15T23:30:00Z')).toBe(true);
+    expect(name.startsWith('specreview apply aaaa')).toBe(true);
   });
 });

@@ -204,7 +204,7 @@ describe('9: setup', () => {
       ],
       [
         'the main app on a second hostname',
-        (s) => s.apps[0].self_hosted_domains?.push('old.acme.dev'),
+        (s) => s.apps[0].destinations?.push({ type: 'public', uri: 'old.acme.dev' }),
         /not only specs.acme.dev/,
       ],
       [
@@ -925,5 +925,143 @@ describe('#75: the admin hostname in Access', () => {
       undefined,
       undefined,
     ]);
+  });
+});
+
+describe('#78: apps setup did not make, and settings it keeps', () => {
+  const ADMIN_HOST = 'specs-admin.acme.dev';
+  const stranger = (
+    id: string,
+    cover: { domain: string; destinations?: string[]; self_hosted_domains?: string[] },
+  ) => ({
+    id,
+    name: `someone's ${id}`,
+    domain: cover.domain,
+    type: 'self_hosted',
+    aud: `aud-${id}`,
+    policies: [],
+    allowed_idps: [],
+    ...(cover.destinations ? { destinations: cover.destinations.map((uri) => ({ type: 'public', uri })) } : {}),
+    ...(cover.self_hosted_domains ? { self_hosted_domains: cover.self_hosted_domains } : {}),
+  });
+  const withAdmin = (dir: { dir: string }) => {
+    const file = path.join(dir.dir, 'hub.json');
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), adminHostname: ADMIN_HOST }));
+  };
+
+  it.each([
+    [
+      '12: the hostname only in its destinations',
+      stranger('x1', { domain: 'tools.acme.dev', destinations: ['tools.acme.dev', 'specs.acme.dev'] }),
+      /covers specs\.acme\.dev and/,
+    ],
+    [
+      '13: a bypass over one site',
+      {
+        ...stranger('x2', { domain: 'specs.acme.dev/sidecar/*', destinations: ['specs.acme.dev/sidecar/*'] }),
+        type: 'bypass',
+      },
+      /covers specs\.acme\.dev\/sidecar\/\* and/,
+    ],
+    [
+      '14: the admin hostname through self_hosted_domains',
+      stranger('x3', { domain: 'tools.acme.dev', self_hosted_domains: ['tools.acme.dev', ADMIN_HOST] }),
+      /covers specs-admin\.acme\.dev and/,
+    ],
+  ])('%s is refused, and nothing is written', async (_name, app, why) => {
+    const { state, dir } = await applied();
+    withAdmin(dir);
+    expect((await run(state, { apply: true, dir })).error).toBeNull();
+    state.apps.push(app as (typeof state.apps)[number]);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(/stopped before changing anything/);
+    expect(r.error?.message).toMatch(why);
+    expect(r.error?.message).toMatch(/is not recorded in hub\.json; it could open or shadow part of the hub/);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a wildcard host with a path under it',
+      '*.acme.dev/sidecar/_api/*',
+      /covers \*\.acme\.dev\/sidecar\/_api\/\* and/,
+    ],
+    ['the hostname in capitals', 'SPECS.acme.dev/sidecar/*', /covers SPECS\.acme\.dev\/sidecar\/\* and/],
+    ['the hostname followed by a wildcard', 'specs.acme.dev*', /covers specs\.acme\.dev\* and/],
+  ])('13a: %s is refused', async (_name, uri, why) => {
+    const { state, dir } = await applied();
+    state.apps.push(stranger('w1', { domain: uri, destinations: [uri] }) as (typeof state.apps)[number]);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(why);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it("13b: an app named like the hub's public bypass is refused while the real one is recorded", async () => {
+    const { state, dir } = await applied();
+    const config = { ...CONFIG, sites: CONFIG.sites.map((x, i) => (i === 0 ? { ...x, visibility: 'public' } : x)) };
+    writeFileSync(path.join(dir.dir, 'specreview.config.json'), JSON.stringify(config));
+    expect((await run(state, { apply: true, dir, config })).error).toBeNull();
+    const repo = CONFIG.sites[0].repo;
+    state.apps.push({
+      ...stranger('n1', { domain: `specs.acme.dev/${repo}/_api/*`, destinations: [`specs.acme.dev/${repo}/_api/*`] }),
+      name: 'specreview specs.acme.dev public',
+      type: 'bypass',
+    } as (typeof state.apps)[number]);
+    const r = await run(state, { apply: true, dir, config });
+    expect(r.error?.message).toMatch(/Access app n1 \("specreview specs\.acme\.dev public"\) covers/);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it('15: apps over other hostnames, sibling names, and stale self_hosted_domains under destinations are left alone', async () => {
+    const { state, dir } = await applied();
+    state.apps.push(
+      stranger('y1', { domain: 'specs.acme.devx', destinations: ['specs.acme.devx'] }) as (typeof state.apps)[number],
+      stranger('y2', {
+        domain: 'specs.acme.dev.example',
+        destinations: ['specs.acme.dev.example/x'],
+      }) as (typeof state.apps)[number],
+      stranger('y3', {
+        domain: 'tools.acme.dev',
+        destinations: ['tools.acme.dev'],
+        self_hosted_domains: ['specs.acme.dev'],
+      }) as (typeof state.apps)[number],
+      // A company-wide app over every subdomain: the hub's own app is more specific.
+      stranger('y4', { domain: '*.acme.dev', destinations: ['*.acme.dev'] }) as (typeof state.apps)[number],
+      // A bookmark lists a link and protects nothing.
+      { ...stranger('y5', { domain: 'specs.acme.dev' }), type: 'bookmark' } as (typeof state.apps)[number],
+    );
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.lines.at(-1)).toBe('nothing to do');
+  });
+
+  it("16: the hostname's app with CORS, preflight bypass or framing is noted, not refused", async () => {
+    const { state, dir } = await applied();
+    const main = state.apps[0];
+    main.cors_headers = { allowed_origins: ['https://elsewhere.example'] };
+    main.options_preflight_bypass = true;
+    main.allow_iframe = true;
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.lines).toContain(
+      'Access app for specs.acme.dev: note, it has CORS allowing other origins, preflight bypass, framing allowed; setup keeps these as they are',
+    );
+    expect(r.writes()).toEqual([]);
+  });
+
+  it("16: sign-in through a WARP session is refused on the hostname's app and the admin app", async () => {
+    const { state, dir } = await applied();
+    withAdmin(dir);
+    expect((await run(state, { apply: true, dir })).error).toBeNull();
+    for (const which of ['main', 'admin'] as const) {
+      const hub = JSON.parse(readFileSync(path.join(dir.dir, 'hub.json'), 'utf8')) as HubJson;
+      const id = which === 'main' ? hub.access?.appId : hub.access?.adminAppId;
+      const app = state.apps.find((x) => x.id === id)!;
+      app.allow_authenticate_via_warp = true;
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, which).toMatch(new RegExp(`Access app ${id} allows sign-in through a WARP session`));
+      expect(r.writes(), which).toEqual([]);
+      delete app.allow_authenticate_via_warp;
+    }
   });
 });
