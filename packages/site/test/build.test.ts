@@ -626,7 +626,7 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     write(repo, 'README.md', page('Team docs', 'Start here.'));
     commit(repo, 'docs: readme');
     write(repo, 'README.md', page('Team docs', 'Start here, [again](./README.md#top) and [the guide](guide/a.md).'));
-    write(repo, 'guide/a.md', page('A', 'Back to [the start](../README.md).'));
+    write(repo, 'guide/a.md', page('A', 'Back to [the start](../README.md), or [from the top](/README.md).'));
     write(repo, '.github/workflows/x.yml', 'name: x\n');
     write(repo, '.gitignore', '.specreview\n');
     const head = commit(repo, 'docs: a guide');
@@ -642,6 +642,7 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     const at = (from: string, href: string | undefined) =>
       new URL(href ?? 'missing', `https://hub.example/fixture/${from}`);
     expect(at('guide/a', hrefOf('guide/a.html', 'the start')).pathname).toBe('/fixture/');
+    expect(at('guide/a', hrefOf('guide/a.html', 'from the top')).pathname).toBe('/fixture/');
     const m = manifestOf(repo);
     expect(m.pages.index.title).toBe('Team docs');
     const again = at('', hrefOf('index.html', 'again'));
