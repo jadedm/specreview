@@ -26,7 +26,14 @@ If a run fails part way, fix the cause and run it again: it resumes from the ids
 
 ## Who can change the hub
 
-Anyone with write access to this repo can get the Cloudflare token: the secret reaches workflows on any branch, and a writer can change the workflow on theirs. Branch protection on `main` does not change that. Give write access only to the people who administer the hub; product repos are separate, and their writers need no access here. On a paid GitHub plan, a deployment environment limited to `main` holding the secret closes this.
+Anyone with write access to this repo can get the Cloudflare token, two ways: a repository secret reaches workflows on any branch, and a writer can add one on theirs; and every push to `main` runs this repo's own `apply.sh` with the token, so a writer who changes it on `main` changes what runs. The hub's GitHub App writes here too (the readers and approvers form commits to `main`), so whoever holds the app's key has the same reach. Give write access only to the people who administer the hub; product repos are separate, and their writers need no access here.
+
+On GitHub's Free plan nothing more can be set for a private repo. Where the plan allows:
+
+- GitHub Team or Enterprise: create an environment named `apply` limited to the `main` branch (Settings, Environments, Deployment branches), add `CLOUDFLARE_API_TOKEN` to it as an environment secret, delete the repository secret of that name, and add `environment: apply` to the `apply` job in `.github/workflows/apply.yml`. A workflow on another branch then gets no token, whether pushed or started by hand. A change pushed to `main` still runs with it.
+- GitHub Enterprise Cloud: also add required reviewers to that environment. Every apply then waits for one of them, who should read what the push changed before approving. This holds the hub's own commits from the readers and approvers form too: an added person gets in once a reviewer approves the run, while a removal still refuses them at once.
+
+A ruleset requiring pull requests on `main` does not fit this template: `apply.sh` commits `hub.json` to `main` and the readers and approvers form commits there, and both would be refused. Do not let GitHub Actions bypass such a rule either, since any workflow on any branch could then push to `main`.
 
 ## Cloudflare tokens
 
