@@ -827,3 +827,78 @@ describe('#88: paths left out of the site', () => {
     expect(filesUnder(path.join(repo, '.specreview', 'history')).some((f) => f.includes('drafts'))).toBe(false);
   });
 });
+
+describe('#97: files a page links are published at their path', () => {
+  const site = (repo: string) => path.join(repo, '.specreview', 'site');
+
+  it('1, 2, 3, 4: linked PDF and text files are copied; images are only emitted by VitePress; public/ and excluded files are not doubled', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'See [notes](notes.txt).'));
+    write(
+      repo,
+      'docs/product/spec.md',
+      page('Spec', '[Model](payout-model.pdf), [notes](../notes.txt) and ![chart](chart.png)'),
+    );
+    write(repo, 'docs/product/payout-model.pdf', '%PDF-1.4 model');
+    // Over Vite's 4 KB inline limit, so it is emitted under assets/ too.
+    write(repo, 'docs/product/chart.png', 'p'.repeat(5000));
+    write(repo, 'docs/notes.txt', 'plain notes');
+    write(repo, 'docs/public/robots.txt', 'User-agent: *');
+    write(repo, 'docs/drafts/old.pdf', '%PDF draft');
+    commit(repo, 'docs');
+    expect(build(repo, '--exclude', 'drafts')).toMatchObject({ status: 0 });
+    const files = filesUnder(site(repo));
+    expect(readFileSync(path.join(site(repo), 'product/payout-model.pdf'), 'utf8')).toBe('%PDF-1.4 model');
+    expect(readFileSync(path.join(site(repo), 'notes.txt'), 'utf8')).toBe('plain notes');
+    // Images are VitePress's to emit (hashed, under assets/), not copied again.
+    expect(files).not.toContain('product/chart.png');
+    expect(files.some((f) => /^assets\/chart\.[\w-]+\.png$/.test(f))).toBe(true);
+    expect(files).toContain('robots.txt');
+    expect(files).not.toContain('public/robots.txt');
+    expect(files.some((f) => f.startsWith('drafts'))).toBe(false);
+    // The page's link resolves to the copied file.
+    const href = /<a href="([^"]*)"[^>]*>Model<\/a>/.exec(
+      readFileSync(path.join(site(repo), 'product/spec.html'), 'utf8'),
+    )?.[1];
+    expect(new URL(href ?? 'missing', 'https://hub.example/fixture/product/spec').pathname).toBe(
+      '/fixture/product/payout-model.pdf',
+    );
+  });
+
+  it('a file meeting another at one address stops the build, naming it', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', '[a](a.txt)'));
+    write(repo, 'docs/a.txt', 'beside the page');
+    write(repo, 'docs/public/a.txt', 'from public');
+    commit(repo, 'docs');
+    expect(build(repo)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('a.txt: another file of the site is already published at /a.txt'),
+    });
+    expect(existsSync(site(repo))).toBe(false);
+  });
+
+  it("a file at a page's clean URL is refused, beside it or from public/", () => {
+    for (const file of ['docs/guide.txt', 'docs/public/guide.txt']) {
+      const repo = newRepo();
+      write(repo, 'docs/index.md', page('Home', 'x'));
+      write(repo, 'docs/guide.txt.md', page('Guide', 'x'));
+      write(repo, file, 'shadow');
+      commit(repo, 'docs');
+      expect(build(repo), file).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining('would be served at the address of the page guide.txt.md'),
+      });
+    }
+  });
+
+  it('5: a build that fails leaves no site, linked files included', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'See [outside](../outside.md) and [model](m.pdf).'));
+    write(repo, 'docs/m.pdf', '%PDF');
+    write(repo, 'outside.md', page('Outside', 'x'));
+    commit(repo, 'docs');
+    expect(build(repo).status).toBe(1);
+    expect(existsSync(site(repo))).toBe(false);
+  });
+});

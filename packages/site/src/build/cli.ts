@@ -2,7 +2,7 @@
 // specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...
 // Builds a repo's docs folder, as committed at HEAD, into <out>/site and
 // <out>/history for the hub.
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -25,6 +25,24 @@ import { git } from './manifest.js';
 
 const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...';
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// VitePress copies only the files a page imports (images, fonts) and
+// public/; a plain link to a PDF or a text file beside a page would 404
+// (#97). Those two types are copied to their own path; images and fonts are
+// not, as VitePress already emits them and doubling them counts against the
+// publish limits. A file meeting another at one path is refused, never
+// silently dropped. Excluded paths (#88) are gone from the export.
+export const LINKED_TYPES = new Set(['pdf', 'txt']);
+const copyLinkedAssets = (docs: string, site: string) => {
+  for (const file of filesIn(docs)) {
+    const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
+    if (file.startsWith('public/') || !LINKED_TYPES.has(ext)) continue;
+    const target = path.join(site, file);
+    if (existsSync(target)) throw new BuildError(`${file}: another file of the site is already published at /${file}`);
+    mkdirSync(path.dirname(target), { recursive: true });
+    copyFileSync(path.join(docs, file), target);
+  }
+};
 
 export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   const { positionals, values } = parseArgs({
@@ -100,6 +118,7 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     );
     try {
       await build(vpRoot);
+      copyLinkedAssets(exported.docs, path.join(out, 'site'));
     } catch (err) {
       // A failed build leaves no half-written site behind.
       rmSync(path.join(out, 'site'), { recursive: true, force: true });

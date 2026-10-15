@@ -284,6 +284,7 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
       woff: 'font/woff',
       woff2: 'font/woff2',
       txt: 'text/plain; charset=utf-8',
+      pdf: 'application/pdf',
       xml: 'application/xml; charset=utf-8',
     };
     const { files } = spyStore(publishedFiles());
@@ -293,7 +294,8 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
       const r = await page(`/${SIDECAR}/f.${ext}`);
       expect(r.headers.get('content-type'), ext).toBe(type);
       // #77: SVG can hold script, so it downloads when opened on its own.
-      expect(r.headers.get('content-disposition'), ext).toBe(ext === 'svg' ? 'attachment' : null);
+      // #97: PDF downloads too.
+      expect(r.headers.get('content-disposition'), ext).toBe(ext === 'svg' || ext === 'pdf' ? 'attachment' : null);
       expect(r.headers.get('content-security-policy'), ext).toBe(ext === 'html' ? "default-src 'self'" : INERT);
       expect(r.headers.get('x-content-type-options'), ext).toBe('nosniff');
     }

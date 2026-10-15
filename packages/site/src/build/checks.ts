@@ -199,6 +199,14 @@ export const checkPaths = (files: string[]) => {
     const why = pathProblem(file);
     if (why) throw new BuildError(`${file}: ${why}`);
   }
+  // A file served at a page's clean URL would answer in its place (#97):
+  // guide.txt beside guide.txt.md, or public/guide.txt at the top.
+  const pages = new Set(files.filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)));
+  for (const file of files) {
+    const served = file.startsWith('public/') ? file.slice('public/'.length) : file;
+    if (!file.endsWith('.md') && pages.has(served))
+      throw new BuildError(`${file}: it would be served at the address of the page ${served}.md`);
+  }
 };
 
 // Includes are expanded on the raw page before Markdown, even inside code, and
