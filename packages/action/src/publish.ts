@@ -38,13 +38,15 @@ const VERSION = /^[0-9a-f]{40}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{8}$/;
 // older form anywhere in a line: line breaks and other control characters
 // become spaces and every :: and ## is broken up; at most max characters.
 // The site build's CLI does the same (packages/site/src/build/cli.ts).
-export const inert = (text: string, max = 300): string =>
-  text
+export const inert = (text: string, max = 300): string => {
+  const safe = text
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
     .replace(/:(?=:)/g, ': ')
-    .replace(/#(?=#)/g, '# ')
-    .slice(0, max);
+    .replace(/#(?=#)/g, '# ');
+  // By code point, so a character is never cut in half.
+  return [...safe].slice(0, max).join('');
+};
 
 type Env = Record<string, string | undefined>;
 type Fetch = typeof fetch;

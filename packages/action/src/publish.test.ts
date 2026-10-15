@@ -265,5 +265,7 @@ describe('#79: text from the hub or the network cannot start a workflow command'
     expect(line).toContain(`422 C ${'m'.repeat(298)}`);
     expect(line).not.toContain('m'.repeat(299));
     expect(inert('a'.repeat(400))).toHaveLength(300);
+    // A character outside the basic plane is never cut in half.
+    expect(inert(`${'a'.repeat(299)}\u{1F600}b`)).toBe(`${'a'.repeat(299)}\u{1F600}`);
   });
 });

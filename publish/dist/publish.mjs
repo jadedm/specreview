@@ -22,7 +22,10 @@ var hubOrigin = (hub) => {
 };
 var REPO = /^[a-z0-9._-]{1,100}$/;
 var VERSION = /^[0-9a-f]{40}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{8}$/;
-var inert = (text, max = 300) => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/:(?=:)/g, ": ").replace(/#(?=#)/g, "# ").slice(0, max);
+var inert = (text, max = 300) => {
+  const safe = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/:(?=:)/g, ": ").replace(/#(?=#)/g, "# ");
+  return [...safe].slice(0, max).join("");
+};
 var actionsToken = async (audience, env2, fetchImpl) => {
   const url = env2.ACTIONS_ID_TOKEN_REQUEST_URL;
   const bearer = env2.ACTIONS_ID_TOKEN_REQUEST_TOKEN;

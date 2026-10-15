@@ -39,6 +39,34 @@ describe('20: Markdown features that pull in files or run code', () => {
     expect(forbiddenIn(page)).toBeNull();
   });
 
+  it("#79: a code block's first word is letters, digits and _+.#{},:=- only, wherever the fence is", () => {
+    const fenced = (opener: string) => `# Page\n\n${opener}\nx\n\`\`\`\n`;
+    for (const ok of [
+      '```ts',
+      '```js{1,3-4}',
+      '```sh [pnpm]',
+      '```ts:line-numbers=5',
+      '```md:no-line-numbers',
+      '```ts twoslash',
+      '```vue-html',
+      '```c#',
+      '~~~',
+      '```',
+    ])
+      expect(forbiddenIn(fenced(ok)), ok).toBeNull();
+    for (const bad of [
+      '```##[add-mask]x',
+      '```##&#91;add-mask&#93;x',
+      '```ts:##&#91;add-mask&#93;x',
+      '```js{##&#91;add-mask&#93;x}',
+      '~~~a"b',
+      '- ```##&#91;error&#93;x',
+      '> ```##&#91;error&#93;x',
+      '1. ```a\\[b',
+    ])
+      expect(forbiddenIn(fenced(bad)), bad).toBe('code block languages other than letters, digits and _+.#{},:=-');
+  });
+
   it('a fence closes only with its own character, at least as long', () => {
     expect(forbiddenIn('````\n```\n<script>\n```\n````\n')).toBeNull();
     expect(forbiddenIn('```\n~~~\n<script>\n```\n')).toBeNull();
