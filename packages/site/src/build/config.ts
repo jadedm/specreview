@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { UserConfig } from 'vitepress';
-import { ASSET_TYPES, BuildError, filesIn, isInside } from './checks.js';
+import { ASSET_TYPES, BuildError, excludedBy, filesIn, isInside } from './checks.js';
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
 import { sanitizeRendered } from './sanitize.js';
 import { readPage, sidebarOf } from './sidebar.js';
@@ -41,6 +41,8 @@ export type SiteOptions = {
   vpRoot: string;
   // The home page's source: index.md, or a top-level README.md without one (#87).
   home?: string | null;
+  // Paths left out of the site (#88), relative to the docs folder.
+  exclude?: string[];
 };
 
 // The markdown-it instance VitePress hands to markdown.config.
@@ -177,7 +179,7 @@ export const siteShape = (docs: string, repo: string, home?: string | null) => {
   return { title, themeConfig };
 };
 
-export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home }: SiteOptions): UserConfig => {
+export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home, exclude = [] }: SiteOptions): UserConfig => {
   const { title, themeConfig } = siteShape(docs, repo, home);
   const collected: Collected = new Map();
   return {
@@ -209,7 +211,7 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home }: Sit
         issues: parseIssues(pageData.relativePath, pageData.frontmatter.issues),
       });
     },
-    buildEnd: buildEndFor(collected, historyDirOf(out), root, docsRel),
+    buildEnd: buildEndFor(collected, historyDirOf(out), root, docsRel, excludedBy(exclude)),
     vite: {
       resolve: { alias: { vue: vueDir } },
       plugins: [

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// specreview-site build --repo <name> [--docs docs] [--out .specreview]
+// specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...
 // Builds a repo's docs folder, as committed at HEAD, into <out>/site and
 // <out>/history for the hub.
 import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,9 +10,11 @@ import { build } from 'vitepress';
 import {
   BuildError,
   checkArguments,
+  checkExcludes,
   checkGit,
   checkMarkdown,
   checkPaths,
+  excludedBy,
   exportDocs,
   filesIn,
   OUTPUT_MARK,
@@ -21,7 +23,7 @@ import {
 import { siteShape } from './config.js';
 import { git } from './manifest.js';
 
-const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview]';
+const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const runBuild = async (argv: string[], cwd = process.cwd()) => {
@@ -32,9 +34,11 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
       repo: { type: 'string' },
       docs: { type: 'string', default: 'docs' },
       out: { type: 'string', default: '.specreview' },
+      exclude: { type: 'string', multiple: true, default: [] },
     },
   });
   if (positionals[0] !== 'build' || positionals.length !== 1 || !values.repo) throw new BuildError(USAGE);
+  checkExcludes(values.exclude);
   const docsArg = path.resolve(cwd, values.docs);
   const out = path.resolve(cwd, values.out);
   if (!existsSync(docsArg)) throw new BuildError(`--docs ${values.docs} is not a folder`);
@@ -57,7 +61,7 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   checkArguments(values.repo, { root, docs: docsArg, out });
   const docsRel = path.relative(root, realpathSync.native(docsArg)).split(path.sep).join('/');
 
-  const exported = exportDocs(root, docsRel);
+  const exported = exportDocs(root, docsRel, excludedBy(values.exclude));
   try {
     const files = filesIn(exported.docs);
     // The home page is index.md, or a README.md at the top when there is none (#87).
@@ -75,7 +79,16 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     writeFileSync(path.join(out, OUTPUT_MARK), 'Written by specreview-site build; emptied by the next build.\n');
     const vpRoot = path.join(out, '.root');
     mkdirSync(path.join(vpRoot, '.vitepress', 'theme'), { recursive: true });
-    const options = { repo: values.repo, docs: exported.docs, root, docsRel, out, vpRoot, home };
+    const options = {
+      repo: values.repo,
+      docs: exported.docs,
+      root,
+      docsRel,
+      out,
+      vpRoot,
+      home,
+      exclude: values.exclude,
+    };
     writeFileSync(
       path.join(vpRoot, '.vitepress', 'config.mjs'),
       `import { siteConfig } from ${JSON.stringify(path.join(here, 'config.js'))};\n` +

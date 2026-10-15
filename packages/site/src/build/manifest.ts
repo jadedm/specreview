@@ -190,7 +190,13 @@ export const assertManifestSize = (text: string) => {
 // site output, not in it: old versions are team-only, served by the hub.
 // config.srcDir is the export of HEAD's docs; git runs in the repo itself.
 export const buildEndFor =
-  (collected: Collected, historyDir: string, repo: string, docsRel: string) =>
+  (
+    collected: Collected,
+    historyDir: string,
+    repo: string,
+    docsRel: string,
+    excluded: (file: string) => boolean = () => false,
+  ) =>
   (config: SiteConfig): void => {
     const contentPrefix = docsRel === '' ? '' : `${docsRel}/`;
     const pages: Record<string, ManifestPage> = {};
@@ -218,7 +224,10 @@ export const buildEndFor =
         `${contentPrefix}${file}`,
       ]);
       // A version under an old name the hub cannot serve (a space, say) is left out.
-      const servable = parseGitLog(log, contentPrefix).filter((e) => e.path.split('/').every((p) => SERVABLE.test(p)));
+      // Nor a version under a path left out of the site (#88).
+      const servable = parseGitLog(log, contentPrefix).filter(
+        (e) => e.path.split('/').every((p) => SERVABLE.test(p)) && !excluded(e.path),
+      );
       const history: HistoryEntry[] = servable.map(({ repoPath, ...entry }) => {
         const old = git(repo, ['show', `${entry.commit}:${repoPath}`]);
         const target = path.join(historyDir, entry.commit, entry.path);

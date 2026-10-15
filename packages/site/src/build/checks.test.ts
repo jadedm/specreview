@@ -245,3 +245,35 @@ describe('#73: docs files load only as pages or plain assets', () => {
     expect(load('vitepress/theme')).toBeNull();
   });
 });
+
+describe('#88: what an exclude pattern leaves out', () => {
+  it('a plain path is a file or a whole folder; * stays in one name; ** crosses folders; case counts', async () => {
+    const { excludedBy } = await import('./checks.js');
+    const cases: [string, string[], string[]][] = [
+      [
+        'product/prototypes',
+        ['product/prototypes/a/m.html', 'product/prototypes/s.js'],
+        ['product/prototypes2/x.md', 'product/spec.md'],
+      ],
+      ['drafts/', ['drafts/x.md'], ['drafts.md', 'old/drafts/x.md']],
+      ['*.pdf', ['y.pdf'], ['x/f.pdf']],
+      ['**/*.pdf', ['y.pdf', 'x/f.pdf', 'a/b/c.pdf'], ['x/f.pdfx']],
+      ['product/proto*', ['product/protos/k.md', 'product/prototypes/s.js'], ['product/spec.md']],
+      ['a/**/b', ['a/b', 'a/x/b', 'a/x/y/b/z.md'], ['a/xb', 'b']],
+      ['Drafts', ['Drafts/x.md'], ['drafts/x.md']],
+    ];
+    for (const [pattern, gone, kept] of cases) {
+      const out = excludedBy([pattern]);
+      for (const f of gone) expect(out(f), `${pattern} leaves out ${f}`).toBe(true);
+      for (const f of kept) expect(out(f), `${pattern} keeps ${f}`).toBe(false);
+    }
+    expect(excludedBy([])('anything.md')).toBe(false);
+  });
+
+  it('checkExcludes refuses bad shapes and more than 20, naming the pattern', async () => {
+    const { checkExcludes } = await import('./checks.js');
+    expect(() => checkExcludes(['../x'])).toThrow('--exclude "../x"');
+    expect(() => checkExcludes(Array.from({ length: 21 }, (_, i) => `p${i}`))).toThrow('at most 20');
+    expect(() => checkExcludes(Array.from({ length: 20 }, (_, i) => `p${i}`))).not.toThrow();
+  });
+});
