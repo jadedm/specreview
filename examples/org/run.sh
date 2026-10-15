@@ -15,11 +15,12 @@ COMMIT=$(tr -d '[:space:]' < "$ORG/specreview.commit")
 # earlier run (a kept checkout's ignored files and git settings can run code).
 CHECKOUT=$(mktemp -d)
 trap 'rm -rf "$CHECKOUT"' EXIT
-git -C "$CHECKOUT" init -q
-git -C "$CHECKOUT" remote add origin https://github.com/jadedm/specreview.git
-git -C "$CHECKOUT" fetch -q --depth 1 origin "$COMMIT"
-git -C "$CHECKOUT" checkout -q --detach FETCH_HEAD
-[ "$(git -C "$CHECKOUT" rev-parse HEAD)" = "$COMMIT" ] ||
-  { echo "run.sh: GitHub did not give commit $COMMIT" >&2; exit 2; }
+# Branches only, file contents fetched as checked out: GitHub would hand over
+# a commit that exists only in a fork if asked for it by name, so the pin must
+# be on one of specreview's own branches.
+git clone -q --filter=blob:none --no-checkout https://github.com/jadedm/specreview.git "$CHECKOUT"
+[ -n "$(git -C "$CHECKOUT" branch -r --contains "$COMMIT" 2>/dev/null)" ] ||
+  { echo "run.sh: $COMMIT is not on a branch of jadedm/specreview" >&2; exit 2; }
+git -C "$CHECKOUT" checkout -q --detach "$COMMIT"
 (cd "$CHECKOUT" && pnpm install --frozen-lockfile --silent && pnpm --filter @specreview/shared build >/dev/null && pnpm --filter @specreview/hub build >/dev/null)
 node "$CHECKOUT/packages/hub/dist/deploy.mjs" "$@" --org "$ORG"

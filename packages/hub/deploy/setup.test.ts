@@ -980,6 +980,38 @@ describe('#78: apps setup did not make, and settings it keeps', () => {
     expect(r.writes()).toEqual([]);
   });
 
+  it.each([
+    [
+      'a wildcard host with a path under it',
+      '*.acme.dev/sidecar/_api/*',
+      /covers \*\.acme\.dev\/sidecar\/_api\/\* and/,
+    ],
+    ['the hostname in capitals', 'SPECS.acme.dev/sidecar/*', /covers SPECS\.acme\.dev\/sidecar\/\* and/],
+    ['the hostname followed by a wildcard', 'specs.acme.dev*', /covers specs\.acme\.dev\* and/],
+  ])('13a: %s is refused', async (_name, uri, why) => {
+    const { state, dir } = await applied();
+    state.apps.push(stranger('w1', { domain: uri, destinations: [uri] }) as (typeof state.apps)[number]);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(why);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it("13b: an app named like the hub's public bypass is refused while the real one is recorded", async () => {
+    const { state, dir } = await applied();
+    const config = { ...CONFIG, sites: CONFIG.sites.map((x, i) => (i === 0 ? { ...x, visibility: 'public' } : x)) };
+    writeFileSync(path.join(dir.dir, 'specreview.config.json'), JSON.stringify(config));
+    expect((await run(state, { apply: true, dir, config })).error).toBeNull();
+    const repo = CONFIG.sites[0].repo;
+    state.apps.push({
+      ...stranger('n1', { domain: `specs.acme.dev/${repo}/_api/*`, destinations: [`specs.acme.dev/${repo}/_api/*`] }),
+      name: 'specreview specs.acme.dev public',
+      type: 'bypass',
+    } as (typeof state.apps)[number]);
+    const r = await run(state, { apply: true, dir, config });
+    expect(r.error?.message).toMatch(/Access app n1 \("specreview specs\.acme\.dev public"\) covers/);
+    expect(r.writes()).toEqual([]);
+  });
+
   it('15: apps over other hostnames, sibling names, and stale self_hosted_domains under destinations are left alone', async () => {
     const { state, dir } = await applied();
     state.apps.push(
@@ -993,6 +1025,10 @@ describe('#78: apps setup did not make, and settings it keeps', () => {
         destinations: ['tools.acme.dev'],
         self_hosted_domains: ['specs.acme.dev'],
       }) as (typeof state.apps)[number],
+      // A company-wide app over every subdomain: the hub's own app is more specific.
+      stranger('y4', { domain: '*.acme.dev', destinations: ['*.acme.dev'] }) as (typeof state.apps)[number],
+      // A bookmark lists a link and protects nothing.
+      { ...stranger('y5', { domain: 'specs.acme.dev' }), type: 'bookmark' } as (typeof state.apps)[number],
     );
     const r = await run(state, { apply: true, dir });
     expect(r.error).toBeNull();

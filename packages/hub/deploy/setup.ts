@@ -779,13 +779,24 @@ export const setup = async (org: Org, cf: Cloudflare, opts: { apply: boolean; lo
   // hub. Apps already refused above as possibly this hub's are not repeated.
   const recorded = new Set([access.appId, access.publishAppId, access.publicAppId, access.adminAppId]);
   const hubHosts = [host, ...(adminHost ? [adminHost] : [])];
-  const overHub = (d: string) => hubHosts.some((h) => d === h || d.startsWith(`${h}/`));
+  // An exact host, a path under it, or a wildcard host with a path (more
+  // specific than the hub's own app, so it wins); a bare *.example.com app
+  // does not take a hostname from an app made for it.
+  const overHub = (entry: string) => {
+    const d = entry.toLowerCase();
+    const [name, ...rest] = d.split('/');
+    const wildcard = name.startsWith('*.') && rest.length > 0;
+    return hubHosts.some(
+      (h) => d === h || d.startsWith(`${h}/`) || d.startsWith(`${h}*`) || (wildcard && h.endsWith(name.slice(1))),
+    );
+  };
   const reportedAbove = (x: App) =>
     (!access.appId && x.domain === host) ||
     (!access.publishAppId && x.domain === publishDomain) ||
     (Boolean(adminHost) && !access.adminAppId && x.domain === adminHost) ||
-    x.name === publicAppName;
-  for (const x of apps.filter((x) => !recorded.has(x.id) && !reportedAbove(x))) {
+    (publicAppNamed && x.name === publicAppName);
+  // A bookmark only lists a link; it protects and opens nothing.
+  for (const x of apps.filter((x) => !recorded.has(x.id) && !reportedAbove(x) && x.type !== 'bookmark')) {
     const over = coveredBy(x).filter(overHub);
     if (over.length > 0)
       refusals.push(

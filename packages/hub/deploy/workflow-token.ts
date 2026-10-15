@@ -139,7 +139,7 @@ export const workflowToken = async (opts: {
       .catch((e: unknown) => {
         // A refusal (4xx) made nothing. No answer, a reply that is not JSON
         // or a server error may have come after the token was made.
-        if (e instanceof CloudflareError && e.status < 500) throw e;
+        if (e instanceof CloudflareError && e.status >= 400 && e.status < 500) throw e;
         throw new DeployError(
           `Cloudflare did not answer the token create (${e instanceof Error ? e.message : String(e)}); a token named "${name}" may exist: delete it in the dashboard before running again`,
         );

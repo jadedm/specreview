@@ -343,6 +343,11 @@ describe('#78 workflow-token', () => {
     }
   });
 
+  it('9a: a 200 that says it failed is not taken as nothing made', async () => {
+    const r = await run('cfat_x', { stand: { create: () => no(200, 'Odd') } });
+    expect(r.error?.message).toContain(`a token named "${NAME}" may exist`);
+  });
+
   it('10: a create Cloudflare refuses made nothing, and says so as before', async () => {
     for (const status of [400, 403]) {
       const r = await run('cfat_x', { stand: { create: () => no(status, 'Refused') } });
