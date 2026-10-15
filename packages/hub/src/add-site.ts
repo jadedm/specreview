@@ -1,3 +1,4 @@
+import { isExcludePattern } from '@specreview/shared';
 import { isRepoName, problemsIn, type HubConfig } from './config';
 import type { Env } from './env';
 import { LIST_PAGES } from './github-app';
@@ -13,7 +14,20 @@ import { API, githubFetch, redirectOf } from './github-fetch';
 export const WORKFLOW = '.github/workflows/docs.yml';
 export const CONFIG_FILE = 'specreview.config.json';
 
-export type SiteInput = { repo: string; branch: string; docs: string; ticketRepo: string; teamDomain: string };
+export type SiteInput = {
+  repo: string;
+  branch: string;
+  docs: string;
+  ticketRepo: string;
+  teamDomain: string;
+  // Paths left out of the site (#88), relative to the docs folder.
+  exclude?: string[];
+};
+
+// From the admin page's form: fewer and shorter than the CLI takes, so the
+// form stays within its 4 KB limit.
+export const FORM_EXCLUDES = 10;
+export const FORM_EXCLUDE_LENGTH = 100;
 export type Made = { what: string; url?: string };
 export type Added = { config: string; product: string; made: Made[] };
 
@@ -39,6 +53,9 @@ export const inputProblem = (input: SiteInput, config: HubConfig): string | null
   // `.` is the whole repo (#87).
   if ((input.docs !== '.' && !FOLDER.test(input.docs)) || input.docs.length > 100)
     return 'docs folder: a folder path in the repo, or . for the whole repo';
+  const exclude = input.exclude ?? [];
+  if (exclude.length > FORM_EXCLUDES || exclude.some((p) => !isExcludePattern(p, FORM_EXCLUDE_LENGTH)))
+    return `leave out: at most ${FORM_EXCLUDES} paths in the docs folder, comma separated, with * and ** as wildcards`;
   if (!isRepoName(input.ticketRepo)) return 'ticket repo: a lowercase repo name';
   if (!/^[a-z0-9.-]{1,253}$/.test(input.teamDomain)) return 'team domain: a lowercase domain';
   if (config.configRepo === `${config.org}/${input.repo}`)
@@ -55,6 +72,11 @@ export const b64 = (text: string) => {
 };
 export const unb64 = (text: string) =>
   new TextDecoder().decode(Uint8Array.from(atob(text.replace(/\s+/g, '')), (c) => c.charCodeAt(0)));
+
+// Patterns are checked (isExcludePattern) before they get here: no quote,
+// colon or line break can reach the YAML.
+const excludeBlock = (exclude: string[] = []) =>
+  exclude.length === 0 ? '' : `\n          exclude: |\n${exclude.map((p) => `            ${p}`).join('\n')}`;
 
 export const workflowFor = (input: SiteInput, branch: string, origin: string, commit: string) =>
   `# Builds this repo's docs folder and publishes it to the specreview hub.
@@ -86,7 +108,7 @@ jobs:
       - uses: jadedm/specreview/build@${commit}
         with:
           repo: ${JSON.stringify(input.repo)}
-          docs: ${JSON.stringify(input.docs)}
+          docs: ${JSON.stringify(input.docs)}${excludeBlock(input.exclude)}
       # Only a push publishes, so only a push keeps the build, for a day.
       - if: github.event_name == 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

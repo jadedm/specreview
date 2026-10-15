@@ -21,3 +21,34 @@ describe('manifest', () => {
     expect(isManifest({ ...valid, csp: 'a\nb' })).toBe(false);
   });
 });
+
+describe('#88: exclude patterns', () => {
+  it('takes paths and whole-segment ** wildcards; refuses the rest', async () => {
+    const { isExcludePattern } = await import('./text');
+    for (const ok of ['product/prototypes', 'drafts/', '*.pdf', '**/*.pdf', 'a/**/b', 'x/**', 'a.b-c_d~e'])
+      expect(isExcludePattern(ok), ok).toBe(true);
+    for (const bad of [
+      '/abs',
+      '../x',
+      'a/./b',
+      'a/../b',
+      '.',
+      '..',
+      'a b',
+      ':x',
+      'a//b',
+      '***',
+      'a**b',
+      'a/**b',
+      '',
+      'a\\b',
+      'x\ny',
+      '-drafts',
+      '--repo',
+    ])
+      expect(isExcludePattern(bad), JSON.stringify(bad)).toBe(false);
+    expect(isExcludePattern('a'.repeat(200))).toBe(true);
+    expect(isExcludePattern('a'.repeat(201))).toBe(false);
+    expect(isExcludePattern('a'.repeat(101), 100)).toBe(false);
+  });
+});

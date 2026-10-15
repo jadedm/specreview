@@ -728,3 +728,102 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     }
   });
 });
+
+describe('#88: paths left out of the site', () => {
+  const site = (repo: string) => path.join(repo, '.specreview', 'site');
+  const withPrototypes = () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/product/spec.md', page('Spec', 'x'));
+    write(repo, 'docs/product/prototypes/admin/Main.dc.html', '<html><script>x()</script></html>');
+    write(repo, 'docs/product/prototypes/admin/support.js', 'x()');
+    write(repo, 'docs/product/prototypes/admin/README.md', page('Prototype notes', '<script>bad()</script>'));
+    write(repo, 'docs/product/report.pdf', 'pdf');
+    write(repo, 'docs/drafts/wip.md', page('WIP', 'x'));
+    commit(repo, 'docs');
+    return repo;
+  };
+
+  it('1, 3: a folder of prototypes, with a symlink and a submodule in it, is left out; the rest builds', () => {
+    const repo = withPrototypes();
+    symlinkSync('/etc/hosts', path.join(repo, 'docs/product/prototypes/admin/link.md'));
+    git(repo, 'add', '-A');
+    git(repo, 'update-index', '--add', '--cacheinfo', `160000,${'a'.repeat(40)},docs/product/prototypes/sub`);
+    commit(repo, 'symlink and submodule');
+    expect(build(repo)).toMatchObject({ status: 1 });
+    const r = build(repo, '--exclude', 'product/prototypes');
+    expect(r).toMatchObject({ status: 0 });
+    const files = filesUnder(site(repo));
+    expect(files.some((f) => f.includes('prototypes'))).toBe(false);
+    expect(files).toContain('product/spec.html');
+    expect(Object.keys(manifestOf(repo).pages).sort()).toEqual(['drafts/wip', 'index', 'product/spec']);
+  });
+
+  it('2, 4: several patterns each leave out what they name; one matching nothing is fine', () => {
+    const repo = withPrototypes();
+    const r = build(
+      repo,
+      '--exclude',
+      'product/prototypes',
+      '--exclude',
+      '**/*.pdf',
+      '--exclude',
+      'drafts/',
+      '--exclude',
+      'nothing/here',
+    );
+    expect(r).toMatchObject({ status: 0 });
+    expect(Object.keys(manifestOf(repo).pages).sort()).toEqual(['index', 'product/spec']);
+    expect(filesUnder(site(repo)).some((f) => f.endsWith('.pdf'))).toBe(false);
+  });
+
+  it('5: a bad pattern stops the build before anything is read', () => {
+    const repo = withPrototypes();
+    for (const bad of ['/abs', '../x', 'a/./b', 'a b', 'a**b'])
+      expect(build(repo, '--exclude', bad), bad).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining(`--exclude ${JSON.stringify(bad)}`),
+      });
+    expect(existsSync(path.join(repo, '.specreview'))).toBe(false);
+  });
+
+  it('6: leaving out index.md falls back to a README.md; leaving out both says no home page', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Index', 'x'));
+    write(repo, 'docs/README.md', page('Readme home', 'x'));
+    commit(repo, 'docs');
+    expect(build(repo, '--exclude', 'index.md')).toMatchObject({ status: 0 });
+    expect(manifestOf(repo).pages.index.title).toBe('Readme home');
+    expect(build(repo, '--exclude', 'index.md', '--exclude', 'README.md')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('index.md or README.md is required'),
+    });
+  });
+
+  it('7: the root as the docs folder takes excludes the same way', () => {
+    const repo = newRepo();
+    write(repo, 'README.md', page('Home', 'x'));
+    write(repo, 'LICENSE', 'MIT\n');
+    write(repo, 'tools/run.js', 'x()');
+    commit(repo, 'docs');
+    expect(build(repo, '--docs', '.', '--exclude', 'LICENSE', '--exclude', 'tools')).toMatchObject({ status: 0 });
+  });
+
+  it('history: versions from before a page was renamed out of a left-out path are not published', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    const body = Array.from({ length: 20 }, (_, i) => `Line ${i} of the guide.`).join('\n\n');
+    write(repo, 'docs/drafts/secret.md', page('Guide', `${body}\n\nA draft note not for readers.`));
+    commit(repo, 'draft');
+    // A rename git recognises, so history follows it back into drafts/.
+    git(repo, 'mv', 'docs/drafts/secret.md', 'docs/guide.md');
+    write(repo, 'docs/guide.md', page('Guide', body));
+    const head = commit(repo, 'publish the guide');
+    expect(git(repo, 'log', '--follow', '--format=%H', '--', 'docs/guide.md').trim().split('\n')).toHaveLength(2);
+    expect(build(repo, '--exclude', 'drafts')).toMatchObject({ status: 0 });
+    const history = manifestOf(repo).pages.guide.history;
+    expect(history.map((h) => h.path)).toEqual(['guide.md']);
+    expect(history[0].commit).toBe(head);
+    expect(filesUnder(path.join(repo, '.specreview', 'history')).some((f) => f.includes('drafts'))).toBe(false);
+  });
+});

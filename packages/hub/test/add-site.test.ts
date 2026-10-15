@@ -670,3 +670,39 @@ describe('#87: the whole repo as the docs folder', () => {
     expect(fileOn('acme/newdocs', work, 'docs/index.md')).toBeUndefined();
   });
 });
+
+describe('#88: leaving paths out from the add-site form', () => {
+  const work = 'specreview/add-newdocs';
+  const workflow = () => text(fileOn('acme/newdocs', work, '.github/workflows/docs.yml')!);
+
+  it("10: comma-separated paths become the build step's exclude lines; none adds nothing", async () => {
+    expect((await add({ ...NEW, exclude: 'product/prototypes, drafts/ ,**/*.pdf' })).status).toBe(200);
+    expect(workflow()).toContain(
+      '          exclude: |\n            product/prototypes\n            drafts/\n            **/*.pdf\n',
+    );
+  });
+
+  it('10: a name like * or a---b stays a line inside the indented block, where YAML reads it as text', async () => {
+    expect((await add({ ...NEW, exclude: '*,a---b' })).status).toBe(200);
+    expect(workflow()).toContain('          exclude: |\n            *\n            a---b\n');
+  });
+
+  it('10: no exclude field, no exclude block', async () => {
+    expect((await add(NEW)).status).toBe(200);
+    expect(workflow()).not.toContain('exclude');
+  });
+
+  it.each([
+    ['a bad path', '../etc'],
+    ['a line break', 'drafts\nnext: x'],
+    ['a colon', 'a: b'],
+    ['a leading dash, which YAML or the build could misread', '---'],
+    ['eleven paths', Array.from({ length: 11 }, (_, i) => `p${i}`).join(',')],
+    ['a path over 100 characters', 'a'.repeat(101)],
+  ])('10: %s is refused naming the field, with nothing written', async (_name, exclude) => {
+    const r = await add({ ...NEW, exclude });
+    expect(r.status).toBe(400);
+    expect(html(r)).toContain('leave out:');
+    expect(calls).toEqual([]);
+  });
+});

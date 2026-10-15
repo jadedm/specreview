@@ -204,12 +204,12 @@ const siteForm = async (a: Admin, repo: string) => {
   const tickets = ticketRepos
     ? select('ticketRepo', 'Ticket repo', ticketRepos, repo, 'Where its tickets are')
     : field('ticketRepo', 'Ticket repo', repo, 'Where its tickets are');
-  return `<form method="post" action="/_admin/sites"><p><strong>${escapeHtml(repo)}</strong> <a href="/_admin/">Choose another repo</a></p><input type="hidden" name="repo" value="${escapeHtml(repo)}">${branch}${field('docs', 'Docs folder', 'docs', '. for the whole repo, when it holds only pages and images')}${tickets}${suggest('teamDomain', 'Team domain', teamDomains(a), "Everyone at this domain is the site's team; pick one or type another")}<button type="submit">Open the pull requests</button></form>`;
+  return `<form method="post" action="/_admin/sites"><p><strong>${escapeHtml(repo)}</strong> <a href="/_admin/">Choose another repo</a></p><input type="hidden" name="repo" value="${escapeHtml(repo)}">${branch}${field('docs', 'Docs folder', 'docs', '. for the whole repo, when it holds only pages and images')}${field('exclude', 'Leave out', '', 'Paths in the docs folder not to publish, comma separated; * and ** are wildcards')}${tickets}${suggest('teamDomain', 'Team domain', teamDomains(a), "Everyone at this domain is the site's team; pick one or type another")}<button type="submit">Open the pull requests</button></form>`;
 };
 
 // Today's form, typed: when GitHub cannot list.
 const textForm = (a: Admin, repo: string, note: string) =>
-  `<p class="note">${escapeHtml(note)}</p><form method="post" action="/_admin/sites">${field('repo', 'Repo', repo, `The repo whose docs to publish, in ${escapeHtml(a.config.org)}`)}${field('branch', 'Branch', '', "Publishes from this branch; empty for the repo's default")}${field('docs', 'Docs folder', 'docs', '. for the whole repo, when it holds only pages and images')}${field('ticketRepo', 'Ticket repo', '', 'Where its tickets are; empty for the same repo')}${field('teamDomain', 'Team domain', teamDomains(a)[0], "Everyone at this domain is the site's team")}<button type="submit">Open the pull requests</button></form>`;
+  `<p class="note">${escapeHtml(note)}</p><form method="post" action="/_admin/sites">${field('repo', 'Repo', repo, `The repo whose docs to publish, in ${escapeHtml(a.config.org)}`)}${field('branch', 'Branch', '', "Publishes from this branch; empty for the repo's default")}${field('docs', 'Docs folder', 'docs', '. for the whole repo, when it holds only pages and images')}${field('exclude', 'Leave out', '', 'Paths in the docs folder not to publish, comma separated; * and ** are wildcards')}${field('ticketRepo', 'Ticket repo', '', 'Where its tickets are; empty for the same repo')}${field('teamDomain', 'Team domain', teamDomains(a)[0], "Everyone at this domain is the site's team")}<button type="submit">Open the pull requests</button></form>`;
 
 // The admin's own domain first, then the sites' team domains.
 const teamDomains = (a: Admin) => [
@@ -405,6 +405,10 @@ const addSitePost = async (a: Admin) => {
     docs: value('docs') || 'docs',
     ticketRepo: value('ticketRepo').toLowerCase() || repo,
     teamDomain: value('teamDomain').toLowerCase(),
+    exclude: value('exclude')
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean),
   };
   const problem = inputProblem(input, a.config);
   if (problem) return say(a, 400, 'Check the form', `<p>${escapeHtml(problem)}.</p>`);

@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { isExcludePattern } from '@specreview/shared';
 import { git } from './manifest.js';
 
 export class BuildError extends Error {}
@@ -91,11 +92,47 @@ export const checkGit = (docs: string) => {
 // refused: either could bring in content from outside the docs folder.
 const atRootDot = (file: string) => file.split('/')[0].startsWith('.');
 
-export const exportDocs = (root: string, docsRel: string): { docs: string; remove: () => void } => {
+// Paths left out of the site (#88), relative to the docs folder: * within one
+// name, ** across folders; with no wildcard, a file or a whole folder.
+export const MAX_EXCLUDES = 20;
+
+export const checkExcludes = (patterns: string[]) => {
+  if (patterns.length > MAX_EXCLUDES) throw new BuildError(`at most ${MAX_EXCLUDES} --exclude patterns`);
+  for (const p of patterns)
+    if (!isExcludePattern(p))
+      throw new BuildError(`--exclude ${JSON.stringify(p)}: a path in the docs folder, with * and ** as wildcards`);
+};
+
+export const excludedBy = (patterns: string[]) => {
+  const tests = patterns.map((raw) => {
+    const p = raw.replace(/\/+$/, '');
+    if (!p.includes('*')) return (file: string) => file === p || file.startsWith(`${p}/`);
+    const pieces = new Map([
+      ['**/', '(?:.*/)?'],
+      ['**', '.*'],
+      ['*', '[^/]*'],
+    ]);
+    const body = p
+      .split(/(\*\*\/|\*\*|\*)/)
+      .map((part) => pieces.get(part) ?? part.replace(/[.+^${}()|[\]\\]/g, '\\$&'))
+      .join('');
+    // A match may be a folder: everything under it goes too.
+    const re = new RegExp(`^${body}(?:/.*)?$`);
+    return (file: string) => re.test(file);
+  });
+  return (file: string) => tests.some((t) => t(file));
+};
+
+export const exportDocs = (
+  root: string,
+  docsRel: string,
+  excluded: (file: string) => boolean = () => false,
+): { docs: string; remove: () => void } => {
+  const inDocs = (file: string) => (docsRel === '' ? file : file.slice(docsRel.length + 1));
   const tree = git(root, ['ls-tree', '-r', '-z', 'HEAD', '--', docsRel === '' ? '.' : docsRel]);
   for (const entry of tree.split('\0').filter(Boolean)) {
     const [meta, file] = entry.split('\t');
-    if (docsRel === '' && atRootDot(file)) continue;
+    if ((docsRel === '' && atRootDot(file)) || excluded(inDocs(file))) continue;
     const mode = meta.split(' ')[0];
     if (mode === '120000') throw new BuildError(`${file}: symlinks are not allowed in the docs folder`);
     if (mode === '160000') throw new BuildError(`${file}: submodules are not allowed in the docs folder`);
@@ -115,7 +152,14 @@ export const exportDocs = (root: string, docsRel: string): { docs: string; remov
   if (docsRel === '')
     for (const name of readdirSync(into))
       if (name.startsWith('.')) rmSync(path.join(into, name), { recursive: true, force: true });
-  return { docs: path.join(into, docsRel), remove: () => rmSync(into, { recursive: true, force: true }) };
+  // Excluded paths (#88) go before any check sees them, links included (the
+  // symlink check above skipped them, so one must not stay to be followed).
+  const docs = path.join(into, docsRel);
+  for (const entry of readdirSync(docs, { recursive: true, withFileTypes: true })) {
+    const file = path.relative(docs, path.join(entry.parentPath, entry.name)).split(path.sep).join('/');
+    if (!entry.isDirectory() && excluded(file)) rmSync(path.join(docs, file), { force: true });
+  }
+  return { docs, remove: () => rmSync(into, { recursive: true, force: true }) };
 };
 
 // Every file of the exported docs, relative to it.
