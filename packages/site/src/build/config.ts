@@ -39,6 +39,8 @@ export type SiteOptions = {
   docsRel: string;
   out: string;
   vpRoot: string;
+  // The home page's source: index.md, or a top-level README.md without one (#87).
+  home?: string | null;
 };
 
 // The markdown-it instance VitePress hands to markdown.config.
@@ -61,6 +63,24 @@ export const noInterpolation = (md: MarkdownIt) => {
     md.renderer.rules[rule] = (tokens, idx, options, env, self) =>
       escapeBraces(original ? original(tokens, idx, options, env, self) : md.utils.escapeHtml(tokens[idx].content));
   }
+};
+
+// With a README.md home page (#87), a link to it goes to the home page:
+// VitePress builds it as index.html, and its own link handling does not
+// follow the rewrite. Runs on the parsed page, before VitePress renders links.
+export const readmeHome = (md: MarkdownIt) => {
+  md.core.ruler.push('specreview-readme-home', (state) => {
+    const page = String((state.env as { relativePath?: string }).relativePath ?? '');
+    const dir = path.posix.dirname(page);
+    for (const block of state.tokens)
+      for (const token of block.children ?? []) {
+        const href = token.type === 'link_open' ? token.attrGet('href') : null;
+        if (!href || /^[a-z][a-z0-9+.-]*:|^[#/]/i.test(href)) continue;
+        const [, target, rest] = /^([^?#]*)(.*)$/.exec(href)!;
+        if (path.posix.normalize(path.posix.join(dir, target)) !== 'README.md') continue;
+        token.attrSet('href', `${path.posix.relative(dir, 'index.md') || 'index.md'}${rest}`);
+      }
+  });
 };
 
 // A page may only use files inside the docs folder: an image or import that
@@ -132,11 +152,14 @@ export const assertNoFunctionStrings = (value: unknown, where: string): void => 
 
 // The site title and theme config, from the pages: computed by the command
 // before VitePress starts (so a refusal is reported as it is) and again here.
-export const siteShape = (docs: string, repo: string) => {
-  const pages = filesIn(docs)
+export const siteShape = (docs: string, repo: string, home?: string | null) => {
+  // A README.md home page is index.md to the sidebar, as VitePress's rewrite makes it.
+  const read = filesIn(docs)
     .filter((f) => f.endsWith('.md'))
     .map((f) => readPage(docs, f));
-  for (const p of pages) parseIssues(p.file, p.issues);
+  // Checked under its own name, so an error names the file the author has.
+  for (const p of read) parseIssues(p.file, p.issues);
+  const pages = read.map((p) => (home === 'README.md' && p.file === 'README.md' ? { ...p, file: 'index.md' } : p));
   const title = pages.find((p) => p.file === 'index.md')?.title ?? repo;
   // The 404 page in plain words (#52): what happened and where to go.
   const notFound = {
@@ -150,13 +173,15 @@ export const siteShape = (docs: string, repo: string) => {
   return { title, themeConfig };
 };
 
-export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptions): UserConfig => {
-  const { title, themeConfig } = siteShape(docs, repo);
+export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home }: SiteOptions): UserConfig => {
+  const { title, themeConfig } = siteShape(docs, repo, home);
   const collected: Collected = new Map();
   return {
     title,
     base: `/${repo}/`,
     srcDir: docs,
+    // VitePress serves the README as the home page and resolves links to it there.
+    ...(home === 'README.md' ? { rewrites: { 'README.md': 'index.md' } } : {}),
     outDir: siteDirOf(out),
     cacheDir: path.join(out, '.cache'),
     cleanUrls: true,
@@ -165,7 +190,14 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot }: SiteOptio
     appearance: false,
     // Pages are Markdown only; raw HTML in a page would bypass the review UI's text-only rule.
     // {...} attributes would pass Vue directives (@click, :title) to the compiler.
-    markdown: { html: false, attrs: { disable: true }, config: noInterpolation },
+    markdown: {
+      html: false,
+      attrs: { disable: true },
+      config: (md) => {
+        if (home === 'README.md') readmeHome(md);
+        noInterpolation(md);
+      },
+    },
     themeConfig,
     transformPageData(pageData) {
       collected.set(pageData.relativePath, {

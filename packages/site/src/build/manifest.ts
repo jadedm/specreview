@@ -196,8 +196,11 @@ export const buildEndFor =
     const pages: Record<string, ManifestPage> = {};
 
     for (const file of config.pages) {
-      const page = file.replace(/\.md$/, '');
-      const meta = collected.get(file);
+      // A rewritten page (a README home page, #87) is built and keyed under its
+      // new name; its source, and so its history, keep the old one.
+      const built = config.rewrites.map[file] ?? file;
+      const page = built.replace(/\.md$/, '');
+      const meta = collected.get(built) ?? collected.get(file);
       if (!meta) throw new Error(`${file}: no page data was collected`);
       const source = readFileSync(path.join(config.srcDir, file), 'utf8');
       const html = readFileSync(path.join(config.outDir, `${page}.html`), 'utf8');

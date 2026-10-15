@@ -56,12 +56,14 @@ export const checkArguments = (repo: string, paths: Paths) => {
   const out = realOf(paths.out);
   if (!isInside(docs, root)) throw new BuildError('--docs must be inside the repository');
   // --out is emptied: it must be a folder of its own inside the repo, never
-  // the repo, its .git, the docs or anything holding them.
+  // the repo, its .git, the docs or anything holding them. With the docs
+  // folder at the root (#87) it sits inside it: the build reads HEAD's tree,
+  // not the folder, and cli.ts refuses an --out committed there.
   const outProblem =
     !isInside(out, root) ||
     out === root ||
     isInside(out, path.join(root, '.git')) ||
-    isInside(out, docs) ||
+    (docs !== root && isInside(out, docs)) ||
     isInside(docs, out);
   if (outProblem) throw new BuildError('--out must be a folder inside the repository, outside the docs folder');
   const used = existsSync(out) && readdirSync(out).length > 0 && !existsSync(path.join(out, OUTPUT_MARK));
@@ -87,10 +89,13 @@ export const checkGit = (docs: string) => {
 // repo: no uncommitted, untracked or ignored file can be published, and the
 // manifest's commit is exactly what was built. Symlinks and submodules are
 // refused: either could bring in content from outside the docs folder.
+const atRootDot = (file: string) => file.split('/')[0].startsWith('.');
+
 export const exportDocs = (root: string, docsRel: string): { docs: string; remove: () => void } => {
   const tree = git(root, ['ls-tree', '-r', '-z', 'HEAD', '--', docsRel === '' ? '.' : docsRel]);
   for (const entry of tree.split('\0').filter(Boolean)) {
     const [meta, file] = entry.split('\t');
+    if (docsRel === '' && atRootDot(file)) continue;
     const mode = meta.split(' ')[0];
     if (mode === '120000') throw new BuildError(`${file}: symlinks are not allowed in the docs folder`);
     if (mode === '160000') throw new BuildError(`${file}: submodules are not allowed in the docs folder`);
@@ -105,6 +110,11 @@ export const exportDocs = (root: string, docsRel: string): { docs: string; remov
   if (archive.status !== 0) throw new BuildError(`git archive failed: ${archive.stderr.toString()}`);
   const untar = spawnSync('tar', ['-x', '-C', into], { input: archive.stdout });
   if (untar.status !== 0) throw new BuildError(`unpacking the docs failed: ${untar.stderr.toString()}`);
+  // With the docs folder at the root, .github, .gitignore and the like are
+  // dropped: the hub could never serve a name starting with a dot.
+  if (docsRel === '')
+    for (const name of readdirSync(into))
+      if (name.startsWith('.')) rmSync(path.join(into, name), { recursive: true, force: true });
   return { docs: path.join(into, docsRel), remove: () => rmSync(into, { recursive: true, force: true }) };
 };
 
@@ -119,6 +129,10 @@ const pathProblem = (file: string): string | null => {
   const parts = file.split('/');
   if (!parts.every((p) => SEGMENT.test(p)))
     return 'names may use only letters, digits and . _ ~ -, not start with a dot';
+  // VitePress never builds pages under these (assets it copies as usual), so
+  // the sidebar would link to nothing.
+  if (file.endsWith('.md') && parts.slice(0, -1).some((p) => p === 'dist' || p === 'node_modules'))
+    return 'pages under dist or node_modules folders are not built; rename the folder';
   // What the hub sees: public/ files land at the site root.
   const served = parts[0] === 'public' ? parts.slice(1) : parts;
   // A page at the top serves at its name without .md (clean URLs): _signin.md

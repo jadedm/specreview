@@ -203,6 +203,9 @@ describe('4 to 8: refused before anything is written', () => {
     [{ branch: 'a//b' }, 'branch:'],
     [{ docs: '../etc' }, 'docs folder:'],
     [{ docs: '/abs' }, 'docs folder:'],
+    [{ docs: '..' }, 'docs folder:'],
+    [{ docs: './x' }, 'docs folder:'],
+    [{ docs: 'a/../b' }, 'docs folder:'],
     [{ ticketRepo: 'no/slash' }, 'ticket repo:'],
     [{ teamDomain: 'Not A Domain!' }, 'team domain:'],
     [{ repo: 'docs-hub' }, 'cannot be a docs site'],
@@ -639,5 +642,31 @@ describe('#77: GitHub answering with a redirect', () => {
     github.answer = (m, repo, path) =>
       m === 'GET' && repo === 'acme/newdocs' && path.startsWith('/branches') ? moved() : null;
     expect(await listBranches(auth, 'acme/newdocs')).toBeNull();
+  });
+});
+
+describe('#87: the whole repo as the docs folder', () => {
+  const work = 'specreview/add-newdocs';
+
+  it('11: docs . writes the workflow with docs "." and no first page when the repo has a README.md', async () => {
+    repos.set('acme/newdocs', repoWith(3001, { 'README.md': '# newdocs\n' }));
+    const r = await add({ ...NEW, docs: '.' });
+    expect(r.status).toBe(200);
+    expect(text(fileOn('acme/newdocs', work, '.github/workflows/docs.yml')!)).toContain('docs: "."');
+    expect(fileOn('acme/newdocs', work, 'index.md')).toBeUndefined();
+    expect(fileOn('acme/newdocs', work, './index.md')).toBeUndefined();
+  });
+
+  it('11: docs . with neither index.md nor README.md adds index.md at the root, and a docs folder with a README gets none', async () => {
+    repos.set('acme/newdocs', repoWith(3001, { 'notes.md': '# notes\n' }));
+    expect((await add({ ...NEW, docs: '.' })).status).toBe(200);
+    expect(fileOn('acme/newdocs', work, 'index.md')).toBeDefined();
+    expect(fileOn('acme/newdocs', work, './index.md')).toBeUndefined();
+  });
+
+  it('11: a docs folder holding a README.md gets no first page', async () => {
+    repos.set('acme/newdocs', repoWith(3001, { 'docs/README.md': '# docs\n' }));
+    expect((await add(NEW)).status).toBe(200);
+    expect(fileOn('acme/newdocs', work, 'docs/index.md')).toBeUndefined();
   });
 });
