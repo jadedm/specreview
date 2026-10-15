@@ -135,10 +135,13 @@ export const serveRoot = async (
 ): Promise<Response> => {
   const head = method === 'HEAD';
   // Removals made on the admin page (#12). If the database is slow or failing
-  // the index fails closed: readers and approvers are left out (the team,
-  // by domain, still sees its sites) rather than listing a removed reader.
+  // the index fails closed: readers, approvers and individual team members
+  // are left out (the team, by domain, still sees its sites) rather than
+  // listing someone removed.
   const sites = await Promise.all(
-    [...config.sites.values()].map((site) => within(withPending(env, site), { ...site, readers: [], approvers: [] })),
+    [...config.sites.values()].map((site) =>
+      within(withPending(env, site), { ...site, readers: [], approvers: [], team: [] }),
+    ),
   );
   const readable = sites.filter((site) => canRead(roleOf(email, site)));
   const name = escapeHtml(config.brand?.name ?? config.org);

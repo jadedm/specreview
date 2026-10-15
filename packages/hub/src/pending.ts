@@ -7,7 +7,7 @@ import { AppError } from './http';
 // if the database cannot say, the request fails rather than letting a removed
 // person in.
 
-export type List = 'readers' | 'approvers';
+export type List = 'readers' | 'approvers' | 'team';
 type Row = { list: List; entry: string; removedAt: number };
 
 export const pendingFor = async (env: Env, siteKey: string): Promise<Row[]> => {
@@ -30,10 +30,12 @@ export const withPending = async (env: Env, site: Site): Promise<Site> => {
   const gone = (list: List) => new Set(rows.filter((r) => r.list === list).map((r) => r.entry));
   const readers = gone('readers');
   const approvers = gone('approvers');
+  const team = gone('team');
   return {
     ...site,
     readers: site.readers.filter((r) => !readers.has(r)),
     approvers: site.approvers.filter((a) => !approvers.has(a)),
+    team: site.team.filter((t) => !team.has(t)),
   };
 };
 

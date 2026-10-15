@@ -193,9 +193,17 @@ describe('config rules, one at a time', () => {
       (c) => ((c.sites[2].teamDomains = ['gmail.com']), (c.sites[2].approvers = []), c),
       /public mail domain/,
     ],
-    ['approver outside team', (c) => ((c.sites[2].approvers = ['pm@initech.example']), c), /outside the team domains/],
-    ['bad approver email', (c) => ((c.sites[2].approvers = ['not-an-email']), c), /malformed email/],
-    ['uppercase approver', (c) => ((c.sites[2].approvers = ['PM@globex.dev']), c), /malformed email/],
+    [
+      'public mail approver domain',
+      (c) => ((c.sites[2].approvers = ['@gmail.com']), c),
+      /approvers\[0\] is a public mail domain/,
+    ],
+    [
+      'bad approver email',
+      (c) => ((c.sites[2].approvers = ['not-an-email']), c),
+      /approvers\[0\] is not an email or @domain/,
+    ],
+    ['uppercase approver', (c) => ((c.sites[2].approvers = ['PM@globex.dev']), c), /approvers\[0\] must be lowercase/],
     [
       'duplicate approver',
       (c) => ((c.sites[2].approvers = ['pm@globex.dev', 'pm@globex.dev']), c),
@@ -337,5 +345,32 @@ describe('#77: problems name positions, never a person', () => {
     expect(logged).toContain('sites[2].readers[1]');
     for (const text of [...problemsIn(broken()), logged])
       for (const person of people) expect(text.toLowerCase(), person).not.toContain(person.trim().toLowerCase());
+  });
+});
+
+describe('#91: team by email, approvers by email or @domain anywhere', () => {
+  const withSite = (patch: Record<string, unknown>, i = 2) => {
+    const c = valid() as unknown as { sites: Record<string, unknown>[] };
+    c.sites[i] = { ...c.sites[i], ...patch };
+    return c;
+  };
+  it('team takes lowercase unique emails of any domain, and is optional', () => {
+    expect(problemsIn(withSite({ team: ['manish@ariai.example', 'x@gmail.com'] }))).toEqual([]);
+    expect(problemsIn(withSite({ team: ['Manish@ariai.example'] }))).toEqual([
+      'sites[2].team[0] must be a lowercase email',
+    ]);
+    expect(problemsIn(withSite({ team: ['@ariai.example'] }))).toEqual(['sites[2].team[0] must be a lowercase email']);
+    expect(problemsIn(withSite({ team: ['a@b.example', 'a@b.example'] }))).toEqual(['sites[2].team has a duplicate']);
+    expect(problemsIn(withSite({ team: 'a@b.example' }))).toEqual(['sites[2].team must be a list of emails']);
+  });
+  it('approvers outside the team domains, by email or @domain, are fine; a public mail domain is not', () => {
+    expect(problemsIn(withSite({ approvers: ['boss@elsewhere.example', '@leads.example'] }))).toEqual([]);
+    expect(problemsIn(withSite({ approvers: ['@gmail.com'] }))).toEqual([
+      'sites[2].approvers[0] is a public mail domain',
+    ]);
+  });
+  it('sites sharing a ticket repo may name different people in team and approvers', () => {
+    const c = withSite({ team: ['manish@ariai.example'], approvers: ['boss@elsewhere.example'] }, 0);
+    expect(problemsIn(c)).toEqual([]);
   });
 });

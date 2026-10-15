@@ -399,9 +399,9 @@ describe('9: setup', () => {
 
   it('2: a config the hub would refuse stops setup before any call', async () => {
     const config = structuredClone(CONFIG);
-    config.sites[0].approvers = ['pm@elsewhere.dev'];
+    config.sites[0].approvers = ['@gmail.com'];
     const r = await run(emptyAccount(), { apply: true, config });
-    expect(r.error?.message).toMatch(/approvers has an email outside the team domains/);
+    expect(r.error?.message).toMatch(/approvers\[0\] is a public mail domain/);
     expect(r.requests).toEqual([]);
   });
 
@@ -1063,5 +1063,25 @@ describe('#78: apps setup did not make, and settings it keeps', () => {
       expect(r.writes(), which).toEqual([]);
       delete app.allow_authenticate_via_warp;
     }
+  });
+});
+
+describe('#91: who passes Access', () => {
+  it('7: named team members and approvers anywhere sign in; emails a domain rule covers are left out; no team key is fine', () => {
+    const config = structuredClone(CONFIG) as unknown as { sites: Record<string, unknown>[] };
+    expect(wantedInclude(config as unknown as Record<string, unknown>)).toEqual(WANT);
+    config.sites[0] = {
+      ...config.sites[0],
+      team: ['manish@ariai.example', 'dev@acme.dev'],
+      approvers: ['pm@acme.dev', 'boss@elsewhere.example', '@leads.example', 'kim@leads.example'],
+    };
+    expect(wantedInclude(config as unknown as Record<string, unknown>)).toEqual(
+      [
+        ...WANT,
+        { email: { email: 'manish@ariai.example' } },
+        { email: { email: 'boss@elsewhere.example' } },
+        { email_domain: { domain: 'leads.example' } },
+      ].sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1)),
+    );
   });
 });

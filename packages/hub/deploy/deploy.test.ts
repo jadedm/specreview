@@ -95,12 +95,12 @@ describe('9: the organisation folder', () => {
 
   it('2: a config the hub would refuse stops deploy before wrangler runs', async () => {
     const config = structuredClone(CONFIG);
-    config.sites[0].approvers = ['pm@elsewhere.dev'];
+    config.sites[0].approvers = ['@gmail.com'];
     const { dir, tokenFile } = orgDir(exampleHub(), config);
     const { run, calls } = recorder();
     await expect(
       deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run, log: () => {}, dryRun: false, wait: noWait }),
-    ).rejects.toThrow(/approvers has an email outside/);
+    ).rejects.toThrow(/approvers\[0\] is a public mail domain/);
     expect(calls).toEqual([]);
   });
 

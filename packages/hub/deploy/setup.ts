@@ -73,17 +73,25 @@ const ruleKey = (r: unknown) => JSON.stringify(r);
 const byKey = (a: unknown, b: unknown) => (ruleKey(a) < ruleKey(b) ? -1 : ruleKey(a) > ruleKey(b) ? 1 : 0);
 const sortedRules = (rules: unknown[]) => [...new Map(rules.map((r) => [ruleKey(r), r])).values()].sort(byKey);
 
-// Who may pass Access: everyone at a team domain, each reader (an email or a
-// whole @domain), and each admin. Only email and email-domain rules: a
+// Who may pass Access: everyone at a team domain, each person named in team,
+// each approver and reader (an email or a whole @domain), and each admin. Only email and email-domain rules: a
 // login-method rule would admit anyone who can receive a code.
 export const wantedInclude = (config: Record<string, unknown>): Rule[] => {
-  const sites = (config.sites as { teamDomains: string[]; readers: string[] }[]) ?? [];
+  const sites =
+    (config.sites as { teamDomains: string[]; team?: string[]; approvers?: string[]; readers: string[] }[]) ?? [];
   const rules: Rule[] = [];
+  const asRule = (entry: string): Rule =>
+    entry.startsWith('@') ? { email_domain: { domain: entry.slice(1) } } : { email: { email: entry } };
   for (const domain of sites.flatMap((s) => s.teamDomains)) rules.push({ email_domain: { domain } });
-  for (const entry of sites.flatMap((s) => s.readers)) {
-    rules.push(entry.startsWith('@') ? { email_domain: { domain: entry.slice(1) } } : { email: { email: entry } });
-  }
+  for (const entry of sites.flatMap((s) => s.readers)) rules.push(asRule(entry));
   for (const email of (config.admins as string[]) ?? []) rules.push({ email: { email } });
+  // Team by email and approvers anywhere (#91) sign in too; an email a domain
+  // rule already covers is left out, so existing hubs' policies are unchanged.
+  const extra = sites.flatMap((s) => [...(s.team ?? []), ...(s.approvers ?? [])]);
+  for (const entry of extra.filter((e) => e.startsWith('@'))) rules.push(asRule(entry));
+  const domains = new Set(rules.flatMap((r) => (r.email_domain ? [r.email_domain.domain] : [])));
+  for (const entry of extra.filter((e) => !e.startsWith('@')))
+    if (!domains.has(entry.split('@')[1])) rules.push(asRule(entry));
   return sortedRules(rules) as Rule[];
 };
 

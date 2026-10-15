@@ -187,14 +187,15 @@ describe('2 to 4 and 12: adding', () => {
     });
   });
 
-  it('3: a domain reader and an approver at a team domain are added; an approver elsewhere is refused unwritten', async () => {
+  it('3 (#91): a domain reader, an approver at a team domain and one elsewhere are added; a public mail domain is refused unwritten', async () => {
     expect((await add('readers', '@globex.example')).status).toBe(200);
     expect((await add('approvers', 'lead@acme.dev')).status).toBe(200);
-    expect(siteIn('sidecar').approvers).toEqual(['approver@acme.dev', 'lead@acme.dev']);
-    const r = await add('approvers', 'boss@elsewhere.example');
+    expect((await add('approvers', 'boss@elsewhere.example')).status).toBe(200);
+    expect(siteIn('sidecar').approvers).toEqual(['approver@acme.dev', 'lead@acme.dev', 'boss@elsewhere.example']);
+    const r = await add('approvers', '@gmail.com');
     expect(r.status).toBe(400);
     expect(html(r)).toContain('approvers');
-    expect(puts).toHaveLength(2);
+    expect(puts).toHaveLength(3);
   });
 
   it('4: an entry the config rules refuse is not written', async () => {
@@ -458,7 +459,10 @@ describe('14: the page', () => {
     expect(p).toMatch(/@initech\.example<\/span><\/span><span><form class="inline"/);
     expect(p).toContain('<input type="hidden" name="entry" value="@initech.example">');
     expect(p).toContain('Add a reader');
-    expect(p).toContain('an email at acme.dev');
+    expect(p).toContain('approvers see what the team sees');
+    // #91: a list of people who are team individually, per site.
+    expect(p).toContain('<p><strong>Team members</strong></p>');
+    expect(p).toContain('everyone at acme.dev already does');
   });
 
   it('#77 7: a config read answered with a redirect is not followed; the lists cannot be changed', async () => {
@@ -691,5 +695,48 @@ describe('#67: finished removals and the clear races', () => {
     expect((await restore('ana@partner.example', '-5')).status).toBe(400);
     expect((await restore('ana@partner.example', at, { email: 'dev@acme.dev' })).status).toBe(403);
     expect(await pendingRows()).toHaveLength(1);
+  });
+});
+
+describe('#91: team members and approvers on the admin page', () => {
+  it('10: a team member is added and removed by commit; removed, they lose the team view at once', async () => {
+    const added = await add('team', 'manish@ariai.example');
+    expect(added.status).toBe(200);
+    expect(siteIn('sidecar').team).toEqual(['manish@ariai.example']);
+    expect(puts[0].message).toMatch(/^chore\(config\): add team member manish@ariai\.example to sidecar/);
+    // Live once deployed: the hub reads the config it runs with.
+    const live = envFor({
+      ...LIVE,
+      sites: LIVE.sites.map((s) => (s.repo === 'sidecar' ? { ...s, team: ['manish@ariai.example'] } : s)),
+    });
+    expect(
+      (await call('/api/me', { email: 'manish@ariai.example', envOverride: live, site: 'sidecar' })).body,
+    ).toMatchObject({ role: 'team' });
+    const removed = await change(
+      { site: 'sidecar', list: 'team', action: 'remove', entry: 'manish@ariai.example' },
+      { envOverride: live },
+    );
+    expect(removed.status).toBe(200);
+    expect((await call('/api/me', { email: 'manish@ariai.example', envOverride: live, site: 'sidecar' })).status).toBe(
+      403,
+    );
+  });
+
+  it('removing a team member still at a team domain, or an approver still covered by @domain, says so', async () => {
+    file = {
+      sha: 'sha0',
+      text: configText({
+        ...orgFile,
+        sites: LIVE.sites.map((s) =>
+          s.repo === 'sidecar'
+            ? { ...s, team: ['dev@acme.dev'], approvers: ['@leads.example', 'kim@leads.example'] }
+            : s,
+        ),
+      }),
+    };
+    expect(html(await remove('team', 'dev@acme.dev'))).toContain('They still see what the team sees through acme.dev.');
+    expect(html(await remove('approvers', 'kim@leads.example'))).toContain(
+      'They still approve through @leads.example.',
+    );
   });
 });
