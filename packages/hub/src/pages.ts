@@ -23,6 +23,7 @@ const TYPES: Record<string, string> = {
   woff: 'font/woff',
   woff2: 'font/woff2',
   txt: 'text/plain; charset=utf-8',
+  pdf: 'application/pdf',
   xml: 'application/xml; charset=utf-8',
 };
 
@@ -71,9 +72,9 @@ export const servePage = async (ctx: Ctx, method: string, path: string, director
       ...protectedHeaders(ext === 'html' ? cspOf(snapshot) : INERT),
       'content-type': known ? TYPES[ext] : 'application/octet-stream',
     };
-    // Anything not in the table, and SVG, downloads instead of rendering in
-    // the origin; an <img> of an SVG still shows it.
-    if (!known || ext === 'svg') headers['content-disposition'] = 'attachment';
+    // Anything not in the table, SVG and PDF (#97) download instead of
+    // rendering in the origin; an <img> of an SVG still shows it.
+    if (!known || ext === 'svg' || ext === 'pdf') headers['content-disposition'] = 'attachment';
     if (method === 'HEAD') {
       await obj.body?.cancel();
       return new Response(null, { headers });

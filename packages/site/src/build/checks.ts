@@ -199,6 +199,17 @@ export const checkPaths = (files: string[]) => {
     const why = pathProblem(file);
     if (why) throw new BuildError(`${file}: ${why}`);
   }
+  // A file served at a page's clean URL would answer in its place (#97):
+  // guide.txt beside guide.txt.md, or public/guide.txt at the top. Only
+  // files published at their own path can: public/ ones, and the PDF and
+  // text files a page links (images and fonts are emitted under assets/).
+  const pages = new Set(files.filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)));
+  const ownPath = (file: string) => file.startsWith('public/') || /\.(pdf|txt)$/i.test(file);
+  for (const file of files) {
+    const served = file.startsWith('public/') ? file.slice('public/'.length) : file;
+    if (ownPath(file) && pages.has(served))
+      throw new BuildError(`${file}: it would be served at the address of the page ${served}.md`);
+  }
 };
 
 // Includes are expanded on the raw page before Markdown, even inside code, and

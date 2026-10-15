@@ -2,8 +2,10 @@
 // specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...
 // Builds a repo's docs folder, as committed at HEAD, into <out>/site and
 // <out>/history for the hub.
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import matter from 'gray-matter';
+import MarkdownIt from 'markdown-it';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { build } from 'vitepress';
@@ -25,6 +27,53 @@ import { git } from './manifest.js';
 
 const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...';
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// VitePress copies only the files a page imports (images, fonts) and
+// public/; a plain link to a PDF or a text file beside a page would 404
+// (#97). The PDF and text files pages link to are copied to their own path,
+// and nothing else: a repo's other text files (requirements.txt, an internal
+// PDF) are not published by sitting in the docs folder. Images and fonts
+// are VitePress's to emit. A file meeting another at one path is refused,
+// never silently dropped. Excluded paths (#88) are gone from the export.
+export const LINKED_TYPES = new Set(['pdf', 'txt']);
+const extOf = (file: string) => file.slice(file.lastIndexOf('.') + 1).toLowerCase();
+
+// Every docs-relative file a page links to with a relative link: resolved
+// from the page's folder, as the browser does from the page's clean URL.
+const linkedFrom = (docs: string, files: string[]) => {
+  const md = new MarkdownIt();
+  const linked = new Set<string>();
+  for (const page of files.filter((f) => f.endsWith('.md'))) {
+    const dir = path.posix.dirname(page);
+    // The body only: a link written in front matter (a title) is shown as text.
+    for (const block of md.parse(matter(readFileSync(path.join(docs, page), 'utf8')).content, {}))
+      for (const token of block.children ?? []) {
+        const href = token.type === 'link_open' ? String(token.attrGet('href') ?? '') : '';
+        if (!href || /^[a-z][a-z0-9+.-]*:|^[#/]/i.test(href)) continue;
+        const target = (() => {
+          try {
+            return decodeURI(href.replace(/[?#].*$/, ''));
+          } catch {
+            return null;
+          }
+        })();
+        if (target) linked.add(path.posix.normalize(path.posix.join(dir, target)));
+      }
+  }
+  return linked;
+};
+
+export const copyLinkedAssets = (docs: string, site: string) => {
+  const files = filesIn(docs);
+  const linked = linkedFrom(docs, files);
+  for (const file of files) {
+    if (file.startsWith('public/') || !LINKED_TYPES.has(extOf(file)) || !linked.has(file)) continue;
+    const target = path.join(site, file);
+    if (existsSync(target)) throw new BuildError(`${file}: another file of the site is already published at /${file}`);
+    mkdirSync(path.dirname(target), { recursive: true });
+    copyFileSync(path.join(docs, file), target);
+  }
+};
 
 export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   const { positionals, values } = parseArgs({
@@ -100,6 +149,7 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     );
     try {
       await build(vpRoot);
+      copyLinkedAssets(exported.docs, path.join(out, 'site'));
     } catch (err) {
       // A failed build leaves no half-written site behind.
       rmSync(path.join(out, 'site'), { recursive: true, force: true });
