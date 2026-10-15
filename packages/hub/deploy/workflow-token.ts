@@ -3,7 +3,7 @@
 // It is created from a laptop with the install token, and its value goes to a
 // file and nowhere else.
 import { closeSync, fchmodSync, openSync, unlinkSync, writeFileSync } from 'node:fs';
-import { readToken, type Cloudflare } from './cloudflare';
+import { CloudflareError, readToken, type Cloudflare } from './cloudflare';
 import { DeployError, type Org } from './org';
 import { zoneCovering, type Zone } from './setup';
 
@@ -107,6 +107,8 @@ export const workflowToken = async (opts: {
   log: (line: string) => void;
   // Tests make the write fail; anything else uses the file system's.
   write?: (fd: number, text: string) => void;
+  // Tests fix the date in the token's name.
+  now?: Date;
 }) => {
   const { org, cf, out, log } = opts;
   const { accountId: a, hostname: host } = org.hub;
@@ -122,19 +124,31 @@ export const workflowToken = async (opts: {
     const catalogue = Array.isArray(groups) ? groups : [];
     const account = resolveGroups(catalogue, WORKFLOW_PERMISSIONS.account, SCOPE.account);
     const zoneGroups = resolveGroups(catalogue, WORKFLOW_PERMISSIONS.zone, SCOPE.zone);
-    const name = `specreview apply ${host}`;
-    const answer = await cf.call<{ id?: unknown; value?: unknown }>('POST', base, {
-      name,
-      policies: [
-        { effect: 'allow', resources: { [`${SCOPE.account}.${a}`]: '*' }, permission_groups: account },
-        { effect: 'allow', resources: { [`${SCOPE.zone}.${zone.id}`]: '*' }, permission_groups: zoneGroups },
-      ],
-    });
+    // Stamped to the second (UTC), so a token from a run whose answer was lost
+    // can be told apart from any other; Cloudflare takes at most 120 characters.
+    const stamp = `${(opts.now ?? new Date()).toISOString().slice(0, 19)}Z`;
+    const name = `${`specreview apply ${host}`.slice(0, 120 - stamp.length - 1)} ${stamp}`;
+    const answer = await cf
+      .call<{ id?: unknown; value?: unknown }>('POST', base, {
+        name,
+        policies: [
+          { effect: 'allow', resources: { [`${SCOPE.account}.${a}`]: '*' }, permission_groups: account },
+          { effect: 'allow', resources: { [`${SCOPE.zone}.${zone.id}`]: '*' }, permission_groups: zoneGroups },
+        ],
+      })
+      .catch((e: unknown) => {
+        // A refusal (4xx) made nothing. No answer, a reply that is not JSON
+        // or a server error may have come after the token was made.
+        if (e instanceof CloudflareError && e.status < 500) throw e;
+        throw new DeployError(
+          `Cloudflare did not answer the token create (${e instanceof Error ? e.message : String(e)}); a token named "${name}" may exist: delete it in the dashboard before running again`,
+        );
+      });
     if (typeof answer?.value !== 'string' || !answer.value)
       throw new DeployError(
         typeof answer?.id === 'string'
           ? `Cloudflare created token ${answer.id} but sent no value; delete it in the dashboard`
-          : 'Cloudflare sent no token in its answer',
+          : `Cloudflare sent no token in its answer; a token named "${name}" may exist: delete it in the dashboard before running again`,
       );
     created = { id: typeof answer.id === 'string' ? answer.id : '', value: answer.value, name };
   } catch (e) {

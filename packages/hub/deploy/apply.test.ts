@@ -38,6 +38,8 @@ case "$what" in
   origin-has-setup) git --git-dir="$ORIGIN" show main:hub.json | grep -q '"by":"setup"' && echo "deploy saw setup on origin" >> "$STUB_LOG"; exit 0 ;;
   race) person commit -q --allow-empty -m "chore: a push during the run" && person push -q origin main
         echo "{\\"by\\":\\"$cmd\\"}" > hub.json; exit 0 ;;
+  race-config) echo '{"sites":["new"]}' > "$OTHER/specreview.config.json" && person commit -q -am "chore: a config change during the run" && person push -q origin main
+        echo "{\\"by\\":\\"$cmd\\"}" > hub.json; exit 0 ;;
   reject) touch "$ORIGIN/reject"; echo "{\\"by\\":\\"$cmd\\"}" > hub.json; exit 0 ;;
   conflict) echo '{"by":"a person"}' > "$OTHER/hub.json" && person commit -q -am "chore: edit hub.json" && person push -q origin main
             echo "{\\"by\\":\\"$cmd\\",\\"id\\":\\"d1-uuid\\"}" > hub.json; exit 0 ;;
@@ -183,6 +185,18 @@ describe('6 and 6a: main moving', () => {
       'someone|chore: a push during the run',
       't|chore: start',
     ]);
+    expect(originHub(repo)).toBe('{"by":"setup"}');
+    // The push changed no file: what setup applied is what deploy deploys.
+    expect(r.calls.map((c) => c.split(' ')[0])).toEqual(['setup', 'deploy']);
+  });
+
+  it('6c (#78): a rebase that brought a config change skips the deploy, left to the run that push queued', () => {
+    const repo = hubRepo();
+    const r = apply(repo, { STUB_SETUP: 'race-config' });
+    expect(r.code).toBe(0);
+    expect(r.calls.map((c) => c.split(' ')[0])).toEqual(['setup']);
+    expect(r.out).toContain('the deploy is left to the run that push queued');
+    expect(originLog(repo)[0]).toBe("github-actions[bot]|chore(hub): record setup's resources in hub.json");
     expect(originHub(repo)).toBe('{"by":"setup"}');
   });
 

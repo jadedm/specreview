@@ -29,6 +29,8 @@ type App = {
   self_hosted_domains?: string[];
   cors_headers?: { allow_all_origins?: boolean; allowed_origins?: string[] };
   options_preflight_bypass?: boolean;
+  allow_authenticate_via_warp?: boolean;
+  allow_iframe?: boolean;
 };
 
 export type FakeState = {
@@ -188,7 +190,8 @@ export const fakeCloudflare = (state: FakeState, opts: FakeOptions = {}) => {
     }
     if (p === `${a}/access/apps` && method === 'GET') {
       return page(
-        state.apps.map(({ id: i, domain, name }) => ({ id: i, domain, name })),
+        // Cloudflare lists whole apps, destinations included.
+        state.apps.map((app) => structuredClone(app)),
         url,
       );
     }

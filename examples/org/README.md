@@ -9,7 +9,7 @@ The template for the private repo an organisation keeps for its specreview hub. 
 | `specreview.commit`           | the full specreview commit to run                                                      | you                    |
 | `.github/workflows/apply.yml` | runs `apply.sh` on pushes to `main` and by hand                                        | copied                 |
 | `apply.sh`                    | setup, then deploy, committing `hub.json` after each                                   | copied                 |
-| `run.sh`                      | checks out that commit, builds the hub, runs one command; also for use on a laptop     | copied                 |
+| `run.sh`                      | fetches that commit fresh, builds the hub, runs one command; also for use on a laptop  | copied                 |
 
 ## Install
 
@@ -83,6 +83,6 @@ Edit and commit to `main`; the workflow applies it.
 ./run.sh workflow-token --token-file <file> --out <new file>  # the workflow's token, into a new file
 ```
 
-Run setup from one place at a time: not from a laptop while the workflow runs.
+Run setup from one place at a time: not from a laptop while the workflow runs. Each run fetches the pinned commit into a new temporary folder and deletes it after; a `.specreview` folder left by an older `run.sh` is no longer used and can be deleted.
 
 setup refuses, and changes nothing, when it finds something it did not create where it expects its own resources: an Access app, D1 database or bucket with the expected name but no id in `hub.json`, extra Access policies or rules, or a hostname another Worker or DNS record already uses.

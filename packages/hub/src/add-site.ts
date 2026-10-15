@@ -85,11 +85,14 @@ jobs:
         with:
           repo: ${JSON.stringify(input.repo)}
           docs: ${JSON.stringify(input.docs)}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # Only a push publishes, so only a push keeps the build, for a day.
+      - if: github.event_name == 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docs-site
           path: .specreview
           include-hidden-files: true
+          retention-days: 1
 
   # Pushes to the branch only; pull requests stop after the build.
   publish:
