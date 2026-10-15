@@ -1,5 +1,8 @@
 packages:
   - packages/*
+# A new or refreshed dependency resolves only to versions at least a day old
+# (minutes), so a release pulled within hours of publishing is not picked up.
+minimumReleaseAge: 1440
 # Native binaries the Workers runtime and bundler need; everything else stays blocked.
 onlyBuiltDependencies:
   - esbuild

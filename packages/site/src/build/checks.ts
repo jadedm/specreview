@@ -154,6 +154,13 @@ const OUTSIDE_CODE: [RegExp, string][] = [
   [/<style\b/i, 'style blocks'],
 ];
 const FENCE = /^\s*(`{3,}|~{3,})/;
+// A code block's first word, as markdown-it splits it (on whitespace): the
+// language and VitePress's options ({1,3}, :line-numbers=5). VitePress prints
+// an unknown language in the build's log word for word, after decoding
+// entities, where GitHub would read ##[...] as a workflow command (#79). Any
+// line that opens a fence is checked, in a list or a quote too.
+const LANGUAGE = /^[A-Za-z0-9_+.#{},:=-]*$/;
+const ANY_FENCE = /^(?:\s*(?:[-*+]|\d+[.)]|>))*\s*(?:`{3,}|~{3,})(.*)$/;
 
 export const forbiddenIn = (markdown: string): string | null => {
   if (/^\uFEFF?---[^\S\r\n]*\S/.test(markdown))
@@ -162,6 +169,9 @@ export const forbiddenIn = (markdown: string): string | null => {
   // An open fence closes with the same character, at least as long.
   let fence: string | null = null;
   for (const line of markdown.split('\n')) {
+    const opener = ANY_FENCE.exec(line)?.[1];
+    if (opener !== undefined && !LANGUAGE.test(opener.trim().split(/\s+/)[0]))
+      return 'code block languages other than letters, digits and _+.#{},:=-';
     const marker = FENCE.exec(line)?.[1];
     const closes = marker !== undefined && fence !== null && marker[0] === fence[0] && marker.length >= fence.length;
     if (marker !== undefined && fence === null) {

@@ -90,11 +90,21 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
 // Run directly or through the npm bin symlink, not when imported by a test.
 const isMain =
   process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+// What this prints lands in the caller's job log, where GitHub reads a line
+// starting with :: as a workflow command and ##[ as the older form anywhere.
+// File names and errors come from the repo, so every :: and ## is broken up
+// (line breaks are kept: no line can then start a command). The publish
+// action does the same (packages/action/src/publish.ts).
+const logSafe = (text: string) => text.replace(/:(?=:)/g, ': ').replace(/#(?=#)/g, '# ');
 if (isMain) {
   runBuild(process.argv.slice(2)).then(
-    ({ site, history }) => console.error(`built ${site} and ${history}`),
+    ({ site, history }) => console.error(logSafe(`built ${site} and ${history}`)),
     (err: unknown) => {
-      console.error(err instanceof BuildError ? err.message : err);
+      console.error(
+        logSafe(
+          err instanceof BuildError ? err.message : err instanceof Error ? (err.stack ?? err.message) : String(err),
+        ),
+      );
       process.exit(1);
     },
   );

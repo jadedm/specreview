@@ -22,6 +22,10 @@ var hubOrigin = (hub) => {
 };
 var REPO = /^[a-z0-9._-]{1,100}$/;
 var VERSION = /^[0-9a-f]{40}-[0-9]{1,20}-[0-9]{1,6}-[0-9a-f]{8}$/;
+var inert = (text, max = 300) => {
+  const safe = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/:(?=:)/g, ": ").replace(/#(?=#)/g, "# ");
+  return [...safe].slice(0, max).join("");
+};
 var actionsToken = async (audience, env2, fetchImpl) => {
   const url = env2.ACTIONS_ID_TOKEN_REQUEST_URL;
   const bearer = env2.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
@@ -67,7 +71,7 @@ var publishBuild = async ({
     for (const f of files) form.append(f.name, await openAsBlob(f.file), path.basename(f.file));
     const token = await actionsToken(origin, env2, fetchImpl).catch((e) => {
       if (e instanceof PublishError && e.message.includes("id-token: write")) throw e;
-      last = e instanceof Error ? e.message : String(e);
+      last = inert(e instanceof Error ? e.message : String(e));
       return null;
     });
     if (token === null) {
@@ -81,7 +85,7 @@ var publishBuild = async ({
       body: form,
       redirect: "error"
     }).catch((e) => {
-      last = `network error: ${e instanceof Error ? e.message : String(e)}`;
+      last = `network error: ${inert(e instanceof Error ? e.message : String(e))}`;
       return null;
     });
     const body = res ? await res.json().catch(() => null) : null;
@@ -90,7 +94,7 @@ var publishBuild = async ({
       return { version: body.version };
     }
     if (res?.status === 409 && body?.error?.code === "SUPERSEDED") return { superseded: true };
-    if (res) last = `${res.status} ${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`.trim();
+    if (res) last = `${res.status} ${inert(`${body?.error?.code ?? ""} ${body?.error?.message ?? ""}`)}`.trim();
     const retryable = res === null || res.status >= 500 || res.status === 409 && body?.error?.code === "BUSY";
     if (!retryable || attempt === ATTEMPTS) break;
     await pause(2e3 * attempt);
@@ -109,7 +113,7 @@ publishBuild({ hub: env.INPUT_HUB ?? "", repo: env.INPUT_REPO ?? "", out: env.IN
 `);
   },
   (err) => {
-    console.error(err instanceof PublishError ? err.message : "publishing failed");
+    console.error(err instanceof PublishError ? inert(err.message, 2e3) : "publishing failed");
     process.exit(1);
   }
 );
