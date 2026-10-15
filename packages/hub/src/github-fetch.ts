@@ -7,17 +7,21 @@
 export const API = 'https://api.github.com';
 
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
-const REDIRECTED = 'x-specreview-redirect';
+// The answers made here for a redirect, with its status. Kept here, not in a
+// header, so nothing GitHub sends can pass for one.
+const redirected = new WeakMap<Response, number>();
 
 export const githubFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
   const res = await fetch(url, { ...init, redirect: 'manual' });
   if (!REDIRECTS.has(res.status)) return res;
   await res.body?.cancel();
-  return new Response(JSON.stringify({ message: `GitHub answered with a redirect (${res.status})` }), {
+  const failure = new Response(JSON.stringify({ message: `GitHub answered with a redirect (${res.status})` }), {
     status: 502,
-    headers: { 'content-type': 'application/json', [REDIRECTED]: String(res.status) },
+    headers: { 'content-type': 'application/json' },
   });
+  redirected.set(failure, res.status);
+  return failure;
 };
 
 // The redirect status a githubFetch answer stands for, if it stands for one.
-export const redirectOf = (res: Response) => res.headers.get(REDIRECTED);
+export const redirectOf = (res: Response) => redirected.get(res);

@@ -570,13 +570,27 @@ export const installFetch = () =>
     }
     if (url.host === 'api.github.com' && req.redirect !== 'manual')
       github.followed.push(`${req.method} ${url.pathname}`);
-    if (url.host === 'api.github.com') return githubResponse(req, url);
+    if (url.host === 'api.github.com') return followed(req, await githubResponse(req, url));
     if (url.host === 'token.actions.githubusercontent.com' && url.pathname === '/.well-known/jwks') {
       if (githubKeys.down) return new Response('down', { status: 503 });
       return Response.json({ keys: [githubJwk] });
     }
     throw new Error(`unexpected outbound fetch: ${req.url}`);
   });
+
+// What fetch does with a redirect when the call did not refuse it: asks the
+// new address (the stand-in for GitHub's own; anywhere else is no answer), so
+// a test can see a call that would have gone there.
+const followed = async (req: Request, res: Response, hops = 0): Promise<Response> => {
+  const location = res.headers.get('location');
+  if (req.redirect === 'manual' || ![301, 302, 303, 307, 308].includes(res.status) || !location) return res;
+  // fetch gives up after 20.
+  if (hops >= 20) throw new TypeError('too many redirects');
+  const to = new URL(location, req.url);
+  if (to.host !== 'api.github.com') throw new TypeError(`followed a redirect to ${to.host}`);
+  const next = new Request(to, { method: req.method, headers: req.headers });
+  return followed(next, await githubResponse(next, to), hops + 1);
+};
 
 // Fresh state for each test: tables, GitHub stub, store and manifest cache.
 export const reset = async () => {
