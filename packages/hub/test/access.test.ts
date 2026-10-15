@@ -739,4 +739,25 @@ describe('#91: team members and approvers on the admin page', () => {
       'They still approve through @leads.example.',
     );
   });
+
+  it('removing someone still granted through another list says what they keep', async () => {
+    file = {
+      sha: 'sha0',
+      text: configText({
+        ...orgFile,
+        sites: LIVE.sites.map((s) =>
+          s.repo === 'sidecar'
+            ? {
+                ...s,
+                readers: ['@initech.example', 'boss@elsewhere.example'],
+                approvers: ['approver@acme.dev', 'boss@elsewhere.example'],
+              }
+            : s,
+        ),
+      }),
+    };
+    expect(html(await remove('readers', 'boss@elsewhere.example'))).toContain(
+      'They keep approving here through another entry in the config.',
+    );
+  });
 });

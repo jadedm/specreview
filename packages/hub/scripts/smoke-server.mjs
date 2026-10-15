@@ -58,7 +58,9 @@ const config = {
       // SMOKE_PUBLIC=1 makes sidecar a public site (#20).
       ...(process.env.SMOKE_PUBLIC === '1' ? { visibility: 'public' } : {}),
       teamDomains: ['acme.dev'],
-      approvers: ['pm@acme.dev'],
+      // #91: a team member and an approver outside the team domain.
+      team: ['lead@contractor.example'],
+      approvers: ['pm@acme.dev', 'boss@elsewhere.example'],
       readers: ['@initech.example'],
       ticketRepo: 'sidecar',
       branch: 'develop',
@@ -399,6 +401,8 @@ for (const e of [
   'owner@acme.dev',
   'x@stranger.example',
   'Riya@INITECH.example',
+  'lead@contractor.example',
+  'boss@elsewhere.example',
 ])
   tokens[e] = await sign(e);
 tokens.otherApp = await sign('dev@acme.dev', 'aud-other');

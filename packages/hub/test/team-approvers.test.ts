@@ -70,6 +70,15 @@ describe('#91: who is team and who approves', () => {
     expect((await setStatus(OUTSIDE, 'ready', 1)).status).toBe(200);
   });
 
+  it('an approver @domain matches that domain exactly, not a subdomain; its removal refuses everyone it covered', async () => {
+    expect(await me('kim@sub.leads.example')).toBe(403);
+    await addPending(env, 'acme/sidecar', 'approvers', '@leads.example', 'owner@acme.dev');
+    // Still a reader through readers' own @leads.example entry, no longer an approver.
+    expect(await me(LEAD)).toBe('reader');
+    await addPending(env, 'acme/sidecar', 'readers', '@leads.example', 'owner@acme.dev');
+    expect(await me(LEAD)).toBe(403);
+  });
+
   it('shared ticket repo: an approver of one site is nobody on the other', async () => {
     expect(await me(OUTSIDE, 'web')).toBe(403);
     expect(await me(MEMBER, 'web')).toBe(403);
