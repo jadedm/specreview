@@ -461,6 +461,20 @@ describe('14: the page', () => {
     expect(p).toContain('an email at acme.dev');
   });
 
+  it('#77 7: a config read answered with a redirect is not followed; the lists cannot be changed', async () => {
+    github.answer = (m, repo, path) =>
+      m === 'GET' && repo === 'acme/docs-hub' && path.startsWith('/contents/')
+        ? new Response('moved', {
+            status: 301,
+            headers: { location: 'https://api.github.com/repos/acme/other/contents/x' },
+          })
+        : null;
+    const p = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: env }));
+    expect(p).toContain('The hub could not read the config from GitHub');
+    expect(p).not.toContain('action="/_admin/access"');
+    expect(github.calls.some((c) => c.includes('acme/other'))).toBe(false);
+  });
+
   it('when the config cannot be read, the lists cannot be changed and say so', async () => {
     reads = 'down';
     const p = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: env }));

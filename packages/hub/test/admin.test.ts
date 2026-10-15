@@ -211,6 +211,16 @@ describe('5 to 10: GitHub sends the admin back', () => {
     expect(github.conversions).toEqual(['code123']);
   });
 
+  it('#77 8: a conversion answered with a redirect is a failure; no app is stored', async () => {
+    github.conversion = () =>
+      new Response('moved', { status: 307, headers: { location: 'https://elsewhere.example/x' } });
+    const state = await startFlow();
+    const r = await finish(state);
+    expect(r.status).toBe(502);
+    expect(String(r.body)).not.toContain('elsewhere');
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM github_app').first('n')).toBe(0);
+  });
+
   it('6: a malformed code or state is refused before anything else', async () => {
     for (const q of ['code=x&state=short', `code=bad%20code&state=${'a'.repeat(64)}`, '']) {
       const r = await admin(`/_admin/github/created?${q}`);

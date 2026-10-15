@@ -192,19 +192,24 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
   });
 });
 
+const INERT = "default-src 'none'; sandbox";
+
 describe('9, 25-28: methods, resolution, types and headers', () => {
-  it('9: the manifest CSP applies to pages and assets; absent means default-src self', async () => {
+  it('9: the manifest CSP applies to pages; absent means default-src self', async () => {
     expect((await page(`/${SIDECAR}/${PAGE}`)).headers.get('content-security-policy')).toBe("default-src 'self'");
     const all = manifests();
     (all[SIDECAR] as { csp?: string }).csp = "default-src 'self'; img-src https:";
     const { files } = spyStore(publishedFiles(all));
     forgetManifests();
     files.set(`${SIDECAR}/v/${VERSION}/a.css`, 'a{}');
-    for (const path of [`/${SIDECAR}/${PAGE}`, `/${SIDECAR}/a.css`]) {
+    files.set(`${SIDECAR}/v/${VERSION}/guide/index.html`, 'guide');
+    for (const path of [`/${SIDECAR}/${PAGE}`, `/${SIDECAR}/`, `/${SIDECAR}/guide/`, `/${SIDECAR}/guide`]) {
       expect((await page(path)).headers.get('content-security-policy'), path).toBe(
         "default-src 'self'; img-src https:",
       );
     }
+    // #77: any other file runs nothing when opened on its own.
+    expect((await page(`/${SIDECAR}/a.css`)).headers.get('content-security-policy')).toBe(INERT);
   });
 
   it('25: POST and PUT on a page are 405; HEAD is headers only', async () => {
@@ -287,13 +292,17 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
     for (const [ext, type] of Object.entries(types)) {
       const r = await page(`/${SIDECAR}/f.${ext}`);
       expect(r.headers.get('content-type'), ext).toBe(type);
-      expect(r.headers.get('content-disposition'), ext).toBeNull();
+      // #77: SVG can hold script, so it downloads when opened on its own.
+      expect(r.headers.get('content-disposition'), ext).toBe(ext === 'svg' ? 'attachment' : null);
+      expect(r.headers.get('content-security-policy'), ext).toBe(ext === 'html' ? "default-src 'self'" : INERT);
+      expect(r.headers.get('x-content-type-options'), ext).toBe('nosniff');
     }
     for (const path of ['f.exe', 'f.PHP', 'noext']) {
       const r = await page(`/${SIDECAR}/${path}`);
       expect(r.status, path).toBe(200);
       expect(r.headers.get('content-type'), path).toBe('application/octet-stream');
       expect(r.headers.get('content-disposition'), path).toBe('attachment');
+      expect(r.headers.get('content-security-policy'), path).toBe(INERT);
     }
   });
 

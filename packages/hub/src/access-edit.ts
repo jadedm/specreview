@@ -1,4 +1,5 @@
 import { b64, caller, CONFIG_FILE, unb64 } from './add-site';
+import { redirectOf } from './github-fetch';
 import { problemsIn, type HubConfig } from './config';
 import type { Env } from './env';
 import type { GitHubAuth } from './github-auth';
@@ -181,7 +182,8 @@ export const changeAccess = async (
     if (res?.status === 409) return 'conflict';
     if (!res) return failed(502, 'GitHub gave no answer; the commit may or may not have landed, check the history');
     const hint = res.status === 422 || res.status === 403 ? '; the default branch may be protected' : '';
-    return failed(502, `GitHub did not take the commit (${res.status})${hint}`);
+    const redirect = redirectOf(res);
+    return failed(502, `GitHub did not take the commit (${redirect ? `a redirect, ${redirect}` : res.status})${hint}`);
   };
 
   const first = await attempt();

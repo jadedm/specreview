@@ -297,10 +297,11 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   const readers = strings(site.readers);
   if (!readers) problems.push(`${at}.readers must be a list (it may be empty)`);
   if (readers && new Set(readers).size !== readers.length) problems.push(`${at}.readers has a duplicate`);
-  for (const entry of readers ?? []) {
+  // By position: problems are logged, and an entry is a person's email.
+  (readers ?? []).forEach((entry, i) => {
     const why = readerProblem(entry);
-    if (why) problems.push(`${at}.readers entry ${JSON.stringify(entry)} ${why}`);
-  }
+    if (why) problems.push(`${at}.readers[${i}] ${why}`);
+  });
   return problems;
 };
 

@@ -210,3 +210,34 @@ describe('28: a page change says why its sync failed', () => {
     expect(lines()).toEqual([]);
   });
 });
+
+describe('#77: a redirect is a failure, never followed', () => {
+  const moved = () => new Response('moved', { status: 301, headers: { location: 'https://elsewhere.example/x' } });
+
+  it('3: a ticket read answered with a redirect fails the sync and says so, with nothing of where it pointed', async () => {
+    github.answer = (m, _r, path) => (m === 'GET' && path === '/issues/52' ? moved() : null);
+    expect((await reconcile())['acme/sidecar']).toBe('failed');
+    expect(lineFor('acme/sidecar')).toMatch(
+      /: GET \/issues\/52 -> 502 GitHub answered with a redirect \(301\)( \(and \d+ more\))?$/,
+    );
+    expect(lines().join('\n')).not.toContain('elsewhere');
+  });
+
+  it('3a: a label removal answered with a redirect is not done', async () => {
+    github.issues.get(52)!.labels = ['docs: in review'];
+    github.answer = (m, _r, path) => (m === 'DELETE' && path.startsWith('/issues/52/labels/') ? moved() : null);
+    expect((await reconcile())['acme/sidecar']).toBe('failed');
+    expect(lineFor('acme/sidecar')).toMatch(
+      /: DELETE \/issues\/52\/labels\/\S+ -> 502 GitHub answered with a redirect/,
+    );
+    expect(github.issues.get(52)!.labels).toContain('docs: in review');
+  });
+
+  it('3b: a label lookup answered with a redirect creates nothing', async () => {
+    github.answer = (m, repo, path) =>
+      m === 'GET' && repo === 'acme/sidecar' && path.startsWith('/labels/') ? moved() : null;
+    expect((await reconcile())['acme/sidecar']).toBe('failed');
+    expect(github.calls.some((c) => c === 'POST /repos/acme/sidecar/labels')).toBe(false);
+    expect(lineFor('acme/sidecar')).toMatch(/: GET \/labels\/\S+ -> 502 GitHub answered with a redirect/);
+  });
+});

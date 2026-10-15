@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import example from '../../../examples/publish-docs.yml?raw';
-import { workflowFor } from '../src/add-site';
+import { listBranches, workflowFor } from '../src/add-site';
 import { problemsIn } from '../src/config';
 import { appStub, call, CONFIG, github, HOST, installFetch, reset, ADMIN_HOST } from './helpers';
 
@@ -612,5 +612,28 @@ describe('#63 review fixes: listing', () => {
     // Within 30 seconds the failure is remembered: no new lookup, still the typed form.
     expect(html(await page())).toContain('GitHub did not list the repos in time, or could not');
     expect(lookups).toBe(1);
+  });
+});
+
+describe('#77: GitHub answering with a redirect', () => {
+  const moved = () => new Response('moved', { status: 301, headers: { location: 'https://elsewhere.example/x' } });
+
+  it('5: a redirected repo lookup stops the run naming the step; nothing is made', async () => {
+    github.answer = (m, repo, path) => (m === 'GET' && repo === 'acme/newdocs' && path === '' ? moved() : null);
+    const r = await add(NEW);
+    expect(r.status).toBe(502);
+    expect(html(r)).toContain('reading acme/newdocs: GitHub answered with a redirect (301)');
+    expect(html(r)).not.toContain('elsewhere');
+    expect(calls).toEqual([]);
+    expect([...repos.get('acme/newdocs')!.refs.keys()]).toEqual(['main']);
+  });
+
+  it('4: listBranches reads a redirect as GitHub not answering, not as a missing repo', async () => {
+    const auth = { tokenFor: async () => 'ghs_test' };
+    github.answer = (m, repo, path) => (m === 'GET' && repo === 'acme/newdocs' && path === '' ? moved() : null);
+    expect(await listBranches(auth, 'acme/newdocs')).toBeNull();
+    github.answer = (m, repo, path) =>
+      m === 'GET' && repo === 'acme/newdocs' && path.startsWith('/branches') ? moved() : null;
+    expect(await listBranches(auth, 'acme/newdocs')).toBeNull();
   });
 });

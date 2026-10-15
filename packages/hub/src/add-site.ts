@@ -2,6 +2,7 @@ import { isRepoName, problemsIn, type HubConfig } from './config';
 import type { Env } from './env';
 import { LIST_PAGES } from './github-app';
 import type { GitHubAuth, Purpose } from './github-auth';
+import { API, githubFetch, redirectOf } from './github-fetch';
 
 // Adding a site from the admin page (#57): the organisation's GitHub App opens
 // two pull requests, one on the repo holding the hub's config that adds the
@@ -9,7 +10,6 @@ import type { GitHubAuth, Purpose } from './github-auth';
 // page when there is none). Merging the config one deploys the hub with the
 // site; the product one then publishes.
 
-const API = 'https://api.github.com';
 export const WORKFLOW = '.github/workflows/docs.yml';
 export const CONFIG_FILE = 'specreview.config.json';
 
@@ -119,7 +119,7 @@ export const caller =
   async (repo, purpose, method, path, body) => {
     const token = await auth.tokenFor(repo, purpose);
     if (!token) throw new AddSiteError(409, `the app has no token for ${repo}`);
-    return fetch(`${API}/repos/${repo}${path}`, {
+    return githubFetch(`${API}/repos/${repo}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -151,7 +151,12 @@ const steps = (call: Call, made: Made[]) => {
   };
   const json = async <T>(res: Response, ok: number[]): Promise<T> => {
     if (ok.includes(res.status)) return (await res.json().catch(() => ({}))) as T;
-    throw new AddSiteError(502, `${step}: GitHub answered ${res.status}`, made);
+    const redirect = redirectOf(res);
+    throw new AddSiteError(
+      502,
+      `${step}: GitHub answered ${redirect ? `with a redirect (${redirect})` : res.status}`,
+      made,
+    );
   };
   const stop = (status: number, message: string) => new AddSiteError(status, message, made);
   const repoOf = async (repo: string, purpose: Purpose) => {
@@ -375,7 +380,7 @@ export const listBranches = async (auth: GitHubAuth, repo: string): Promise<Bran
     const token = await auth.tokenFor(repo, 'browse');
     // No token because the app is not installed there: GitHub does not show it.
     if (!token) return (await auth.installed?.(repo)) === false ? new Response(null, { status: 404 }) : null;
-    return fetch(`${API}/repos/${repo}${path}`, {
+    return githubFetch(`${API}/repos/${repo}${path}`, {
       headers: {
         authorization: `Bearer ${token}`,
         accept: 'application/vnd.github+json',

@@ -1,6 +1,6 @@
 // Each config rule on its own: every case breaks exactly one rule and must
 // report exactly that problem, so no rule is hidden behind another.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { problemsIn } from '../src/config';
 import { CONFIG } from './helpers';
 
@@ -309,5 +309,33 @@ describe('#75: the admin hostname', () => {
       docsHostname: 'docs.example.com',
     });
     expect(configOf(JSON.stringify(without())).admin).toBeNull();
+  });
+});
+
+describe('#77: problems name positions, never a person', () => {
+  const people = ['Riya@Initech.example', ' sam@initech.example', '@gmail.com', 'Ann@acme.dev', 'bo@elsewhere.example'];
+  const broken = () => {
+    const c = valid();
+    c.sites[2].readers = ['ok@initech.example', people[0], people[1], people[2]];
+    c.sites[0].approvers = [people[3], people[4]];
+    return c;
+  };
+
+  it('a malformed reader is named by its place in the list', () => {
+    const problems = problemsIn(broken());
+    expect(problems).toContain('sites[2].readers[1] must be lowercase with no spaces');
+    expect(problems.some((p) => p.startsWith('sites[2].readers[2] '))).toBe(true);
+    expect(problems.some((p) => p.startsWith('sites[2].readers[3] '))).toBe(true);
+  });
+
+  it('no problem and no logged line holds an entry', async () => {
+    const { configOf } = await import('../src/config');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => configOf(JSON.stringify(broken()))).toThrow();
+    const logged = errors.mock.calls.flat().join(' ');
+    errors.mockRestore();
+    expect(logged).toContain('sites[2].readers[1]');
+    for (const text of [...problemsIn(broken()), logged])
+      for (const person of people) expect(text.toLowerCase(), person).not.toContain(person.trim().toLowerCase());
   });
 });
