@@ -4,6 +4,7 @@
 // <out>/history for the hub.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import matter from 'gray-matter';
 import MarkdownIt from 'markdown-it';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -44,7 +45,8 @@ const linkedFrom = (docs: string, files: string[]) => {
   const linked = new Set<string>();
   for (const page of files.filter((f) => f.endsWith('.md'))) {
     const dir = path.posix.dirname(page);
-    for (const block of md.parse(readFileSync(path.join(docs, page), 'utf8'), {}))
+    // The body only: a link written in front matter (a title) is shown as text.
+    for (const block of md.parse(matter(readFileSync(path.join(docs, page), 'utf8')).content, {}))
       for (const token of block.children ?? []) {
         const href = token.type === 'link_open' ? String(token.attrGet('href') ?? '') : '';
         if (!href || /^[a-z][a-z0-9+.-]*:|^[#/]/i.test(href)) continue;

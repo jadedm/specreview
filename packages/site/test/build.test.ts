@@ -848,6 +848,8 @@ describe('#97: files a page links are published at their path', () => {
     // Not linked from any page: stays out, wherever it is.
     write(repo, 'docs/requirements.txt', 'secret-lib==1.0');
     write(repo, 'docs/product/internal.pdf', '%PDF internal');
+    // A link in front matter is shown as text, so it does not count.
+    write(repo, 'docs/product/titled.md', page('Titled', 'x', 'title: "[x](internal.pdf)"\n'));
     commit(repo, 'docs');
     expect(build(repo, '--exclude', 'drafts')).toMatchObject({ status: 0 });
     const files = filesUnder(site(repo));
