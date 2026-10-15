@@ -16,6 +16,7 @@ import {
   exportDocs,
   filesIn,
   OUTPUT_MARK,
+  realOf,
 } from './checks.js';
 import { siteShape } from './config.js';
 import { git } from './manifest.js';
@@ -43,7 +44,7 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   // With the docs folder at the root, a committed --out would be published:
   // said before checkArguments, which would only call it not empty.
   const atRoot = realpathSync.native(docsArg) === root;
-  const outRel = path.relative(root, out).split(path.sep).join('/');
+  const outRel = path.relative(root, realOf(out)).split(path.sep).join('/');
   const committed =
     atRoot &&
     outRel !== '' &&

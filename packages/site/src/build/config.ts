@@ -65,6 +65,24 @@ export const noInterpolation = (md: MarkdownIt) => {
   }
 };
 
+// With a README.md home page (#87), a link to it goes to the home page:
+// VitePress builds it as index.html, and its own link handling does not
+// follow the rewrite. Runs on the parsed page, before VitePress renders links.
+export const readmeHome = (md: MarkdownIt) => {
+  md.core.ruler.push('specreview-readme-home', (state) => {
+    const page = String((state.env as { relativePath?: string }).relativePath ?? '');
+    const dir = path.posix.dirname(page);
+    for (const block of state.tokens)
+      for (const token of block.children ?? []) {
+        const href = token.type === 'link_open' ? token.attrGet('href') : null;
+        if (!href || /^[a-z][a-z0-9+.-]*:|^[#/]/i.test(href)) continue;
+        const [, target, rest] = /^([^?#]*)(.*)$/.exec(href)!;
+        if (path.posix.normalize(path.posix.join(dir, target)) !== 'README.md') continue;
+        token.attrSet('href', `${path.posix.relative(dir, 'index.md') || 'index.md'}${rest}`);
+      }
+  });
+};
+
 // A page may only use files inside the docs folder: an image or import that
 // reaches outside it (another repo file, a runner file) is refused, so nothing
 // the page hash does not cover is published. VitePress, Vue and this package's
@@ -136,11 +154,12 @@ export const assertNoFunctionStrings = (value: unknown, where: string): void => 
 // before VitePress starts (so a refusal is reported as it is) and again here.
 export const siteShape = (docs: string, repo: string, home?: string | null) => {
   // A README.md home page is index.md to the sidebar, as VitePress's rewrite makes it.
-  const pages = filesIn(docs)
+  const read = filesIn(docs)
     .filter((f) => f.endsWith('.md'))
-    .map((f) => readPage(docs, f))
-    .map((p) => (home === 'README.md' && p.file === 'README.md' ? { ...p, file: 'index.md' } : p));
-  for (const p of pages) parseIssues(p.file, p.issues);
+    .map((f) => readPage(docs, f));
+  // Checked under its own name, so an error names the file the author has.
+  for (const p of read) parseIssues(p.file, p.issues);
+  const pages = read.map((p) => (home === 'README.md' && p.file === 'README.md' ? { ...p, file: 'index.md' } : p));
   const title = pages.find((p) => p.file === 'index.md')?.title ?? repo;
   // The 404 page in plain words (#52): what happened and where to go.
   const notFound = {
@@ -171,7 +190,14 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home }: Sit
     appearance: false,
     // Pages are Markdown only; raw HTML in a page would bypass the review UI's text-only rule.
     // {...} attributes would pass Vue directives (@click, :title) to the compiler.
-    markdown: { html: false, attrs: { disable: true }, config: noInterpolation },
+    markdown: {
+      html: false,
+      attrs: { disable: true },
+      config: (md) => {
+        if (home === 'README.md') readmeHome(md);
+        noInterpolation(md);
+      },
+    },
     themeConfig,
     transformPageData(pageData) {
       collected.set(pageData.relativePath, {

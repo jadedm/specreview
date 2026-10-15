@@ -129,9 +129,10 @@ const pathProblem = (file: string): string | null => {
   const parts = file.split('/');
   if (!parts.every((p) => SEGMENT.test(p)))
     return 'names may use only letters, digits and . _ ~ -, not start with a dot';
-  // VitePress never builds pages under these, so the sidebar would link to nothing.
-  if (parts.slice(0, -1).some((p) => p === 'dist' || p === 'node_modules'))
-    return 'dist and node_modules folders are not built; rename the folder';
+  // VitePress never builds pages under these (assets it copies as usual), so
+  // the sidebar would link to nothing.
+  if (file.endsWith('.md') && parts.slice(0, -1).some((p) => p === 'dist' || p === 'node_modules'))
+    return 'pages under dist or node_modules folders are not built; rename the folder';
   // What the hub sees: public/ files land at the site root.
   const served = parts[0] === 'public' ? parts.slice(1) : parts;
   // A page at the top serves at its name without .md (clean URLs): _signin.md

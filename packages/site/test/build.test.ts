@@ -625,7 +625,7 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     const repo = newRepo();
     write(repo, 'README.md', page('Team docs', 'Start here.'));
     commit(repo, 'docs: readme');
-    write(repo, 'README.md', page('Team docs', 'Start here, again.'));
+    write(repo, 'README.md', page('Team docs', 'Start here, [again](./README.md#top) and [the guide](guide/a.md).'));
     write(repo, 'guide/a.md', page('A', 'Back to [the start](../README.md).'));
     write(repo, '.github/workflows/x.yml', 'name: x\n');
     write(repo, '.gitignore', '.specreview\n');
@@ -636,9 +636,16 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     expect(files).toContain('index.html');
     expect(files).toContain('guide/a.html');
     expect(files.some((f) => f.startsWith('.') || f.includes('README'))).toBe(false);
-    expect(readFileSync(path.join(site(repo), 'guide/a.html'), 'utf8')).toMatch(/href="\/fixture\/"/);
+    // The link itself, not the nav bar's: a README home page is at the site root.
+    const hrefOf = (file: string, text: string) =>
+      new RegExp(`<a href="([^"]*)"[^>]*>${text}</a>`).exec(readFileSync(path.join(site(repo), file), 'utf8'))?.[1];
+    const at = (from: string, href: string | undefined) =>
+      new URL(href ?? 'missing', `https://hub.example/fixture/${from}`);
+    expect(at('guide/a', hrefOf('guide/a.html', 'the start')).pathname).toBe('/fixture/');
     const m = manifestOf(repo);
     expect(m.pages.index.title).toBe('Team docs');
+    const again = at('', hrefOf('index.html', 'again'));
+    expect([again.pathname, again.hash]).toEqual(['/fixture/', '#top']);
     expect(m.pages.index.history.map((h) => h.path)).toEqual(['README.md', 'README.md']);
     expect(existsSync(path.join(repo, '.specreview', 'history', head, 'README.md'))).toBe(true);
     expect(Object.keys(m.pages).sort()).toEqual(['guide/a', 'index']);
@@ -681,7 +688,7 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     write(repo, 'docs/README.md', page('Home', 'See [outside](../outside.md).'));
     write(repo, 'outside.md', page('Outside', 'x'));
     commit(repo, 'docs');
-    expect(build(repo).status).toBe(1);
+    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringMatching(/dead link/i) });
     expect(existsSync(site(repo))).toBe(false);
   });
 
@@ -694,6 +701,21 @@ describe('#87: the whole repo as the docs folder, and a README home page', () =>
     expect(build(repo)).toMatchObject({ status: 0 });
     expect(Object.keys(manifestOf(repo).pages).sort()).toEqual(['README', 'guide/README', 'index']);
     expect(manifestOf(repo).pages.index.title).toBe('Home');
+  });
+
+  it('15: assets under dist are fine; only pages there are refused', () => {
+    const repo = minimal();
+    write(repo, 'docs/assets/dist/x.png', 'png');
+    write(repo, 'docs/index.md', page('Home', '![x](./assets/dist/x.png)'));
+    commit(repo, 'x');
+    expect(build(repo)).toMatchObject({ status: 0 });
+  });
+
+  it('#87: a bad issues value on a README home page names README.md', () => {
+    const repo = newRepo();
+    write(repo, 'docs/README.md', page('Home', 'x', 'issues: [0]\n'));
+    commit(repo, 'x');
+    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('README.md') });
   });
 
   it('15: pages under dist or node_modules are refused, since VitePress never builds them', () => {
