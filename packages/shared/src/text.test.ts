@@ -43,6 +43,8 @@ describe('#88: exclude patterns', () => {
       '',
       'a\\b',
       'x\ny',
+      '-drafts',
+      '--repo',
     ])
       expect(isExcludePattern(bad), JSON.stringify(bad)).toBe(false);
     expect(isExcludePattern('a'.repeat(200))).toBe(true);

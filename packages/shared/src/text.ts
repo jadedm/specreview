@@ -42,8 +42,8 @@ export type ManifestPage = {
 export type Manifest = { commit: string; builtAt: string; csp?: string; pages: Record<string, ManifestPage> };
 
 // A path left out of a site (#88), relative to the docs folder: letters,
-// digits and . _ ~ - / *, no leading /, no . or .. segment, ** only as a
+// digits and . _ ~ - / *, no leading / or - (it would read as an option), no . or .. segment, ** only as a
 // whole segment. Matching is case-sensitive.
-const EXCLUDE_SHAPE = /^(?!\/)(?!.*\/\/)(?!.*(^|\/)\.{1,2}(\/|$))[A-Za-z0-9._~*/-]+$/;
+const EXCLUDE_SHAPE = /^(?![/-])(?!.*\/\/)(?!.*(^|\/)\.{1,2}(\/|$))[A-Za-z0-9._~*/-]+$/;
 export const isExcludePattern = (p: string, max = 200): boolean =>
   p.length <= max && EXCLUDE_SHAPE.test(p) && p.split('/').every((seg) => !seg.includes('**') || seg === '**');

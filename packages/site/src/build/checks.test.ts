@@ -256,7 +256,7 @@ describe('#88: what an exclude pattern leaves out', () => {
         ['product/prototypes2/x.md', 'product/spec.md'],
       ],
       ['drafts/', ['drafts/x.md'], ['drafts.md', 'old/drafts/x.md']],
-      ['*.pdf', ['y.pdf'], ['x/f.pdf']],
+      ['*.pdf', ['y.pdf'], ['x/f.pdf', 'yXpdf']],
       ['**/*.pdf', ['y.pdf', 'x/f.pdf', 'a/b/c.pdf'], ['x/f.pdfx']],
       ['product/proto*', ['product/protos/k.md', 'product/prototypes/s.js'], ['product/spec.md']],
       ['a/**/b', ['a/b', 'a/x/b', 'a/x/y/b/z.md'], ['a/xb', 'b']],
