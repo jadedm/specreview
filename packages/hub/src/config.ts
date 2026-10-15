@@ -15,6 +15,9 @@ export type Site = {
   // <org>/<ticketRepo>: where the site's tickets and labels live on GitHub.
   ticketRepo: string;
   teamDomains: string[];
+  // People who are team individually, by exact email (#91).
+  team: string[];
+  // Exact emails or @domain entries (#91); an approver has the team's view.
   approvers: string[];
   // Lowercase exact emails and @domain entries; interim until #12 moves
   // readers to the admin page.
@@ -151,6 +154,7 @@ export const LOGO_KEY = /^_brand\/logo-[0-9a-f]{64}\.(png|webp)$/;
 const SITE_KEYS = new Set([
   'repo',
   'teamDomains',
+  'team',
   'approvers',
   'readers',
   'ticketRepo',
@@ -276,8 +280,16 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   if (domains && domains.some((d) => !DOMAIN.test(d))) problems.push(`${at}.teamDomains has a malformed domain`);
   if (domains && new Set(domains).size !== domains.length) problems.push(`${at}.teamDomains has a duplicate`);
   if (domains && domains.some(isPublicMail)) problems.push(`${at}.teamDomains has a public mail domain`);
+  // Team by exact email (#91): any domain, as readers may be.
+  const members = site.team === undefined ? [] : strings(site.team);
+  if (!members) problems.push(`${at}.team must be a list of emails`);
+  if (members && new Set(members).size !== members.length) problems.push(`${at}.team has a duplicate`);
+  (members ?? []).forEach((email, i) => {
+    if (!isLowerEmail(email)) problems.push(`${at}.team[${i}] must be a lowercase email`);
+  });
   // Sites sharing a ticket repo share its tickets and labels, so they must
-  // have the same team: identical domain lists, aliases included.
+  // have the same team: identical domain lists, aliases included. People
+  // named in team or as approvers see only their own site's tickets.
   if (domains && typeof ticketRepo === 'string') {
     const team = [...domains].sort().join(',');
     const seen = teamsByTicketRepo.get(ticketRepo);
@@ -287,11 +299,12 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   const approvers = strings(site.approvers);
   if (!approvers) problems.push(`${at}.approvers must be a list (it may be empty)`);
   if (approvers && new Set(approvers).size !== approvers.length) problems.push(`${at}.approvers has a duplicate`);
-  for (const email of approvers ?? []) {
-    const domain = domainOfEmail(email);
-    if (!domain || !isLowerEmail(email)) problems.push(`${at}.approvers has a malformed email`);
-    else if (!domains?.includes(domain)) problems.push(`${at}.approvers has an email outside the team domains`);
-  }
+  // An exact email or a whole @domain (#91), not limited to the team domains;
+  // a public mail domain is refused, as for readers.
+  (approvers ?? []).forEach((entry, i) => {
+    const why = readerProblem(entry);
+    if (why) problems.push(`${at}.approvers[${i}] ${why}`);
+  });
   const label = labelProblem(site.teamLabel);
   if (label) problems.push(`${at}.teamLabel ${label}`);
   const readers = strings(site.readers);
@@ -394,6 +407,7 @@ export const configOf = (text: string | undefined): HubConfig => {
     sites: {
       repo: string;
       teamDomains: string[];
+      team?: string[];
       approvers: string[];
       readers: string[];
       ticketRepo: string;
@@ -425,6 +439,7 @@ export const configOf = (text: string | undefined): HubConfig => {
           key: `${cfg.org}/${s.repo}`,
           ticketRepo: `${cfg.org}/${s.ticketRepo}`,
           teamDomains: s.teamDomains,
+          team: s.team ?? [],
           approvers: s.approvers,
           readers: s.readers,
           teamLabel: s.teamLabel ?? cfg.teamLabel ?? `${cfg.org} team`,

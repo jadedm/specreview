@@ -243,11 +243,11 @@ const accessFor = async (a: Admin, found: Found) => {
     return `${intro}<p class="note">The hub could not read the config from GitHub, so the lists cannot be changed right now.</p>`;
   const sites = await Promise.all(
     [...a.config.sites.values()].map(async (site) => {
-      const git = listsIn(file.config, site.repo) ?? { readers: [], approvers: [] };
+      const git = listsIn(file.config, site.repo) ?? { readers: [], approvers: [], team: [] };
       const removed = await pendingFor(a.env, site.key).catch(() => null);
       if (!removed)
         return `<h2>${escapeHtml(site.repo)}</h2><p class="note">The hub cannot read its list of removals right now, so these lists cannot be changed.</p>`;
-      const lists = (['readers', 'approvers'] as const).map((list) => {
+      const lists = (['readers', 'approvers', 'team'] as const).map((list) => {
         const live = site[list];
         const refused = new Map(removed.filter((r) => r.list === list).map((r) => [r.entry, r.removedAt]));
         const committed = git[list];
@@ -277,12 +277,13 @@ const accessFor = async (a: Admin, found: Found) => {
           // A removal listed nowhere any more is not shown (#67): it lets no one
           // in, and is kept so that a config listing them again cannot either.
         ];
-        const title = list === 'readers' ? 'Readers' : 'Approvers';
-        const hint =
-          list === 'readers'
-            ? 'name@company.com, or @company.com for everyone there'
-            : `an email at ${site.teamDomains.join(' or ')}`;
-        return `<p><strong>${title}</strong></p><ul>${rows.join('') || '<li><span class="site"><span class="meta">None</span></span></li>'}</ul><form method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(site.repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="add"><p><label>Add ${list === 'readers' ? 'a reader' : 'an approver'}<br><input name="entry" autocomplete="off"></label><br><span class="note">${escapeHtml(hint)}</span></p><button class="quiet" type="submit">Add</button></form>`;
+        const title = { readers: 'Readers', approvers: 'Approvers', team: 'Team members' }[list];
+        const hint = {
+          readers: 'name@company.com, or @company.com for everyone there',
+          approvers: 'name@company.com, or @company.com for everyone there; approvers see what the team sees',
+          team: `name@company.com, seeing what the team sees (everyone at ${site.teamDomains.join(' or ')} already does)`,
+        }[list];
+        return `<p><strong>${title}</strong></p><ul>${rows.join('') || '<li><span class="site"><span class="meta">None</span></span></li>'}</ul><form method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(site.repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="add"><p><label>Add ${{ readers: 'a reader', approvers: 'an approver', team: 'a team member' }[list]}<br><input name="entry" autocomplete="off"></label><br><span class="note">${escapeHtml(hint)}</span></p><button class="quiet" type="submit">Add</button></form>`;
       });
       return `<h2>${escapeHtml(site.repo)}</h2>${lists.join('')}`;
     }),
@@ -330,7 +331,7 @@ const accessPost = async (a: Admin) => {
   const change = { site: value('site'), list, action, entry: value('entry').toLowerCase(), removedAt };
   const shaped =
     a.config.sites.has(change.site) &&
-    (list === 'readers' || list === 'approvers') &&
+    (list === 'readers' || list === 'approvers' || list === 'team') &&
     (action === 'add' || action === 'remove' || action === 'restore') &&
     change.entry.length > 0 &&
     change.entry.length <= 254;
@@ -350,7 +351,7 @@ const accessPost = async (a: Admin) => {
         a,
         200,
         action === 'add' ? 'Added' : 'Removed',
-        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still read through ${escapeHtml(outcome.still)}.</p>` : ''}${outcome.kind === 'done' && outcome.refused ? `<p class="note">${outcome.refused === true ? 'A removal still refuses them here; the admin page offers Let back in.' : 'The hub could not check for a removal; reload the admin page to see whether one still refuses them.'}</p>` : ''}`,
+        `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still ${{ readers: 'read', approvers: 'approve', team: 'see what the team sees' }[list as 'readers' | 'approvers' | 'team']} through ${escapeHtml(outcome.still)}.</p>` : ''}${outcome.kind === 'done' && outcome.keeps ? `<p class="note">They keep ${{ reader: 'reading', team: 'the team&#39;s view', approver: 'approving', none: '' }[outcome.keeps]} here through another entry in the config.</p>` : ''}${outcome.kind === 'done' && outcome.refused ? `<p class="note">${outcome.refused === true ? 'A removal still refuses them here; the admin page offers Let back in.' : 'The hub could not check for a removal; reload the admin page to see whether one still refuses them.'}</p>` : ''}`,
       ),
     unchanged: () =>
       say(a, 200, 'Nothing to change', `<p>${escapeHtml(outcome.kind === 'unchanged' ? outcome.why : '')}.</p>`),

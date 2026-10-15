@@ -4,6 +4,7 @@ import { problemsIn, type HubConfig } from './config';
 import type { Env } from './env';
 import type { GitHubAuth } from './github-auth';
 import { addPending, clearPendingAt, pendingAt, type List } from './pending';
+import { roleOf, type Role } from './roles';
 
 // Longer than any commit takes to land; see the add that finds the entry already listed.
 const IN_FLIGHT_MS = 2 * 60_000;
@@ -25,7 +26,7 @@ export type AccessChange = {
 export type Outcome =
   // refused: a removal refuses them here now ('unknown' when the
   // hub could not check), so the result must not say they are let in.
-  | { kind: 'done'; still?: string; note?: string; refused?: true | 'unknown' }
+  | { kind: 'done'; still?: string; keeps?: Role; note?: string; refused?: true | 'unknown' }
   | { kind: 'unchanged'; why: string }
   | { kind: 'refused'; status: number; why: string }
   // A removal the hub enforces but could not commit: it stands until an
@@ -34,7 +35,7 @@ export type Outcome =
   | { kind: 'restored' };
 
 type ConfigFile = { sha: string; branch: string; config: Record<string, unknown> };
-type SiteEntry = { repo?: unknown; readers?: unknown; approvers?: unknown } & Record<string, unknown>;
+type SiteEntry = { repo?: unknown; readers?: unknown; approvers?: unknown; team?: unknown } & Record<string, unknown>;
 
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
@@ -62,7 +63,7 @@ export const readConfig = async (auth: GitHubAuth, configRepo: string): Promise<
 export const listsIn = (config: Record<string, unknown>, repo: string) => {
   const site = (Array.isArray(config.sites) ? config.sites : []).find((s) => (s as SiteEntry).repo === repo) as
     SiteEntry | undefined;
-  return site ? { readers: strings(site.readers), approvers: strings(site.approvers) } : null;
+  return site ? { readers: strings(site.readers), approvers: strings(site.approvers), team: strings(site.team) } : null;
 };
 
 // The change applied to a copy, or why it changes nothing.
@@ -81,15 +82,29 @@ const applied = (config: Record<string, unknown>, change: AccessChange) => {
   return { config: updated };
 };
 
-const word = { readers: 'reader', approvers: 'approver' };
+const word = { readers: 'reader', approvers: 'approver', team: 'team member' };
 const messageOf = (change: AccessChange, email: string) =>
   `chore(config): ${change.action} ${word[change.list]} ${change.entry} ${change.action === 'add' ? 'to' : 'from'} ${change.site}\n\nRequested by ${email} on the hub's admin page.`;
 
-// Who still reads after an exact reader is removed: a domain entry covering them.
+// What still covers someone after their exact entry is removed: an @domain
+// in the same list, or for a team member one of the site's team domains.
 const stillReads = (config: Record<string, unknown>, change: AccessChange) => {
-  if (change.list !== 'readers' || change.entry.startsWith('@')) return undefined;
-  const domain = `@${change.entry.split('@')[1]}`;
-  return listsIn(config, change.site)?.readers.includes(domain) ? domain : undefined;
+  if (change.entry.startsWith('@')) return undefined;
+  const domain = change.entry.split('@')[1];
+  if (change.list === 'team') return teamDomainsIn(config, change.site).includes(domain) ? domain : undefined;
+  return listsIn(config, change.site)?.[change.list].includes(`@${domain}`) ? `@${domain}` : undefined;
+};
+// Their role on the site under the changed config, every list counted.
+const roleAfter = (config: Record<string, unknown>, change: AccessChange): Role => {
+  const lists = listsIn(config, change.site);
+  if (!lists) return 'none';
+  const site = { ...lists, teamDomains: teamDomainsIn(config, change.site) } as unknown as Parameters<typeof roleOf>[1];
+  return roleOf(change.entry, site);
+};
+const teamDomainsIn = (config: Record<string, unknown>, repo: string) => {
+  const site = (Array.isArray(config.sites) ? config.sites : []).find((s) => (s as SiteEntry).repo === repo) as
+    SiteEntry | undefined;
+  return strings(site?.teamDomains);
 };
 
 // Pending removals fail closed: a removal is recorded before anything else
@@ -177,7 +192,10 @@ export const changeAccess = async (
     if (res?.status === 200 || res?.status === 201) {
       if (!removing) await clearSeen();
       const refused = removing ? undefined : await refusalNow();
-      return { kind: 'done', still: stillReads(next.config, change), ...(refused && { refused }) };
+      const still = stillReads(next.config, change);
+      // Covered some other way (another list, a team domain): say what is left.
+      const left = removing && !still && !change.entry.startsWith('@') ? roleAfter(next.config, change) : 'none';
+      return { kind: 'done', still, ...(left !== 'none' && { keeps: left }), ...(refused && { refused }) };
     }
     if (res?.status === 409) return 'conflict';
     if (!res) return failed(502, 'GitHub gave no answer; the commit may or may not have landed, check the history');

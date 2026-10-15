@@ -3,15 +3,18 @@ import { domainOfEmail, type Site } from './config';
 // What someone may do on one site. 'none' may not even read it.
 export type Role = 'none' | 'reader' | 'team' | 'approver';
 
-// Per site: an email whose domain is exactly one of the site's team domains
-// is team; a listed approver (config guarantees approvers are team) signs off;
-// a listed reader (exact email, or @domain equal to the part after the last @)
-// reads. Team and approver outrank reader. Everyone else is 'none'.
+// Per site, each list matching an exact email or @domain (the part after the
+// last @): a listed approver signs off and has the team's view (#91); an
+// email at a team domain, or named in `team`, is team; a listed reader reads.
+// Approver outranks team, team outranks reader. Everyone else is 'none'.
+const listed = (list: string[], email: string, domain: string) => list.includes(email) || list.includes(`@${domain}`);
+
 export const roleOf = (email: string, site: Site): Role => {
   const domain = domainOfEmail(email);
   if (!domain) return 'none';
-  if (site.teamDomains.includes(domain)) return site.approvers.includes(email) ? 'approver' : 'team';
-  if (site.readers.includes(email) || site.readers.includes(`@${domain}`)) return 'reader';
+  if (listed(site.approvers, email, domain)) return 'approver';
+  if (site.teamDomains.includes(domain) || site.team.includes(email)) return 'team';
+  if (listed(site.readers, email, domain)) return 'reader';
   return 'none';
 };
 

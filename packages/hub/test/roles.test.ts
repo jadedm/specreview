@@ -6,6 +6,7 @@ const site: Site = {
   repo: 'sidecar',
   key: 'acme/sidecar',
   teamDomains: ['acme.dev'],
+  team: [],
   approvers: ['approver@acme.dev'],
   readers: ['@initech.example', 'pm@partner.example'],
   ticketRepo: 'acme/sidecar',
