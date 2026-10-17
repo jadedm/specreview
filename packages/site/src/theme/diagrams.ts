@@ -6,12 +6,14 @@
 // from the copy the build puts in the site (build/mermaid.ts).
 import type { Mermaid, MermaidConfig } from 'mermaid';
 import { onContentUpdated, useData } from 'vitepress';
-import { defineComponent, onMounted } from 'vue';
+import { defineComponent, onMounted, onUnmounted } from 'vue';
 import './diagrams.css';
 
 export const DIAGRAM_CLASS = 'sr-diagram';
 export const SOURCE_CLASS = 'sr-diagram-source';
 export const ERROR_CLASS = 'sr-diagram-error';
+export const ZOOM_BUTTON_CLASS = 'sr-diagram-zoom';
+export const ZOOM_CLASS = 'sr-zoom';
 const MAX_ERROR = 200;
 
 // Mermaid's own secure keys plus everything that sets colours, fonts, CSS or
@@ -111,6 +113,7 @@ export const drawDiagrams = async (root: ParentNode, load: () => Promise<Mermaid
       // Mermaid's strict mode has passed its output through DOMPurify. No role
       // here: the SVG carries Mermaid's own role and accessible title.
       figure.innerHTML = svg;
+      addZoom(figure);
       block.before(figure);
       block.classList.add(SOURCE_CLASS);
       block.dataset.srDiagram = 'drawn';
@@ -119,6 +122,111 @@ export const drawDiagrams = async (root: ParentNode, load: () => Promise<Mermaid
       if (block.isConnected) block.after(errorLine(error));
     }
   }
+};
+
+// Click to see a diagram full size (#105). A real button beside the diagram
+// opens it for the keyboard and screen readers (the SVG keeps its own role
+// and title); a click on the diagram does the same with a mouse. The SVG is
+// moved into a modal dialog and back, never copied, so its ids, arrow
+// markers and scoped styles stay unique. The dialog sits outside the page
+// content, so the review panel never offers to comment on it.
+type Zoomed = {
+  dialog: HTMLDialogElement;
+  figure: HTMLElement;
+  svg: SVGSVGElement;
+  opener: HTMLElement;
+  attrs: [string, string | null][];
+};
+let zoomed: Zoomed | null = null;
+const SIZE_ATTRS = ['width', 'height', 'style'];
+
+// The diagram's own title, when its author gave one (Mermaid's accTitle).
+const titleOf = (svg: SVGSVGElement) => {
+  const id = svg.getAttribute('aria-labelledby');
+  return ((id && svg.querySelector(`[id="${CSS.escape(id)}"]`)?.textContent) || '').trim().slice(0, 100);
+};
+
+// Closing from the dialog returns focus to the button that opened it. A
+// navigation closes it without moving focus: the reader is on another page.
+export const closeZoom = (restoreFocus = true) => {
+  const z = zoomed;
+  if (!z) return;
+  zoomed = null;
+  for (const [name, value] of z.attrs) {
+    if (value === null) z.svg.removeAttribute(name);
+    else z.svg.setAttribute(name, value);
+  }
+  if (z.figure.isConnected) z.figure.append(z.svg);
+  if (z.dialog.open) z.dialog.close();
+  z.dialog.remove();
+  if (restoreFocus) z.opener.focus();
+};
+
+export const openZoom = (figure: HTMLElement, opener: HTMLElement) => {
+  const svg = figure.querySelector('svg');
+  if (zoomed || !svg) return;
+  const dialog = document.createElement('dialog');
+  dialog.className = ZOOM_CLASS;
+  const title = titleOf(svg);
+  dialog.setAttribute('aria-label', title ? `Diagram: ${title}` : 'Diagram');
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = `${ZOOM_CLASS}-close`;
+  close.textContent = 'Close';
+  const bar = document.createElement('div');
+  bar.className = `${ZOOM_CLASS}-bar`;
+  bar.append(close);
+  const body = document.createElement('div');
+  body.className = `${ZOOM_CLASS}-body`;
+  const attrs = SIZE_ATTRS.map((name): [string, string | null] => [name, svg.getAttribute(name)]);
+  // At its own size: Mermaid sets width 100% and a max-width to fit the
+  // column. Without a viewBox there is no own size, so it is left as drawn.
+  const width = svg.viewBox?.baseVal?.width;
+  if (width) {
+    svg.removeAttribute('style');
+    svg.removeAttribute('height');
+    svg.setAttribute('width', String(Math.ceil(width)));
+  }
+  body.append(svg);
+  dialog.append(bar, body);
+  document.body.append(dialog);
+  zoomed = { dialog, figure, svg, opener, attrs };
+  close.addEventListener('click', () => closeZoom());
+  // However the dialog closes (Esc, or any close request the browser makes),
+  // the SVG goes back and the next diagram can open.
+  // The event comes a task later: it closes only its own dialog.
+  dialog.addEventListener('close', () => {
+    if (zoomed?.dialog === dialog) closeZoom();
+  });
+  // A click on the backdrop lands on the dialog itself; its content is in
+  // body. Pressed there too, so a drag-select that ends outside stays open.
+  let pressedOnBackdrop = false;
+  dialog.addEventListener('mousedown', (e) => (pressedOnBackdrop = e.target === dialog));
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog && pressedOnBackdrop) closeZoom();
+  });
+  dialog.showModal();
+  close.focus();
+};
+
+const addZoom = (figure: HTMLElement) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = ZOOM_BUTTON_CLASS;
+  button.textContent = 'Enlarge';
+  const svg = figure.querySelector('svg');
+  const title = svg ? titleOf(svg) : '';
+  button.setAttribute('aria-label', title ? `Enlarge diagram: ${title}` : 'Enlarge diagram');
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openZoom(figure, button);
+  });
+  figure.addEventListener('click', () => openZoom(figure, button));
+  // In its own row above the diagram: never over a node, its ring never clipped.
+  const row = document.createElement('div');
+  row.className = `${ZOOM_BUTTON_CLASS}-row`;
+  row.append(button);
+  figure.prepend(row);
 };
 
 // Copied into the site by the build (build/mermaid.ts MERMAID_DIR), not
@@ -135,11 +243,14 @@ export const Diagrams = defineComponent({
   setup() {
     const load = loaderFor(useData().site.value.base);
     const drawPage = () => {
+      // A new page: any dialog belongs to the one that left.
+      closeZoom(false);
       const root = document.querySelector('.vp-doc');
       if (root) void drawDiagrams(root, load);
     };
     onContentUpdated(drawPage);
     onMounted(drawPage);
+    onUnmounted(() => closeZoom(false));
     return () => null;
   },
 });
