@@ -899,3 +899,36 @@ describe('#97: files a page links are published at their path', () => {
     }
   });
 });
+
+describe('#102: Mermaid diagrams', () => {
+  it('a mermaid block stays a code block, its source is in the section text, and Mermaid ships as site assets', () => {
+    const repo = newRepo();
+    write(
+      repo,
+      'docs/index.md',
+      page('Home', '## Flow\n\nBefore.\n\n```mermaid\nflowchart LR\n  A["Write"] --> B["Review"]\n```\n\nAfter.'),
+    );
+    commit(repo, 'docs: diagram');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    const site = path.join(repo, '.specreview', 'site');
+    const html = readFileSync(path.join(site, 'index.html'), 'utf8');
+    expect(html).toMatch(/<div class="language-mermaid[^"]*"/);
+    expect(html).not.toContain('<svg');
+    const flow = manifestOf(repo).pages.index.sections.find((s) => s.id === 'flow');
+    expect(flow?.text).toContain('flowchart LR');
+    const files = filesUnder(site);
+    expect(files).toContain('assets/mermaid/mermaid.esm.min.mjs');
+    expect(files.filter((f) => f.startsWith('assets/mermaid/chunks/')).length).toBeGreaterThan(50);
+    expect(files.some((f) => f.startsWith('assets/mermaid/') && f.endsWith('.map'))).toBe(false);
+    // Copied, not bundled: no Mermaid chunk from Vite.
+    expect(files.some((f) => /^assets\/chunks\/mermaid/.test(f))).toBe(false);
+  });
+
+  it('a site with no mermaid block gets no copy of Mermaid', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', '```ts\nconst a = 1;\n```'));
+    commit(repo, 'docs: no diagram');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    expect(filesUnder(path.join(repo, '.specreview', 'site')).some((f) => f.startsWith('assets/mermaid/'))).toBe(false);
+  });
+});

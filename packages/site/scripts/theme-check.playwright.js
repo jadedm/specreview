@@ -123,6 +123,24 @@ async (page) => {
   };
   await page.setViewportSize({ width: 1280, height: 900 });
   for (const p of PAGES) await run(p, () => open(p));
+  // #102: drawn Mermaid diagrams, once every block is drawn or has failed.
+  await run('diagrams', async () => {
+    await open('/sidecar/diagrams');
+    await page.waitForFunction(() => !document.querySelector('div.language-mermaid:not([data-sr-diagram="drawn"]):not([data-sr-diagram="failed"])'), null, { timeout: 20000 });
+    // Fails closed: Mermaid failing to load would leave every block "failed".
+    const d = await page.evaluate(() => ({
+      drawn: document.querySelectorAll('[data-sr-diagram="drawn"]').length,
+      failed: document.querySelectorAll('[data-sr-diagram="failed"]').length,
+      failedSource: document.querySelector('[data-sr-diagram="failed"]')?.textContent ?? '',
+      hit: window.hit,
+      panel: getComputedStyle(document.getElementById('rv-mount-top')).display,
+    }));
+    // test/smoke-docs/diagrams.md: six diagrams, only the broken one (A --> -->) fails.
+    if (d.failed !== 1 || d.drawn !== 5 || !d.failedSource.includes('A --> -->'))
+      throw new Error(`theme check: diagrams drawn ${d.drawn}, failed ${d.failed}; expected only the broken one to fail`);
+    if (d.hit !== undefined) throw new Error(`theme check: a diagram ran script (window.hit = ${d.hit})`);
+    if (d.panel === 'none') throw new Error('theme check: a diagram style hid the review panel');
+  });
   await run('features, code hovered', async () => { await open('/sidecar/features'); await page.hover('div[class*="language-"]'); await page.waitForTimeout(800); });
   await run('features, text selected', async () => {
     await page.evaluate(() => { const p = document.querySelector('.vp-doc p'); const r = document.createRange(); r.selectNodeContents(p); getSelection().removeAllRanges(); getSelection().addRange(r); });

@@ -1,0 +1,15 @@
+.sr-diagram {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+.sr-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+.sr-diagram-source {
+  display: none;
+}
+.sr-diagram-error {
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+}

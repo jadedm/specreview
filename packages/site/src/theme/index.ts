@@ -4,6 +4,7 @@ import type { Theme } from 'vitepress';
 import DefaultTheme from 'vitepress/theme-without-fonts';
 import { h } from 'vue';
 import { OrgBrand } from './brand';
+import { Diagrams } from './diagrams';
 import { BOTTOM_MOUNT, TOP_MOUNT, startReview } from './review/start';
 import './house.css';
 import './review/review.css';
@@ -17,7 +18,7 @@ export default {
     h(DefaultTheme.Layout, null, {
       'nav-bar-content-after': () => h(OrgBrand),
       'doc-before': () => h('div', { id: TOP_MOUNT }),
-      'doc-after': () => h('div', { id: BOTTOM_MOUNT }),
+      'doc-after': () => [h('div', { id: BOTTOM_MOUNT }), h(Diagrams)],
     }),
   enhanceApp({ router, siteData }) {
     if (typeof window === 'undefined') return;
