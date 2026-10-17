@@ -67,6 +67,20 @@ flowchart LR
   style T fill:#888888
 ```
 
+## Wide
+
+```mermaid
+flowchart LR
+  W1["Owner buys credits"] --> W2["Creates a campaign"] --> W3["Admin approves the campaign"] --> W4["Clipper finds the campaign"] --> W5["Clipper posts a clip and submits the link"] --> W6["Owner or admin approves the clip"] --> W7["Views tracked live"] --> W8["View cutoff"] --> W9["Weekly payout run"] --> W10["Clipper gets paid"]
+```
+
+## Tall
+
+```mermaid
+flowchart TB
+  T1 --> T2 --> T3 --> T4 --> T5 --> T6 --> T7 --> T8 --> T9 --> T10 --> T11 --> T12 --> T13 --> T14 --> T15 --> T16
+```
+
 ## Code
 
 ```ts

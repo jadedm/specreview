@@ -132,15 +132,23 @@ async (page) => {
       drawn: document.querySelectorAll('[data-sr-diagram="drawn"]').length,
       failed: document.querySelectorAll('[data-sr-diagram="failed"]').length,
       failedSource: document.querySelector('[data-sr-diagram="failed"]')?.textContent ?? '',
+      sourcesShown: [...document.querySelectorAll('[data-sr-diagram="drawn"]')].filter((b) => getComputedStyle(b).display !== 'none').length,
       hit: window.hit,
       panel: getComputedStyle(document.getElementById('rv-mount-top')).display,
     }));
-    // test/smoke-docs/diagrams.md: six diagrams, only the broken one (A --> -->) fails.
-    if (d.failed !== 1 || d.drawn !== 5 || !d.failedSource.includes('A --> -->'))
+    // test/smoke-docs/diagrams.md: eight diagrams, only the broken one (A --> -->) fails.
+    if (d.failed !== 1 || d.drawn !== 7 || !d.failedSource.includes('A --> -->'))
       throw new Error(`theme check: diagrams drawn ${d.drawn}, failed ${d.failed}; expected only the broken one to fail`);
+    if (d.sourcesShown) throw new Error(`theme check: ${d.sourcesShown} drawn diagram(s) still show their code`);
     if (d.hit !== undefined) throw new Error(`theme check: a diagram ran script (window.hit = ${d.hit})`);
     if (d.panel === 'none') throw new Error('theme check: a diagram style hid the review panel');
   });
+  // #105: a diagram opened full size, and the page behind it.
+  await run('diagram enlarged', async () => {
+    await page.click('.sr-diagram-zoom');
+    await page.waitForSelector('dialog.sr-zoom[open]');
+  });
+  await page.keyboard.press('Escape');
   await run('features, code hovered', async () => { await open('/sidecar/features'); await page.hover('div[class*="language-"]'); await page.waitForTimeout(800); });
   await run('features, text selected', async () => {
     await page.evaluate(() => { const p = document.querySelector('.vp-doc p'); const r = document.createRange(); r.selectNodeContents(p); getSelection().removeAllRanges(); getSelection().addRange(r); });
@@ -154,6 +162,18 @@ async (page) => {
   });
   await page.setViewportSize({ width: 1280, height: 900 });
   // Keyboard sweep: every focusable control shows a solid ring of 2px or more.
+  // #105: the Enlarge and Close buttons get the ring too.
+  await open('/sidecar/diagrams');
+  await page.waitForSelector('.sr-diagram-zoom');
+  for (const sel of ['.sr-diagram-zoom', '.sr-zoom-close']) {
+    if (sel === '.sr-zoom-close') { await page.click('.sr-diagram-zoom'); await page.waitForSelector('dialog.sr-zoom[open]'); }
+    await page.focus(sel);
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Tab');
+    const ring = await page.evaluate((s) => { const cs = getComputedStyle(document.querySelector(s)); return cs.outlineStyle === 'solid' && parseFloat(cs.outlineWidth) >= 2 ? '' : `${s} ${cs.outlineStyle} ${cs.outlineWidth}`; }, sel);
+    if (ring) throw new Error(`theme check: no focus ring on ${ring}`);
+  }
+  await page.keyboard.press('Escape');
   await open('/sidecar/features');
   const rings = [];
   for (let i = 0; i < 60; i++) {
