@@ -2,7 +2,18 @@
 // specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...
 // Builds a repo's docs folder, as committed at HEAD, into <out>/site and
 // <out>/history for the hub.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 import MarkdownIt from 'markdown-it';
@@ -16,6 +27,7 @@ import {
   checkGit,
   checkMarkdown,
   checkPaths,
+  checkPrototypes,
   excludedBy,
   exportDocs,
   filesIn,
@@ -26,7 +38,8 @@ import { siteShape } from './config.js';
 import { git } from './manifest.js';
 import { copyMermaid } from './mermaid.js';
 
-const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...';
+const USAGE =
+  'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]... [--prototypes <path>]...';
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 // VitePress copies only the files a page imports (images, fonts) and
@@ -76,6 +89,28 @@ export const copyLinkedAssets = (docs: string, site: string) => {
   }
 };
 
+// The hub takes an upload of at most 5000 files and 25 MB (packages/hub
+// publish.ts); the site, its history and its prototypes count together, and
+// so does the multipart framing: per part a boundary, a Content-Disposition
+// carrying the name twice (field and file name), a Content-Type and line
+// breaks, counted generously as 256 bytes plus twice the name.
+export const MAX_BUNDLE_FILES = 5000;
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const checkBundle = (out: string) => {
+  const parts = ['site', 'history', 'proto'].flatMap((top) =>
+    existsSync(path.join(out, top))
+      ? filesIn(path.join(out, top)).map((f) => ({ name: `${top}/${f}`, file: path.join(out, top, f) }))
+      : [],
+  );
+  const bytes = parts.reduce((sum, p) => sum + statSync(p.file).size + 256 + 2 * Buffer.byteLength(p.name), 0);
+  if (parts.length > MAX_BUNDLE_FILES)
+    throw new BuildError(`the build has ${parts.length} files; the hub takes at most ${MAX_BUNDLE_FILES}`);
+  if (bytes > MAX_UPLOAD_BYTES)
+    throw new BuildError(
+      `the build would upload ${(bytes / 1024 / 1024).toFixed(1)} MB; the hub takes at most ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`,
+    );
+};
+
 export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   const { positionals, values } = parseArgs({
     args: argv,
@@ -85,10 +120,17 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
       docs: { type: 'string', default: 'docs' },
       out: { type: 'string', default: '.specreview' },
       exclude: { type: 'string', multiple: true, default: [] },
+      prototypes: { type: 'string', multiple: true, default: [] },
     },
   });
   if (positionals[0] !== 'build' || positionals.length !== 1 || !values.repo) throw new BuildError(USAGE);
   checkExcludes(values.exclude);
+  checkExcludes(values.prototypes, '--prototypes');
+  // Prototype folders (#111) are left out of the site as excluded paths are,
+  // and published untouched; a path both excluded and listed stays out.
+  const leftOut = [...values.exclude, ...values.prototypes];
+  const isExcluded = excludedBy(values.exclude);
+  const isPrototype = (file: string) => excludedBy(values.prototypes)(file) && !isExcluded(file);
   const docsArg = path.resolve(cwd, values.docs);
   const out = path.resolve(cwd, values.out);
   if (!existsSync(docsArg)) throw new BuildError(`--docs ${values.docs} is not a folder`);
@@ -111,13 +153,21 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
   checkArguments(values.repo, { root, docs: docsArg, out });
   const docsRel = path.relative(root, realpathSync.native(docsArg)).split(path.sep).join('/');
 
-  const exported = exportDocs(root, docsRel, excludedBy(values.exclude));
+  const exported = exportDocs(root, docsRel, excludedBy(leftOut), isPrototype);
   try {
     const files = filesIn(exported.docs);
     // The home page is index.md, or a README.md at the top when there is none (#87).
     const home = files.includes('index.md') ? 'index.md' : files.includes('README.md') ? 'README.md' : null;
     if (!home) throw new BuildError(`${values.docs}/index.md or README.md is required, committed at HEAD`);
     checkPaths(files);
+    const protoFiles = exported.protoFiles;
+    checkPrototypes(protoFiles, values.prototypes, exported.treeFiles);
+    const prototypes = protoFiles.map((file) => ({
+      path: file,
+      hash: createHash('sha256')
+        .update(readFileSync(path.join(exported.proto, file)))
+        .digest('hex'),
+    }));
     checkMarkdown(exported.docs, files);
     // Front matter, titles and the sidebar, checked before VitePress runs.
     siteShape(exported.docs, values.repo, home);
@@ -137,7 +187,8 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
       out,
       vpRoot,
       home,
-      exclude: values.exclude,
+      exclude: leftOut,
+      prototypes,
     };
     writeFileSync(
       path.join(vpRoot, '.vitepress', 'config.mjs'),
@@ -152,10 +203,13 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
       await build(vpRoot);
       copyLinkedAssets(exported.docs, path.join(out, 'site'));
       copyMermaid(path.join(out, 'site'));
+      if (protoFiles.length > 0) cpSync(exported.proto, path.join(out, 'proto'), { recursive: true });
+      checkBundle(out);
     } catch (err) {
       // A failed build leaves no half-written site behind.
       rmSync(path.join(out, 'site'), { recursive: true, force: true });
       rmSync(path.join(out, 'history'), { recursive: true, force: true });
+      rmSync(path.join(out, 'proto'), { recursive: true, force: true });
       throw err;
     } finally {
       rmSync(vpRoot, { recursive: true, force: true });

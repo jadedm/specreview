@@ -86,6 +86,26 @@ describe('14: publishing', () => {
     ]);
   });
 
+  it('#111: collects prototype files after the site and history, only when the build has them', () => {
+    const withProto = mkdtempSync(path.join(tmpdir(), 'publish-proto-'));
+    for (const [file, text] of [
+      ['site/manifest.json', '{}'],
+      [`history/${'a'.repeat(40)}/page.md`, 'x'],
+      ['proto/product/prototypes/x/Main.dc.html', '<html></html>'],
+      ['proto/product/prototypes/x/support.js', 'x()'],
+    ]) {
+      mkdirSync(path.dirname(path.join(withProto, file)), { recursive: true });
+      writeFileSync(path.join(withProto, file), text);
+    }
+    expect(filesOf(withProto).map((f) => f.name)).toEqual([
+      'site/manifest.json',
+      `history/${'a'.repeat(40)}/page.md`,
+      'proto/product/prototypes/x/Main.dc.html',
+      'proto/product/prototypes/x/support.js',
+    ]);
+    rmSync(withProto, { recursive: true, force: true });
+  });
+
   it('sends one multipart request with every file and the token, refusing redirects', async () => {
     const { calls, fetchImpl } = stub([ok]);
     expect(

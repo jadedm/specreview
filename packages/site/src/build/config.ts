@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { PrototypeFile } from '@specreview/shared';
 import type { UserConfig } from 'vitepress';
 import { ASSET_TYPES, BuildError, excludedBy, filesIn, isInside } from './checks.js';
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
@@ -41,8 +42,11 @@ export type SiteOptions = {
   vpRoot: string;
   // The home page's source: index.md, or a top-level README.md without one (#87).
   home?: string | null;
-  // Paths left out of the site (#88), relative to the docs folder.
+  // Paths left out of the site (#88), relative to the docs folder; prototype
+  // folders (#111) included.
   exclude?: string[];
+  // Prototype files published untouched (#111), listed in the manifest.
+  prototypes?: PrototypeFile[];
 };
 
 // The markdown-it instance VitePress hands to markdown.config.
@@ -236,7 +240,17 @@ export const siteShape = (docs: string, repo: string, home?: string | null) => {
   return { title, themeConfig };
 };
 
-export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home, exclude = [] }: SiteOptions): UserConfig => {
+export const siteConfig = ({
+  repo,
+  docs,
+  root,
+  docsRel,
+  out,
+  vpRoot,
+  home,
+  exclude = [],
+  prototypes = [],
+}: SiteOptions): UserConfig => {
   const { title, themeConfig } = siteShape(docs, repo, home);
   const collected: Collected = new Map();
   const linkKeys = { excused: new Set<string>(), plain: new Set<string>() };
@@ -272,7 +286,7 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home, exclu
         issues: parseIssues(pageData.relativePath, pageData.frontmatter.issues),
       });
     },
-    buildEnd: buildEndFor(collected, historyDirOf(out), root, docsRel, excludedBy(exclude)),
+    buildEnd: buildEndFor(collected, historyDirOf(out), root, docsRel, excludedBy(exclude), prototypes),
     vite: {
       resolve: { alias: { vue: vueDir } },
       plugins: [

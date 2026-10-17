@@ -19,7 +19,7 @@ const script = (() => {
     .join('\n');
 })();
 
-const argsFor = (exclude: string) => {
+const argsFor = (exclude: string, prototypes = '') => {
   const dir = mkdtempSync(path.join(tmpdir(), 'action-'));
   const actionPath = path.join(dir, 'build');
   mkdirSync(path.join(dir, 'packages/site/dist/build'), { recursive: true });
@@ -38,6 +38,7 @@ const argsFor = (exclude: string) => {
       INPUT_DOCS: 'docs',
       INPUT_OUT: '.specreview',
       INPUT_EXCLUDE: exclude,
+      INPUT_PROTOTYPES: prototypes,
     },
   });
   expect(r.status, r.stderr).toBe(0);
@@ -59,5 +60,19 @@ describe('#88: the build action passes excludes through as they are', () => {
   it('spaces, quotes, $(...) and ; reach the build as one literal argument each, for it to refuse', () => {
     const lines = ['a b', '$(touch /tmp/owned)', 'x; echo hi', `it's "q"`, '*'];
     expect(argsFor(lines.join('\n')).slice(7)).toEqual(lines.flatMap((l) => ['--exclude', l]));
+  });
+});
+
+describe('#111: the build action passes prototype folders through the same way', () => {
+  it('one --prototypes per non-empty line, after the excludes, never word-split', () => {
+    expect(argsFor('drafts', 'product/prototypes\n\nother proto/x\n').slice(7)).toEqual([
+      '--exclude',
+      'drafts',
+      '--prototypes',
+      'product/prototypes',
+      '--prototypes',
+      'other proto/x',
+    ]);
+    expect(argsFor('', '').length).toBe(7);
   });
 });

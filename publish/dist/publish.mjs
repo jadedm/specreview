@@ -41,7 +41,7 @@ var actionsToken = async (audience, env2, fetchImpl) => {
     throw new PublishError(`the OIDC token request failed (${res.status})`);
   return body.value;
 };
-var filesOf = (out) => ["site", "history"].flatMap((top) => {
+var filesOf = (out) => ["site", "history", "proto"].flatMap((top) => {
   const dir = path.join(out, top);
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { recursive: true, withFileTypes: true }).filter((d) => d.isFile()).map((d) => {

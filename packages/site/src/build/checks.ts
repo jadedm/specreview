@@ -2,7 +2,17 @@
 // failure names the file or the argument, so a product repo's CI log says
 // what to fix.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isExcludePattern } from '@specreview/shared';
@@ -96,11 +106,12 @@ const atRootDot = (file: string) => file.split('/')[0].startsWith('.');
 // name, ** across folders; with no wildcard, a file or a whole folder.
 export const MAX_EXCLUDES = 20;
 
-export const checkExcludes = (patterns: string[]) => {
-  if (patterns.length > MAX_EXCLUDES) throw new BuildError(`at most ${MAX_EXCLUDES} --exclude patterns`);
+// --exclude and --prototypes (#111) take the same patterns.
+export const checkExcludes = (patterns: string[], flag = '--exclude') => {
+  if (patterns.length > MAX_EXCLUDES) throw new BuildError(`at most ${MAX_EXCLUDES} ${flag} patterns`);
   for (const p of patterns)
     if (!isExcludePattern(p))
-      throw new BuildError(`--exclude ${JSON.stringify(p)}: a path in the docs folder, with * and ** as wildcards`);
+      throw new BuildError(`${flag} ${JSON.stringify(p)}: a path in the docs folder, with * and ** as wildcards`);
 };
 
 export const excludedBy = (patterns: string[]) => {
@@ -123,17 +134,33 @@ export const excludedBy = (patterns: string[]) => {
   return (file: string) => tests.some((t) => t(file));
 };
 
+// Prototype files (#111) are left out of the site like excluded ones, but
+// are first moved aside, from this same export, into `proto`: one snapshot
+// for the site and its prototypes. `excluded` must cover them too.
 export const exportDocs = (
   root: string,
   docsRel: string,
   excluded: (file: string) => boolean = () => false,
-): { docs: string; remove: () => void } => {
+  prototype: (file: string) => boolean = () => false,
+): { docs: string; proto: string; protoFiles: string[]; treeFiles: string[]; remove: () => void } => {
   const inDocs = (file: string) => (docsRel === '' ? file : file.slice(docsRel.length + 1));
   const tree = git(root, ['ls-tree', '-r', '-z', 'HEAD', '--', docsRel === '' ? '.' : docsRel]);
+  // From git's list, not the disk: a case-insensitive disk would merge two
+  // names that differ only in case.
+  const protoFiles: string[] = [];
+  const treeFiles: string[] = [];
   for (const entry of tree.split('\0').filter(Boolean)) {
     const [meta, file] = entry.split('\t');
-    if ((docsRel === '' && atRootDot(file)) || excluded(inDocs(file))) continue;
+    if (docsRel === '' && atRootDot(file)) continue;
     const mode = meta.split(' ')[0];
+    // Published untouched, so a link or a submodule there is refused too.
+    if (prototype(inDocs(file)) && mode === '120000')
+      throw new BuildError(`${file}: symlinks are not allowed in a prototype folder`);
+    if (prototype(inDocs(file)) && mode === '160000')
+      throw new BuildError(`${file}: submodules are not allowed in a prototype folder`);
+    treeFiles.push(inDocs(file));
+    if (prototype(inDocs(file))) protoFiles.push(inDocs(file));
+    if (excluded(inDocs(file))) continue;
     if (mode === '120000') throw new BuildError(`${file}: symlinks are not allowed in the docs folder`);
     if (mode === '160000') throw new BuildError(`${file}: submodules are not allowed in the docs folder`);
   }
@@ -155,11 +182,65 @@ export const exportDocs = (
   // Excluded paths (#88) go before any check sees them, links included (the
   // symlink check above skipped them, so one must not stay to be followed).
   const docs = path.join(into, docsRel);
-  for (const entry of readdirSync(docs, { recursive: true, withFileTypes: true })) {
-    const file = path.relative(docs, path.join(entry.parentPath, entry.name)).split(path.sep).join('/');
-    if (!entry.isDirectory() && excluded(file)) rmSync(path.join(docs, file), { force: true });
+  const proto = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'specreview-proto-')));
+  const remove = () => {
+    rmSync(into, { recursive: true, force: true });
+    rmSync(proto, { recursive: true, force: true });
+  };
+  try {
+    for (const entry of readdirSync(docs, { recursive: true, withFileTypes: true })) {
+      const file = path.relative(docs, path.join(entry.parentPath, entry.name)).split(path.sep).join('/');
+      if (entry.isDirectory() || !excluded(file)) continue;
+      if (prototype(file) && entry.isFile()) {
+        mkdirSync(path.dirname(path.join(proto, file)), { recursive: true });
+        renameSync(path.join(docs, file), path.join(proto, file));
+      } else rmSync(path.join(docs, file), { force: true });
+    }
+    // What was set aside must be exactly git's list: a case-insensitive disk
+    // can unpack docs/proto/x into docs/Proto/x, and .gitattributes can drop
+    // a file from the archive (export-ignore).
+    protoFiles.sort();
+    caseClash(protoFiles);
+    const onDisk = filesIn(proto);
+    if (onDisk.length !== protoFiles.length || onDisk.some((f, i) => f !== protoFiles[i]))
+      throw new BuildError(
+        'the prototype files unpacked differ from those committed (two folders differing only in case, or a file .gitattributes leaves out of the archive)',
+      );
+  } catch (err) {
+    remove();
+    throw err;
   }
-  return { docs, remove: () => rmSync(into, { recursive: true, force: true }) };
+  return { docs, proto, protoFiles, treeFiles, remove };
+};
+
+const caseClash = (files: string[]) => {
+  const seen = new Map<string, string>();
+  for (const file of files) {
+    const other = seen.get(file.toLowerCase());
+    if (other) throw new BuildError(`${file} and ${other}: prototype paths may not differ only in case`);
+    seen.set(file.toLowerCase(), file);
+  }
+};
+
+// Prototype files (#111): names the hub's router takes (no leading dot, not
+// under _api, _history or _signin), no two differing only in case (one
+// would overwrite the other on a case-insensitive disk), and every
+// --prototypes pattern matching something (a typo would publish nothing).
+export const checkPrototypes = (files: string[], patterns: string[], tree: string[] = files) => {
+  for (const file of files) {
+    const parts = file.split('/');
+    if (!parts.every((p) => SEGMENT.test(p)))
+      throw new BuildError(
+        `${file}: prototype file names may use only letters, digits and . _ ~ -, not start with a dot`,
+      );
+    if (RESERVED.has(parts[0])) throw new BuildError(`${file}: the path may not start with _api, _history or _signin`);
+  }
+  caseClash(files);
+  // Against every committed file: a pattern whose matches are all excluded
+  // still matched something (exclude wins, quietly).
+  for (const pattern of patterns)
+    if (!tree.some(excludedBy([pattern])))
+      throw new BuildError(`--prototypes ${JSON.stringify(pattern)} matches no committed file in the docs folder`);
 };
 
 // Every file of the exported docs, relative to it.

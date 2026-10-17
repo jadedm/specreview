@@ -15,6 +15,7 @@ import {
   type Manifest,
   type ManifestPage,
   type Section,
+  type PrototypeFile,
 } from '@specreview/shared';
 import type { SiteConfig } from 'vitepress';
 
@@ -196,6 +197,7 @@ export const buildEndFor =
     repo: string,
     docsRel: string,
     excluded: (file: string) => boolean = () => false,
+    prototypes: PrototypeFile[] = [],
   ) =>
   (config: SiteConfig): void => {
     const contentPrefix = docsRel === '' ? '' : `${docsRel}/`;
@@ -255,6 +257,7 @@ export const buildEndFor =
       builtAt: new Date().toISOString(),
       csp: cspFor(hashes),
       pages,
+      ...(prototypes.length > 0 ? { prototypes } : {}),
     };
     if (!isManifest(manifest)) throw new Error('the built manifest is not one the hub would accept');
     const text = JSON.stringify(manifest);

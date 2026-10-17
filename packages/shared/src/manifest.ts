@@ -1,4 +1,4 @@
-import type { HistoryEntry, Manifest, ManifestPage, Section } from './text.js';
+import type { HistoryEntry, Manifest, ManifestPage, PrototypeFile, Section } from './text.js';
 
 // The manifest a build writes and the hub reads. Both validate it with this
 // one function, so a build never publishes a manifest the hub would refuse.
@@ -48,6 +48,28 @@ const isPage = (p: unknown): p is ManifestPage => {
   );
 };
 
+// Prototype paths (#111), as the hub's router takes them: segments of
+// letters, digits and . _ ~ -, none starting with a dot, the first not _api,
+// _history or _signin; listed in ascending order, each once and unique
+// ignoring case (a case-insensitive disk would merge two), with a sha256 of
+// the file's bytes. The hub relies on this for what a publisher sends.
+const PROTO_SEGMENT = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/;
+const RESERVED_FIRST = new Set(['_api', '_history', '_signin']);
+const SHA256 = /^[0-9a-f]{64}$/;
+const isPrototypePath = (path: unknown): path is string =>
+  isString(path) && path.split('/').every((s) => PROTO_SEGMENT.test(s)) && !RESERVED_FIRST.has(path.split('/')[0]);
+const isPrototypes = (list: unknown): list is PrototypeFile[] =>
+  Array.isArray(list) &&
+  list.every(
+    (p, i) =>
+      typeof p === 'object' &&
+      p !== null &&
+      isPrototypePath((p as PrototypeFile).path) &&
+      SHA256.test(String((p as PrototypeFile).hash)) &&
+      (i === 0 || (list[i - 1] as PrototypeFile).path < (p as PrototypeFile).path),
+  ) &&
+  new Set(list.map((p: PrototypeFile) => p.path.toLowerCase())).size === list.length;
+
 export const isManifest = (m: unknown): m is Manifest => {
   if (typeof m !== 'object' || m === null || Array.isArray(m)) return false;
   const man = m as Manifest & { csp?: unknown };
@@ -56,5 +78,6 @@ export const isManifest = (m: unknown): m is Manifest => {
   // broken manifest (503) rather than a header error on every page (500).
   if (man.csp !== undefined && (!isString(man.csp) || !CSP.test(man.csp))) return false;
   if (typeof man.pages !== 'object' || man.pages === null || Array.isArray(man.pages)) return false;
+  if (man.prototypes !== undefined && !isPrototypes(man.prototypes)) return false;
   return Object.values(man.pages).every(isPage);
 };
