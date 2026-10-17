@@ -212,7 +212,12 @@ export const deploy = async ({
   if (dryRun) return;
   // Each hostname on its own: the docs hostname can answer while the admin
   // hostname's record or certificate is still being made (#75).
-  for (const host of [org.hub.hostname, ...(org.hub.adminHostname ? [org.hub.adminHostname] : [])]) {
+  // The prototype hostname too (#116).
+  for (const host of [
+    org.hub.hostname,
+    ...(org.hub.adminHostname ? [org.hub.adminHostname] : []),
+    ...(org.hub.protoHostname ? [org.hub.protoHostname] : []),
+  ]) {
     log(`waiting for https://${host}/ to answer`);
     const answeredBy = await wait(host, deployable(org.hub).access.teamDomain);
     log(`deployed: https://${host}/`);

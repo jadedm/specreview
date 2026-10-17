@@ -604,3 +604,78 @@ describe('#75: the admin hostname in deploy', () => {
     }
   });
 });
+
+describe('#116: the prototype hostname in deploy', () => {
+  const withProtoHub = (ids = true, admin = false) => {
+    const hub = exampleHub() as { access: Record<string, string> } & Record<string, unknown>;
+    return {
+      ...hub,
+      protoHostname: 'specs-proto.acme.dev',
+      ...(admin ? { adminHostname: 'specs-admin.acme.dev' } : {}),
+      access: {
+        ...hub.access,
+        ...(ids ? { protoPolicyId: 'pol-proto', protoAppId: 'app-proto', protoAud: 'aud-proto' } : {}),
+        ...(admin ? { adminPolicyId: 'pol-admin', adminAppId: 'app-admin', adminAud: 'aud-admin' } : {}),
+      },
+    };
+  };
+  const exampleConfig = () => JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8'));
+
+  it('3, 11: it is a route, and the Worker config names it with its audience, with or without an admin hostname', () => {
+    for (const admin of [false, true]) {
+      const cfg = wranglerConfig(loadOrg(orgDir(withProtoHub(true, admin), exampleConfig()).dir));
+      expect(
+        cfg.routes.map((r) => r.pattern),
+        String(admin),
+      ).toEqual(['specs.acme.dev', ...(admin ? ['specs-admin.acme.dev'] : []), 'specs-proto.acme.dev']);
+      const merged = JSON.parse(cfg.vars.SPECREVIEW_CONFIG) as Record<string, unknown>;
+      expect([merged.hostname, merged.protoHostname, merged.accessProtoAud], String(admin)).toEqual([
+        'specs.acme.dev',
+        'specs-proto.acme.dev',
+        'aud-proto',
+      ]);
+      expect('adminHostname' in merged, String(admin)).toBe(admin);
+    }
+  });
+
+  it('2: a hub without its prototype ids is not deployable', async () => {
+    const { dir, tokenFile } = orgDir(withProtoHub(false));
+    const { run, calls } = recorder();
+    await expect(
+      deploy({ org: loadOrg(dir), tokenFile, cf: cfFor(tokenFile), run, log: () => {}, dryRun: false, wait: noWait }),
+    ).rejects.toThrow('access.protoPolicyId, access.protoAppId, access.protoAud');
+    expect(calls).toEqual([]);
+  });
+
+  it('11: deploy waits for each of the three hostnames on its own', async () => {
+    const { dir, tokenFile } = orgDir(withProtoHub(true, true));
+    const { run } = recorder();
+    const waited: string[] = [];
+    await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run,
+      log: () => {},
+      dryRun: false,
+      wait: async (host) => {
+        waited.push(host);
+        return 'resolver' as const;
+      },
+    });
+    expect(waited).toEqual(['specs.acme.dev', 'specs-admin.acme.dev', 'specs-proto.acme.dev']);
+  });
+
+  it('1: hub.json refuses a malformed prototype hostname, or one equal to the docs or admin hostname', () => {
+    for (const [patch, message] of [
+      [{ protoHostname: 'https://x.acme.dev' }, 'hub.json protoHostname must be a bare lowercase hostname'],
+      [{ protoHostname: 'specs.acme.dev' }, 'hub.json protoHostname must differ from hostname and adminHostname'],
+      [
+        { protoHostname: 'specs-admin.acme.dev', adminHostname: 'specs-admin.acme.dev' },
+        'hub.json protoHostname must differ from hostname and adminHostname',
+      ],
+    ] as const) {
+      expect(() => loadOrg(orgDir({ ...exampleHub(), ...patch }).dir), JSON.stringify(patch)).toThrow(message);
+    }
+  });
+});

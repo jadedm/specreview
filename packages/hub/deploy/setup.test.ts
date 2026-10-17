@@ -1085,3 +1085,313 @@ describe('#91: who passes Access', () => {
     );
   });
 });
+
+describe('#116: the prototype hostname in Access', () => {
+  const PROTO_HOST = 'specs-proto.acme.dev';
+  const setHub = (dir: { dir: string }, patch: Record<string, unknown>) => {
+    const file = path.join(dir.dir, 'hub.json');
+    const hub = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...hub, ...patch }));
+  };
+  const withProto = (dir: { dir: string }) => setHub(dir, { protoHostname: PROTO_HOST });
+  const hubFile = (dir: { dir: string }) => readFileSync(path.join(dir.dir, 'hub.json'), 'utf8');
+
+  it('4: an existing hub gaining it gets only a readers policy equal to the main one and an app; nothing else changes', async () => {
+    const { state, dir, hub: before } = await applied();
+    const othersBefore = structuredClone({ apps: state.apps, policies: state.policies });
+    withProto(dir);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
+      ['POST', '/access/policies'],
+      ['POST', '/access/apps'],
+    ]);
+    const main = state.policies.find((p) => p.id === r.hubJson.access?.policyId)!;
+    const policy = state.policies.find((p) => p.id === r.hubJson.access?.protoPolicyId)!;
+    expect([policy.name, policy.decision, policy.include]).toEqual([
+      `specreview ${PROTO_HOST} readers`,
+      'allow',
+      main.include,
+    ]);
+    const app = state.apps.find((x) => x.id === r.hubJson.access?.protoAppId)!;
+    expect([app.domain, app.policies.map((p) => p.id), app.allowed_idps, app.aud]).toEqual([
+      PROTO_HOST,
+      [policy.id],
+      [state.idps[0].id],
+      r.hubJson.access?.protoAud,
+    ]);
+    expect(state.apps.filter((x) => x.id !== app.id)).toEqual(othersBefore.apps);
+    expect(state.policies.filter((p) => p.id !== policy.id)).toEqual(othersBefore.policies);
+    const { protoPolicyId: _p, protoAppId: _a, protoAud: _d, ...restAccess } = r.hubJson.access ?? {};
+    expect(restAccess).toEqual(before.access);
+    const again = await run(state, { apply: true, dir });
+    expect(again.writes()).toEqual([]);
+  });
+
+  it('5: the readers policy follows the main one when a reader is added', async () => {
+    const { state, dir } = await applied();
+    withProto(dir);
+    await run(state, { apply: true, dir });
+    const config = structuredClone(CONFIG);
+    config.sites[0].readers = [...config.sites[0].readers, 'new@partner.example'];
+    writeFileSync(path.join(dir.dir, 'specreview.config.json'), JSON.stringify(config));
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    const main = state.policies.find((p) => p.id === r.hubJson.access?.policyId)!;
+    const proto = state.policies.find((p) => p.id === r.hubJson.access?.protoPolicyId)!;
+    expect(proto.include).toEqual(main.include);
+    expect(proto.include).toContainEqual({ email: { email: 'new@partner.example' } });
+  });
+
+  it('6: a conflict on the hostname is refused before anything is created, hub.json untouched', async () => {
+    const cases: [string, (s: FakeState) => void, RegExp][] = [
+      [
+        'a DNS record',
+        (s) => s.dns.z1.push({ name: PROTO_HOST }),
+        new RegExp(`${PROTO_HOST} already has a DNS record`),
+      ],
+      [
+        'another Worker',
+        (s) => s.workerDomains.push({ hostname: PROTO_HOST, service: 'their-worker' }),
+        /custom domain of Worker their-worker/,
+      ],
+    ];
+    for (const [name, change, why] of cases) {
+      const { state, dir } = await applied();
+      withProto(dir);
+      const before = hubFile(dir);
+      change(state);
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, name).toMatch(why);
+      expect(r.writes(), name).toEqual([]);
+      expect(hubFile(dir), name).toBe(before);
+    }
+  });
+
+  it('7: an unrecorded app or policy of its name, a CORS-open app, a WARP app or one covering more is refused', async () => {
+    const theirsApp = await applied();
+    theirsApp.state.apps.push({
+      id: 'theirs',
+      domain: PROTO_HOST,
+      type: 'self_hosted',
+      aud: 'x',
+      name: 'theirs',
+      policies: [],
+    });
+    withProto(theirsApp.dir);
+    let r = await run(theirsApp.state, { apply: true, dir: theirsApp.dir });
+    expect(r.error?.message).toMatch(new RegExp(`an Access app for ${PROTO_HOST}`));
+    expect(r.writes()).toEqual([]);
+    const theirsPolicy = await applied();
+    theirsPolicy.state.policies.push({
+      id: 'pol-theirs',
+      name: `specreview ${PROTO_HOST} readers`,
+      decision: 'allow',
+      include: [],
+    });
+    withProto(theirsPolicy.dir);
+    r = await run(theirsPolicy.state, { apply: true, dir: theirsPolicy.dir });
+    expect(r.error?.message).toMatch(new RegExp(`an Access policy named "specreview ${PROTO_HOST} readers"`));
+    expect(r.writes()).toEqual([]);
+    const { state, dir } = await applied();
+    withProto(dir);
+    const first = await run(state, { apply: true, dir });
+    const app = state.apps.find((x) => x.id === first.hubJson.access?.protoAppId)!;
+    for (const [setting, value, why] of [
+      ['cors_headers', { allow_all_origins: true }, /lets other origins read it/],
+      ['options_preflight_bypass', true, /lets other origins read it/],
+      ['allow_authenticate_via_warp', true, /allows sign-in through a WARP session/],
+    ] as const) {
+      (app as Record<string, unknown>)[setting] = value;
+      const before = hubFile(dir);
+      const again = await run(state, { apply: true, dir });
+      expect(again.error?.message, setting).toMatch(why);
+      expect(again.writes(), setting).toEqual([]);
+      expect(hubFile(dir), setting).toBe(before);
+      delete (app as Record<string, unknown>)[setting];
+    }
+    // Covering more than the hostname.
+    app.destinations!.push({ type: 'public', uri: 'more.acme.dev' });
+    app.self_hosted_domains = app.destinations!.map((d) => d.uri);
+    const more = await run(state, { apply: true, dir });
+    expect(more.error?.message).toMatch(/not only specs-proto\.acme\.dev/);
+    expect(more.writes()).toEqual([]);
+  });
+
+  it('8: the app or policy changed by hand, gone while still configured, or ids aliasing others are refused', async () => {
+    const edits: [string, (s: FakeState, ids: Record<string, string>, dir: { dir: string }) => void, RegExp][] = [
+      [
+        'another audience',
+        (s, ids) => (s.apps.find((x) => x.id === ids.protoAppId)!.aud = 'aud-other'),
+        /different audience/,
+      ],
+      [
+        'a policy on two apps',
+        (s, ids) => s.apps.find((x) => x.id === ids.appId)!.policies.push({ id: ids.protoPolicyId }),
+        /used by one app/,
+      ],
+      [
+        'the app gone',
+        (s, ids) => (s.apps = s.apps.filter((x) => x.id !== ids.protoAppId)),
+        /recorded in hub.json is not in the account/,
+      ],
+      [
+        'the policy gone',
+        (s, ids) => (s.policies = s.policies.filter((p) => p.id !== ids.protoPolicyId)),
+        /recorded in hub.json is not in the account/,
+      ],
+      [
+        'policy id aliasing the main one',
+        (_s, ids, dir) => setHub(dir, { access: { ...ids, protoPolicyId: ids.policyId } }),
+        /access\.protoPolicyId .* is another of the hub's policies/,
+      ],
+      [
+        'app id aliasing the main one',
+        (_s, ids, dir) => setHub(dir, { access: { ...ids, protoAppId: ids.appId } }),
+        /access\.protoAppId .* is another of the hub's apps/,
+      ],
+    ];
+    for (const [name, edit, why] of edits) {
+      const { state, dir } = await applied();
+      withProto(dir);
+      const first = await run(state, { apply: true, dir });
+      edit(state, first.hubJson.access as Record<string, string>, dir);
+      const before = hubFile(dir);
+      const r = await run(state, { apply: true, dir });
+      expect(r.error?.message, name).toMatch(why);
+      expect(r.writes(), name).toEqual([]);
+      expect(hubFile(dir), name).toBe(before);
+    }
+  });
+
+  it('9: removing it deletes the app, then the policy, and forgets them; refused while either is not only ours', async () => {
+    const { state, dir } = await applied();
+    withProto(dir);
+    const first = await run(state, { apply: true, dir });
+    const ids = first.hubJson.access as Record<string, string>;
+    const file = path.join(dir.dir, 'hub.json');
+    const { protoHostname: _h, ...withoutHost } = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify(withoutHost));
+    const mainApp = state.apps.find((x) => x.id === ids.appId)!;
+    mainApp.policies.push({ id: ids.protoPolicyId });
+    const refused = await run(state, { apply: true, dir });
+    expect(refused.error?.message).toMatch(/recorded as the prototype hostname's is used by other apps/);
+    expect(refused.writes()).toEqual([]);
+    mainApp.policies.pop();
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    expect(r.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
+      ['DELETE', `/access/apps/${ids.protoAppId}`],
+      ['DELETE', `/access/policies/${ids.protoPolicyId}`],
+    ]);
+    expect(Object.keys(r.hubJson.access ?? {}).filter((k) => k.startsWith('proto'))).toEqual([]);
+  });
+
+  it('removal with the app already gone refuses a policy another app now uses', async () => {
+    const { state, dir } = await applied();
+    withProto(dir);
+    const first = await run(state, { apply: true, dir });
+    const ids = first.hubJson.access as Record<string, string>;
+    state.apps = state.apps.filter((x) => x.id !== ids.protoAppId);
+    state.apps.find((x) => x.id === ids.appId)!.policies.push({ id: ids.protoPolicyId });
+    const file = path.join(dir.dir, 'hub.json');
+    const { protoHostname: _h, ...withoutHost } = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify(withoutHost));
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(/recorded as the prototype hostname's is used by other apps/);
+    expect(r.writes()).toEqual([]);
+  });
+
+  it('an admin id that is another resource of the hub is refused too', async () => {
+    const { state, dir } = await applied();
+    const ids = (await run(state, { apply: true, dir })).hubJson.access as Record<string, string>;
+    setHub(dir, { access: { ...ids, adminPolicyId: ids.policyId } });
+    const before = hubFile(dir);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(/access\.adminPolicyId .* is another of the hub's policies/);
+    expect(r.writes()).toEqual([]);
+    expect(hubFile(dir)).toBe(before);
+  });
+
+  it('saved between steps: a failed create keeps the policy id and a rerun makes only the app; a failed delete keeps only the policy', async () => {
+    const { state, dir } = await applied();
+    withProto(dir);
+    const failApp = await run(state, {
+      apply: true,
+      dir,
+      fake: { failOn: (q) => q.method === 'POST' && q.path.endsWith('/access/apps') },
+    });
+    expect(failApp.error).not.toBeNull();
+    expect(failApp.hubJson.access?.protoPolicyId).toBeDefined();
+    expect(failApp.hubJson.access?.protoAppId).toBeUndefined();
+    const resumed = await run(state, { apply: true, dir });
+    expect(resumed.error).toBeNull();
+    expect(resumed.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
+      ['POST', '/access/apps'],
+    ]);
+    const ids = resumed.hubJson.access as Record<string, string>;
+    const file = path.join(dir.dir, 'hub.json');
+    const { protoHostname: _h, ...withoutHost } = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify(withoutHost));
+    const failPolicy = await run(state, {
+      apply: true,
+      dir,
+      fake: { failOn: (q) => q.method === 'DELETE' && q.path.includes('/access/policies/') },
+    });
+    expect(failPolicy.error).not.toBeNull();
+    expect([failPolicy.hubJson.access?.protoAppId, failPolicy.hubJson.access?.protoPolicyId]).toEqual([
+      undefined,
+      ids.protoPolicyId,
+    ]);
+    const finished = await run(state, { apply: true, dir });
+    expect(finished.writes().map((w) => [w.method, w.path.replace(`/accounts/${ACCOUNT}`, '')])).toEqual([
+      ['DELETE', `/access/policies/${ids.protoPolicyId}`],
+    ]);
+  });
+
+  it('10: an unrecorded app on a path under the prototype hostname is refused', async () => {
+    const { state, dir } = await applied();
+    withProto(dir);
+    await run(state, { apply: true, dir });
+    state.apps.push({
+      id: 'stray',
+      domain: `${PROTO_HOST}/sidecar/x`,
+      type: 'self_hosted',
+      aud: 's',
+      name: 'stray',
+      policies: [],
+    });
+    const r = await run(state, { apply: true, dir });
+    expect(r.error?.message).toMatch(new RegExp(`Access app stray .* covers ${PROTO_HOST}/sidecar/x`));
+    expect(r.writes()).toEqual([]);
+  });
+
+  it('12: with admin and prototype hostnames, each keeps its own app and policy', async () => {
+    const { state, dir } = await applied();
+    setHub(dir, { adminHostname: 'specs-admin.acme.dev', protoHostname: PROTO_HOST });
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    const a = r.hubJson.access as Record<string, string>;
+    expect(new Set([a.policyId, a.adminPolicyId, a.protoPolicyId]).size).toBe(3);
+    expect(new Set([a.appId, a.adminAppId, a.protoAppId]).size).toBe(3);
+    expect(state.apps.find((x) => x.id === a.adminAppId)!.domain).toBe('specs-admin.acme.dev');
+    expect(state.apps.find((x) => x.id === a.protoAppId)!.domain).toBe(PROTO_HOST);
+    expect((await run(state, { apply: true, dir })).writes()).toEqual([]);
+  });
+
+  it('a public site: the prototype hostname joins no bypass app and adds no destination to the docs app', async () => {
+    const state = emptyAccount();
+    const config = { ...CONFIG, sites: [{ ...CONFIG.sites[0], visibility: 'public' }] };
+    const dir = orgDir({ ...BARE_HUB, protoHostname: PROTO_HOST }, config);
+    const r = await run(state, { apply: true, dir });
+    expect(r.error).toBeNull();
+    const a = r.hubJson.access as Record<string, string>;
+    const uris = (id: string) => [
+      ...(state.apps.find((x) => x.id === id)?.destinations ?? []).map((d) => d.uri),
+      ...(state.apps.find((x) => x.id === id)?.self_hosted_domains ?? []),
+      state.apps.find((x) => x.id === id)?.domain ?? '',
+    ];
+    expect([...uris(a.appId), ...uris(a.publicAppId)].some((u) => u.includes(PROTO_HOST))).toBe(false);
+    expect(uris(a.protoAppId).every((u) => u === PROTO_HOST || u === '')).toBe(true);
+  });
+});

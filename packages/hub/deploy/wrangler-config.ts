@@ -67,7 +67,11 @@ export const wranglerConfig = (org: Org, hubDir = HUB_DIR, logo?: Logo | null) =
     workers_dev: false,
     preview_urls: false,
     // The admin page's own hostname too, when it has one (#75).
-    routes: [hub.hostname, ...(hub.adminHostname ? [hub.adminHostname] : [])].map((pattern) => ({
+    routes: [
+      hub.hostname,
+      ...(hub.adminHostname ? [hub.adminHostname] : []),
+      ...(hub.protoHostname ? [hub.protoHostname] : []),
+    ].map((pattern) => ({
       pattern,
       custom_domain: true,
     })),
