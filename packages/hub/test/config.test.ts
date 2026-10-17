@@ -285,15 +285,19 @@ describe('14 (#57): configRepo', () => {
 
 describe('#75: the admin hostname', () => {
   const without = () => {
-    const { hostname: _h, adminHostname: _a, accessAdminAud: _d, ...rest } = valid();
+    const { adminHostname: _a, accessAdminAud: _d, ...rest } = valid();
     return rest;
   };
-  it('is optional, and the three keys go together', () => {
+  it('is optional; it goes with its audience, and either needs the docs hostname', () => {
     expect(problemsIn(without())).toEqual([]);
-    for (const key of ['hostname', 'adminHostname', 'accessAdminAud'] as const) {
+    for (const [key, problem] of [
+      ['hostname', 'hostname goes with adminHostname or protoHostname'],
+      ['adminHostname', 'adminHostname and accessAdminAud go together'],
+      ['accessAdminAud', 'adminHostname and accessAdminAud go together'],
+    ] as const) {
       const c = valid() as Record<string, unknown>;
       delete c[key];
-      expect(problemsIn(c), key).toEqual(['hostname, adminHostname and accessAdminAud go together']);
+      expect(problemsIn(c), key).toEqual([problem]);
     }
   });
   it.each([

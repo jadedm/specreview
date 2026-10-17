@@ -51,6 +51,10 @@ export type HubConfig = {
   // origin, which it names (docsHostname) for what it writes, such as a new
   // site's workflow. Null when the hub has none, and then there is no admin page.
   admin: { hostname: string; aud: string; docsHostname: string } | null;
+  // The prototypes' own hostname and its Access application's audience
+  // (#112): prototypes are served only there, apart from the docs and admin
+  // origins. Null when the hub has none.
+  proto: { hostname: string; aud: string } | null;
   admins: string[];
   // GitHub's numeric id of the org: publish tokens must carry it.
   ownerId: string;
@@ -141,6 +145,8 @@ const TOP_KEYS = new Set([
   'hostname',
   'adminHostname',
   'accessAdminAud',
+  'protoHostname',
+  'accessProtoAud',
   'admins',
   'teamLabel',
   'brand',
@@ -339,8 +345,18 @@ export const problemsIn = (raw: unknown): string[] => {
   }
   if (cfg.adminHostname !== undefined && (typeof cfg.adminHostname !== 'string' || !DOMAIN.test(cfg.adminHostname)))
     problems.push('adminHostname must be a bare lowercase hostname');
-  const adminKeys = [cfg.hostname, cfg.adminHostname, cfg.accessAdminAud].filter((v) => v !== undefined).length;
-  if (adminKeys !== 0 && adminKeys !== 3) problems.push('hostname, adminHostname and accessAdminAud go together');
+  if (cfg.protoHostname !== undefined && (typeof cfg.protoHostname !== 'string' || !DOMAIN.test(cfg.protoHostname)))
+    problems.push('protoHostname must be a bare lowercase hostname');
+  // Each extra hostname comes with its Access audience, and either needs the
+  // docs sites' hostname (#75, #112).
+  if ((cfg.adminHostname === undefined) !== (cfg.accessAdminAud === undefined))
+    problems.push('adminHostname and accessAdminAud go together');
+  if ((cfg.protoHostname === undefined) !== (cfg.accessProtoAud === undefined))
+    problems.push('protoHostname and accessProtoAud go together');
+  const extra = [cfg.adminHostname, cfg.accessAdminAud, cfg.protoHostname, cfg.accessProtoAud].some(
+    (v) => v !== undefined,
+  );
+  if (extra !== (cfg.hostname !== undefined)) problems.push('hostname goes with adminHostname or protoHostname');
   if (cfg.hostname !== undefined && (typeof cfg.hostname !== 'string' || !DOMAIN.test(cfg.hostname)))
     problems.push('hostname must be a bare lowercase hostname');
   if (cfg.hostname !== undefined && cfg.hostname === cfg.adminHostname)
@@ -352,6 +368,15 @@ export const problemsIn = (raw: unknown): string[] => {
     problems.push('accessAdminAud is malformed');
   if (cfg.accessAdminAud !== undefined && cfg.accessAdminAud === cfg.accessAud)
     problems.push("accessAdminAud must be the admin hostname's own Access application, not the hub's");
+  if (cfg.protoHostname !== undefined && [cfg.hostname, cfg.adminHostname].includes(cfg.protoHostname))
+    problems.push('protoHostname must differ from the docs and admin hostnames');
+  if (
+    cfg.accessProtoAud !== undefined &&
+    (typeof cfg.accessProtoAud !== 'string' || !/^\S{1,200}$/.test(cfg.accessProtoAud))
+  )
+    problems.push('accessProtoAud is malformed');
+  if (cfg.accessProtoAud !== undefined && [cfg.accessAud, cfg.accessAdminAud].includes(cfg.accessProtoAud))
+    problems.push("accessProtoAud must be the prototype hostname's own Access application");
   const label = labelProblem(cfg.teamLabel);
   if (label) problems.push(`teamLabel ${label}`);
   problems.push(...brandProblems(cfg.brand));
@@ -399,6 +424,8 @@ export const configOf = (text: string | undefined): HubConfig => {
     hostname?: string;
     adminHostname?: string;
     accessAdminAud?: string;
+    protoHostname?: string;
+    accessProtoAud?: string;
     admins: string[];
     ownerId: string;
     configRepo?: string;
@@ -427,6 +454,10 @@ export const configOf = (text: string | undefined): HubConfig => {
     admin:
       cfg.hostname && cfg.adminHostname && cfg.accessAdminAud
         ? { hostname: cfg.adminHostname, aud: cfg.accessAdminAud, docsHostname: cfg.hostname }
+        : null,
+    proto:
+      cfg.hostname && cfg.protoHostname && cfg.accessProtoAud
+        ? { hostname: cfg.protoHostname, aud: cfg.accessProtoAud }
         : null,
     admins: cfg.admins,
     ownerId: cfg.ownerId,

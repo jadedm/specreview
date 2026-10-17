@@ -153,7 +153,17 @@ export const loadOrg = (dir: string): Org => {
   const config = readJson(path.join(dir, 'specreview.config.json'));
   const problems = hubProblems(hub);
   if (!isObject(config)) problems.push('specreview.config.json is not a JSON object');
-  for (const key of ['accessTeamDomain', 'accessAud', 'hostname', 'adminHostname', 'accessAdminAud']) {
+  // The prototype hostname too (#112): it belongs in hub.json with its Access
+  // app, which setup does not create yet (#116).
+  for (const key of [
+    'accessTeamDomain',
+    'accessAud',
+    'hostname',
+    'adminHostname',
+    'accessAdminAud',
+    'protoHostname',
+    'accessProtoAud',
+  ]) {
     if (isObject(config) && key in config) problems.push(`specreview.config.json sets ${key}; it belongs in hub.json`);
   }
   if (problems.length > 0) throw new DeployError(`the organisation folder has problems:\n  ${problems.join('\n  ')}`);

@@ -52,12 +52,19 @@ const sha256 = async (bytes: ArrayBuffer) =>
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 
-type Bundle = { site: Map<string, ArrayBuffer>; history: Map<string, ArrayBuffer>; manifest: Manifest };
+type Bundle = {
+  site: Map<string, ArrayBuffer>;
+  history: Map<string, ArrayBuffer>;
+  proto: Map<string, ArrayBuffer>;
+  manifest: Manifest;
+};
 
-// site/<path> and history/<commit>/<path>.md parts, nothing else.
+// site/<path>, history/<commit>/<path>.md and proto/<path> (#112) parts,
+// nothing else.
 const readBundle = async (form: FormData): Promise<Bundle> => {
   const site = new Map<string, ArrayBuffer>();
   const history = new Map<string, ArrayBuffer>();
+  const proto = new Map<string, ArrayBuffer>();
   let count = 0;
   for (const [name, value] of form.entries()) {
     if (typeof value === 'string') throw invalid(`${name}: every part must be a file`);
@@ -65,8 +72,13 @@ const readBundle = async (form: FormData): Promise<Bundle> => {
     const bytes = await value.arrayBuffer();
     const sitePath = name.startsWith('site/') ? name.slice('site/'.length) : null;
     const historyPath = name.startsWith('history/') ? name.slice('history/'.length) : null;
+    const protoPath = name.startsWith('proto/') ? name.slice('proto/'.length) : null;
     if (sitePath !== null && plainPath(sitePath)) {
       site.set(sitePath, bytes);
+      continue;
+    }
+    if (protoPath !== null && plainPath(protoPath)) {
+      proto.set(protoPath, bytes);
       continue;
     }
     const [commit, ...rest] = historyPath?.split('/') ?? [];
@@ -76,7 +88,7 @@ const readBundle = async (form: FormData): Promise<Bundle> => {
       rest.length > 0 &&
       plainPath(rest.join('/')) &&
       historyPath.endsWith('.md');
-    if (!historyOk) throw invalid(`${name}: not a site or history path`);
+    if (!historyOk) throw invalid(`${name}: not a site, history or prototype path`);
     history.set(historyPath as string, bytes);
   }
   const manifestBytes = site.get('manifest.json');
@@ -90,7 +102,7 @@ const readBundle = async (form: FormData): Promise<Bundle> => {
     }
   })();
   if (!isManifest(manifest)) throw invalid('manifest.json is not a valid manifest');
-  return { site, history, manifest };
+  return { site, history, proto, manifest };
 };
 
 const htmlOf = (page: string) => `${page}.html`;
@@ -98,7 +110,7 @@ const htmlOf = (page: string) => `${page}.html`;
 // One build, whole: the manifest names this commit, every page has its HTML,
 // and the old versions are exactly the ones the manifest lists, each with
 // the hash it records.
-const checkBundle = async ({ site, history, manifest }: Bundle, sha: string) => {
+const checkBundle = async ({ site, history, proto, manifest }: Bundle, sha: string, config: HubConfig) => {
   if (manifest.commit !== sha) throw invalid('manifest.json names another commit than this run');
   for (const page of Object.keys(manifest.pages)) {
     if (!site.has(htmlOf(page))) throw invalid(`${htmlOf(page)} is missing`);
@@ -114,6 +126,19 @@ const checkBundle = async ({ site, history, manifest }: Bundle, sha: string) => 
   }
   for (const path of history.keys()) {
     if (!expected.has(path)) throw invalid(`history/${path} is not in the manifest`);
+  }
+  // Prototypes (#112): exactly the files the manifest lists, each with its
+  // hash, and only on a hub that has a hostname to serve them on.
+  const listed = new Map((manifest.prototypes ?? []).map((p) => [p.path, p.hash]));
+  if ((listed.size > 0 || proto.size > 0) && !config.proto)
+    throw invalid('this hub has no prototype hostname, so it cannot take prototypes');
+  for (const [path, hash] of listed) {
+    const bytes = proto.get(path);
+    if (!bytes) throw invalid(`proto/${path} is missing`);
+    if ((await sha256(bytes)) !== hash) throw invalid(`proto/${path} does not match its manifest hash`);
+  }
+  for (const path of proto.keys()) {
+    if (!listed.has(path)) throw invalid(`proto/${path} is not in the manifest`);
   }
 };
 
@@ -181,13 +206,15 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
     throw invalid('the body is not a multipart form');
   });
   const bundle = await readBundle(form);
-  await checkBundle(bundle, claims.sha);
+  await checkBundle(bundle, claims.sha, config);
 
   const version = `${claims.sha}-${claims.runId}-${claims.runAttempt}-${randomHex()}`;
   const repo = site.repo;
   const own = new Set([...bundle.site.keys()].filter((p) => p.startsWith('assets/')));
   try {
     for (const [path, bytes] of bundle.site) await bucket.put(`${repo}/v/${version}/${path}`, bytes);
+    // Apart from the site (#112): the docs hostname reads only v/.
+    for (const [path, bytes] of bundle.proto) await bucket.put(`${repo}/p/${version}/${path}`, bytes);
     await bucket.put(`${repo}/meta/${version}/assets.json`, JSON.stringify([...own]));
   } catch (e) {
     throw storage(e);
