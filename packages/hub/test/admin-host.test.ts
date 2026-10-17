@@ -5,7 +5,7 @@ import { ADMIN_AUD, ADMIN_HOST, call, CONFIG, HOST, HUB_AUD, installFetch, reset
 // with its own Access audience; the docs hostname points at it.
 const ADMIN = 'owner@acme.dev';
 const noAdmin = (() => {
-  const { hostname: _h, adminHostname: _a, accessAdminAud: _d, ...rest } = CONFIG;
+  const { adminHostname: _a, accessAdminAud: _d, ...rest } = CONFIG;
   return { SPECREVIEW_CONFIG: JSON.stringify(rest) };
 })();
 

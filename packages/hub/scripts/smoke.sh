@@ -72,6 +72,22 @@ for n in "${!readers_paths[@]}"; do
 done
 echo "reader status changedBy: $(curl -s -H "cf-access-jwt-assertion: $(tok riya@initech.example)" "$W/sidecar/_api/status" | jq -c '[.[] | .changedBy]')"
 echo "D1 page_status: $(curl -s $C/rows)"
+# The prototype hostname (#112): its own sign-in, nothing else of the hub there, never on the docs hostname.
+D=$W; W=http://proto.localhost:8797
+hit GET /sidecar/demo/ proto:riya@initech.example 200
+hit GET /sidecar/demo/index.html proto:riya@initech.example 200
+hit HEAD /sidecar/demo/index.html proto:riya@initech.example 200 -I
+hit GET /sidecar/demo/index.html - 401
+hit GET /sidecar/demo/index.html riya@initech.example 401
+hit GET /sidecar/demo/index.html admin:dev@acme.dev 401
+hit GET /sidecar/demo/index.html proto:x@stranger.example 403
+hit POST /sidecar/demo/index.html proto:riya@initech.example 405
+hit GET / - 404
+hit GET /sidecar/_api/me - 404
+hit POST /_publish/sidecar - 404
+W=$D
+hit GET /sidecar/demo/index.html riya@initech.example 404
+hit GET /sidecar/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-101/demo/index.html riya@initech.example 404
 echo "publish V2: $(curl -s $C/publish-v2)"
 hit GET /sidecar/onboarding/signup riya@initech.example 200
 echo "(pointer cache 10 s; waiting 11 s)"; sleep 11

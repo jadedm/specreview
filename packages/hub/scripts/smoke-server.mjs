@@ -17,7 +17,7 @@
 //
 // Miniflare 4 is pinned: the 5.x alpha under wrangler takes a different
 // options shape, and its workerd predates the deploy compatibility date.
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
@@ -33,6 +33,9 @@ const AUD = 'aud-smoke';
 // any *.localhost name to this machine, so the two origins are real.
 const ADMIN_AUD = 'aud-smoke-admin';
 const ADMIN_HOST = 'admin.localhost';
+// The prototypes' own hostname and Access app (#112).
+const PROTO_AUD = 'aud-smoke-proto';
+const PROTO_HOST = 'proto.localhost';
 const PORT = 8797;
 // A 48 px grey square as the organisation's logo (#33), stored under its
 // content key as deploy would store it.
@@ -49,6 +52,8 @@ const config = {
   hostname: 'docs.localhost',
   adminHostname: ADMIN_HOST,
   accessAdminAud: ADMIN_AUD,
+  protoHostname: PROTO_HOST,
+  accessProtoAud: PROTO_AUD,
   admins: ['owner@acme.dev'],
   ownerId: '1001',
   configRepo: 'docs-hub',
@@ -343,6 +348,7 @@ const V = `${'b'.repeat(40)}-101`;
 const OLD = 'a'.repeat(40);
 // The hub serves an old version only if its bytes hash to the manifest's entry.
 const OLD_TEXT = '# Company signup\n\nThe old text.\n';
+const PROTO_PAGE = '<!doctype html><title>Demo prototype</title><h1>Demo prototype</h1><script>window.ran = 1</script>';
 const manifest = {
   commit: 'b'.repeat(40),
   builtAt: '2026-10-08T00:00:00.000Z',
@@ -359,6 +365,8 @@ const manifest = {
       ],
     },
   },
+  // One prototype (#112), served only on the prototype hostname.
+  prototypes: [{ path: 'demo/index.html', hash: createHash('sha256').update(PROTO_PAGE).digest('hex') }],
 };
 const files = {
   [`sidecar/v/${V}/manifest.json`]: JSON.stringify(manifest),
@@ -370,6 +378,7 @@ const files = {
   [`sidecar/v/${V}/files/report.bin`]: 'binary',
   [`sidecar/v/${V}/release-1.2.html`]: '<!doctype html><title>Release 1.2</title>',
   [`sidecar/history/${OLD}/onboarding/signup.md`]: OLD_TEXT,
+  [`sidecar/p/${V}/demo/index.html`]: PROTO_PAGE,
   'sidecar/current.json': JSON.stringify({ version: V, publishedAt: '2026-10-08T00:00:00.000Z' }),
 };
 for (const [k, v] of Object.entries(files)) await r2.put(k, v);
@@ -389,6 +398,10 @@ if (process.env.SMOKE_SITE) {
     await r2.put(`sidecar/v/${version}/${f}`, readFileSync(path.join(out, 'site', f)));
   for (const f of walk(path.join(out, 'history')))
     await r2.put(`sidecar/history/${f}`, readFileSync(path.join(out, 'history', f)));
+  // Prototypes (#112), stored apart from the site as publish stores them.
+  if (existsSync(path.join(out, 'proto')))
+    for (const f of walk(path.join(out, 'proto')))
+      await r2.put(`sidecar/p/${version}/${f}`, readFileSync(path.join(out, 'proto', f)));
   await r2.put('sidecar/current.json', JSON.stringify({ version, publishedAt: new Date().toISOString() }));
   console.log(`published ${out} as sidecar ${version}`);
 }
@@ -408,6 +421,9 @@ for (const e of [
 tokens.otherApp = await sign('dev@acme.dev', 'aud-other');
 // Signed for the admin hostname's own app (#75).
 for (const e of ['owner@acme.dev', 'dev@acme.dev']) tokens[`admin:${e}`] = await sign(e, ADMIN_AUD);
+// Signed for the prototype hostname's own app (#112).
+for (const e of ['riya@initech.example', 'dev@acme.dev', 'x@stranger.example'])
+  tokens[`proto:${e}`] = await sign(e, PROTO_AUD);
 writeFileSync(path.join(here, 'tokens.json'), JSON.stringify(tokens));
 
 // A tiny control port for the smoke: publish V2, read R2/D1/labels, hide the
@@ -523,6 +539,7 @@ http
 const PROXY = PORT - 1;
 // Each hostname has its own Access app, so its own audience (#75).
 const onAdminHost = (req) => (req.headers.host ?? '').split(':')[0] === ADMIN_HOST;
+const onProtoHost = (req) => (req.headers.host ?? '').split(':')[0] === PROTO_HOST;
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -530,13 +547,16 @@ http
       const email = url.searchParams.get('email') ?? '';
       res.writeHead(302, {
         'set-cookie': `smoke_as=${encodeURIComponent(email)}; Path=/; HttpOnly`,
-        location: onAdminHost(req) ? '/_admin/' : '/sidecar/',
+        location: onAdminHost(req) ? '/_admin/' : onProtoHost(req) ? '/sidecar/demo/' : '/sidecar/',
       });
       return res.end();
     }
     const cookie = /(?:^|;\s*)smoke_as=([^;]+)/.exec(req.headers.cookie ?? '');
+    // Access bypasses public sites' pages on the docs hostname only.
     const bypassed =
       process.env.SMOKE_PUBLIC === '1' &&
+      !onProtoHost(req) &&
+      !onAdminHost(req) &&
       url.pathname.startsWith('/sidecar/') &&
       !/^\/sidecar\/(_api|_history|_signin)(\/|$)/.test(url.pathname);
     if (!cookie && !bypassed) {
@@ -549,7 +569,10 @@ http
       ? { ...req.headers }
       : {
           ...req.headers,
-          'cf-access-jwt-assertion': await sign(decodeURIComponent(cookie[1]), onAdminHost(req) ? ADMIN_AUD : AUD),
+          'cf-access-jwt-assertion': await sign(
+            decodeURIComponent(cookie[1]),
+            onAdminHost(req) ? ADMIN_AUD : onProtoHost(req) ? PROTO_AUD : AUD,
+          ),
         };
     const upstream = http.request(
       { host: '127.0.0.1', port: PORT, path: req.url, method: req.method, headers },

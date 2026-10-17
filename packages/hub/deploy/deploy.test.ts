@@ -594,5 +594,13 @@ describe('#75: the admin hostname in deploy', () => {
       adminHostname: 'x.acme.dev',
     }).dir;
     expect(() => loadOrg(inConfig)).toThrow('specreview.config.json sets adminHostname; it belongs in hub.json');
+    // #112: the prototype hostname cannot be switched on through the config file either.
+    for (const key of ['protoHostname', 'accessProtoAud']) {
+      const proto = orgDir(exampleHub(), {
+        ...JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8')),
+        [key]: 'x',
+      }).dir;
+      expect(() => loadOrg(proto), key).toThrow(`specreview.config.json sets ${key}; it belongs in hub.json`);
+    }
   });
 });

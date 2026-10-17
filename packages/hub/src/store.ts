@@ -3,6 +3,8 @@ import { AppError } from './http';
 // Where each site's published files live. Keys, all under the bare repo name:
 //   <repo>/current.json                 which version is live (written last)
 //   <repo>/v/<version>/<path>           the built site of one publish
+//   <repo>/p/<version>/<path>           its prototypes (#112), served only on
+//                                       the prototype hostname, never by v/
 //   <repo>/history/<commit>/<path>.md   old page versions
 // R2's get() has this shape, so an R2 bucket is a store as it is.
 export type StoredObject = { text(): Promise<string>; body: ReadableStream | null };

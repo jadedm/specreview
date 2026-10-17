@@ -11,6 +11,7 @@ import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf, pagesView } from './manifest';
 import { CACHE_FOREVER, protectedHeaders, servePage } from './pages';
 import { withPending } from './pending';
+import { handleProtoHost } from './proto';
 import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
 import { page, serveRoot } from './root';
@@ -181,6 +182,9 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const url = new URL(request.url);
   if (config.admin && url.hostname === config.admin.hostname)
     return handleAdminHost(request, url, env, config, deps, config.admin);
+  // Prototypes have a hostname of their own (#112), and nothing else is there.
+  if (config.proto && url.hostname === config.proto.hostname)
+    return handleProtoHost(request, url, env, config, deps, config.proto);
   // Publishing authenticates with GitHub's OIDC token, not Access: Access
   // bypasses exactly /_publish/* (set up at deploy) and the hub checks the
   // token itself. Repo names never start with _, so this cannot shadow a site.

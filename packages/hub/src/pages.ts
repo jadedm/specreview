@@ -7,7 +7,7 @@ import { isContentAddressed } from '@specreview/shared';
 // Pages and assets of the site's published version, served only after the
 // caller is known to be allowed to read the site (index.ts).
 
-const TYPES: Record<string, string> = {
+export const TYPES: Record<string, string> = {
   html: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8',
   js: 'text/javascript; charset=utf-8',
@@ -28,7 +28,7 @@ const TYPES: Record<string, string> = {
   xml: 'application/xml; charset=utf-8',
 };
 
-const extensionOf = (path: string) => {
+export const extensionOf = (path: string) => {
   const name = path.slice(path.lastIndexOf('/') + 1);
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
