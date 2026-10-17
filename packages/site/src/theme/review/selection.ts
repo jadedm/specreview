@@ -2,6 +2,7 @@ import { normalise } from '@specreview/shared';
 
 export const TOP_SECTION = '_top';
 const MAX_QUOTE = 1_000;
+const DIAGRAM_PARTS = '.sr-diagram, .sr-diagram-source, .sr-diagram-error';
 
 // The block inside the page content that holds a node: the direct child of
 // the content root it sits under.
@@ -31,6 +32,10 @@ export const sectionOfSelection = (root: HTMLElement, selection: Selection | nul
   if (!start || !end) return null;
   if (/^H[1-6]$/.test(start.tagName) || /^H[1-6]$/.test(end.tagName)) return null;
   if (start.closest('[id^="rv-"]') || end.closest('[id^="rv-"]')) return null;
+  // A drawn diagram's labels are not in the section text the hub checks a
+  // quote against, its hidden source is not what the reader sees, and nor is
+  // the error line under one that failed (#102).
+  if ([...root.querySelectorAll(DIAGRAM_PARTS)].some((n) => range.intersectsNode(n))) return null;
   const section = sectionIdBefore(start);
   if (sectionIdBefore(end) !== section) return null;
   const quote = normalise(selection.toString());

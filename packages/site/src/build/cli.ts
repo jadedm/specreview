@@ -24,6 +24,7 @@ import {
 } from './checks.js';
 import { siteShape } from './config.js';
 import { git } from './manifest.js';
+import { copyMermaid } from './mermaid.js';
 
 const USAGE = 'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]...';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -150,6 +151,7 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     try {
       await build(vpRoot);
       copyLinkedAssets(exported.docs, path.join(out, 'site'));
+      copyMermaid(path.join(out, 'site'));
     } catch (err) {
       // A failed build leaves no half-written site behind.
       rmSync(path.join(out, 'site'), { recursive: true, force: true });

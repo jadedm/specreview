@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const here = import.meta.dirname;
-const FILES = ['house.css', 'review/review.css'];
+const FILES = ['house.css', 'review/review.css', 'diagrams.css'];
 const read = (file: string) => readFileSync(path.join(here, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
 // VitePress palettes that carry hue by default. house.css points each at a
