@@ -13,6 +13,9 @@ inputs:
   exclude:
     description: Paths in the docs folder to leave out of the site, one per line; * and ** are wildcards.
     default: ''
+  prototypes:
+    description: Paths in the docs folder to publish untouched as prototypes (as git archive exports them), one per line; * and ** are wildcards. Needs a hub that accepts prototypes (specreview #112 or later).
+    default: ''
 runs:
   using: composite
   steps:
@@ -37,10 +40,14 @@ runs:
         INPUT_DOCS: ${{ inputs.docs }}
         INPUT_OUT: ${{ inputs.out }}
         INPUT_EXCLUDE: ${{ inputs.exclude }}
-      # Each non-empty line is one --exclude, never word-split.
+        INPUT_PROTOTYPES: ${{ inputs.prototypes }}
+      # Each non-empty line is one --exclude or --prototypes, never word-split.
       run: |
         args=()
         while IFS= read -r line || [ -n "$line" ]; do
           [ -n "$line" ] && args+=(--exclude "$line")
         done <<< "$INPUT_EXCLUDE"
+        while IFS= read -r line || [ -n "$line" ]; do
+          [ -n "$line" ] && args+=(--prototypes "$line")
+        done <<< "$INPUT_PROTOTYPES"
         node "$GITHUB_ACTION_PATH/../packages/site/dist/build/cli.js" build --repo "$INPUT_REPO" --docs "$INPUT_DOCS" --out "$INPUT_OUT" "${args[@]}"

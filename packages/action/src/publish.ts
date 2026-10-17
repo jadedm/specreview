@@ -69,9 +69,10 @@ export const actionsToken = async (audience: string, env: Env, fetchImpl: Fetch)
   return body.value;
 };
 
-// Every file of the build output: site/<path> and history/<commit>/<path>.
+// Every file of the build output: site/<path>, history/<commit>/<path> and,
+// when the build has prototypes (#111), proto/<path>.
 export const filesOf = (out: string): { name: string; file: string }[] =>
-  ['site', 'history'].flatMap((top) => {
+  ['site', 'history', 'proto'].flatMap((top) => {
     const dir = path.join(out, top);
     if (!existsSync(dir)) return [];
     return readdirSync(dir, { recursive: true, withFileTypes: true })

@@ -29,6 +29,7 @@ jobs:
           repo: sidecar
           # exclude: |   # paths in the docs folder not to publish, one per line
           #   drafts/
+          # prototypes: |   # paths in the docs folder published untouched as prototypes
           #   product/prototypes
       # Only a push publishes, so only a push keeps the build, for a day.
       - if: github.event_name == 'push'

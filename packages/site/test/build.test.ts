@@ -1058,3 +1058,229 @@ describe('#101: a link into a left-out path', () => {
     expect(html(repo, 'guide/c.html')).toMatch(/href="\/fixture\/"/);
   });
 });
+
+describe('#111: prototype folders published untouched', () => {
+  const out = (repo: string, ...p: string[]) => path.join(repo, '.specreview', ...p);
+  // Bytes no text decoder would keep: a NUL and an invalid UTF-8 sequence.
+  const BINARY = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xc3, 0x28, 0xff, 0xfe]);
+  const withPrototype = () => {
+    const repo = newRepo();
+    write(
+      repo,
+      'docs/index.md',
+      page('Home', '[proto](product/prototypes/x/Main.dc.html) [missing](product/prototypes/x/gone.html)'),
+    );
+    write(repo, 'docs/product/spec.md', page('Spec', 'x'));
+    write(repo, 'docs/product/prototypes/x/Main.dc.html', '<html><script>x()</script></html>');
+    write(repo, 'docs/product/prototypes/x/support.js', 'window.x = () => 1;');
+    write(repo, 'docs/product/prototypes/x/README.md', page('Notes', '<script>bad()</script>'));
+    mkdirSync(path.join(repo, 'docs/product/prototypes/x/assets'), { recursive: true });
+    writeFileSync(path.join(repo, 'docs/product/prototypes/x/assets/logo.png'), BINARY);
+    write(repo, '.gitignore', 'docs/product/prototypes/x/ignored.js\n');
+    commit(repo, 'docs');
+    return repo;
+  };
+
+  it('1, 2, 11, 16: copied byte for byte as committed, left out of the site, listed with byte hashes', () => {
+    const repo = withPrototype();
+    write(repo, 'docs/product/prototypes/x/support.js', 'window.x = () => 2; // uncommitted');
+    write(repo, 'docs/product/prototypes/x/untracked.js', 'u()');
+    write(repo, 'docs/product/prototypes/x/ignored.js', 'i()');
+    expect(build(repo, '--prototypes', 'product/prototypes')).toMatchObject({ status: 0 });
+    const proto = filesUnder(out(repo, 'proto'));
+    expect(proto).toEqual([
+      'product/prototypes/x/Main.dc.html',
+      'product/prototypes/x/README.md',
+      'product/prototypes/x/assets/logo.png',
+      'product/prototypes/x/support.js',
+    ]);
+    expect(readFileSync(out(repo, 'proto/product/prototypes/x/support.js'), 'utf8')).toBe('window.x = () => 1;');
+    expect(readFileSync(out(repo, 'proto/product/prototypes/x/assets/logo.png')).equals(BINARY)).toBe(true);
+    expect(filesUnder(out(repo, 'site')).some((f) => f.includes('prototypes'))).toBe(false);
+    const manifest = manifestOf(repo);
+    expect(Object.keys(manifest.pages).sort()).toEqual(['index', 'product/spec']);
+    expect(manifest.prototypes).toEqual(
+      proto.map((p) => ({
+        path: p,
+        hash: createHash('sha256')
+          .update(readFileSync(out(repo, 'proto', p)))
+          .digest('hex'),
+      })),
+    );
+    expect(manifest.prototypes?.find((p) => p.path.endsWith('logo.png'))?.hash).toBe(
+      createHash('sha256').update(BINARY).digest('hex'),
+    );
+    expect(isManifest(manifest)).toBe(true);
+    expect(filesUnder(out(repo, 'history')).some((f) => f.includes('prototypes'))).toBe(false);
+  });
+
+  it('15: the same commit built twice gives the same prototypes and list', () => {
+    const repo = withPrototype();
+    expect(build(repo, '--prototypes', 'product/prototypes')).toMatchObject({ status: 0 });
+    const first = manifestOf(repo).prototypes;
+    expect(build(repo, '--prototypes', 'product/prototypes')).toMatchObject({ status: 0 });
+    expect(manifestOf(repo).prototypes).toEqual(first);
+  });
+
+  it('without prototypes, no proto folder and no list in the manifest', () => {
+    const repo = withPrototype();
+    expect(build(repo, '--exclude', 'product/prototypes')).toMatchObject({ status: 0 });
+    expect(existsSync(out(repo, 'proto'))).toBe(false);
+    expect('prototypes' in manifestOf(repo)).toBe(false);
+  });
+
+  it('3: a symlink or a submodule in a prototype folder is refused', () => {
+    const repo = withPrototype();
+    symlinkSync('/etc/hosts', path.join(repo, 'docs/product/prototypes/x/link.js'));
+    commit(repo, 'symlink');
+    expect(build(repo, '--prototypes', 'product/prototypes')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining(
+        'docs/product/prototypes/x/link.js: symlinks are not allowed in a prototype folder',
+      ),
+    });
+    const sub = withPrototype();
+    git(sub, 'update-index', '--add', '--cacheinfo', `160000,${'a'.repeat(40)},docs/product/prototypes/sub`);
+    // Straight to a commit: re-adding from disk would drop the submodule entry.
+    git(sub, 'commit', '-q', '-m', 'submodule');
+    expect(build(sub, '--prototypes', 'product/prototypes')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('submodules are not allowed in a prototype folder'),
+    });
+  });
+
+  it('4: names outside the router grammar, reserved first segments and case-only clashes are refused', () => {
+    const cases: [string, string, string][] = [
+      ['docs/proto/a b.html', 'proto', 'prototype file names may use only'],
+      ['docs/proto/.hidden.js', 'proto', 'prototype file names may use only'],
+      ['docs/_api/x.html', '_api', 'may not start with _api, _history or _signin'],
+    ];
+    for (const [file, pattern, message] of cases) {
+      const repo = newRepo();
+      write(repo, 'docs/index.md', page('Home', 'x'));
+      write(repo, file, 'x');
+      commit(repo, 'docs');
+      expect(build(repo, '--prototypes', pattern), file).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining(message),
+      });
+    }
+    // Two names differing only in case: added straight to git, as a case-insensitive disk could not hold both.
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/proto/A.html', 'a');
+    commit(repo, 'docs');
+    const blob = git(repo, 'rev-parse', 'HEAD:docs/proto/A.html');
+    git(repo, 'update-index', '--add', '--cacheinfo', `100644,${blob},docs/proto/a.html`);
+    git(repo, 'commit', '-q', '-m', 'case');
+    expect(build(repo, '--prototypes', 'proto')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('prototype paths may not differ only in case'),
+    });
+  });
+
+  it('6, 8: bad patterns are refused before reading; a pattern matching nothing is refused', () => {
+    const repo = withPrototype();
+    for (const bad of ['/abs', '../x', 'a b'])
+      expect(build(repo, '--prototypes', bad), bad).toMatchObject({
+        status: 1,
+        stderr: expect.stringContaining(`--prototypes ${JSON.stringify(bad)}`),
+      });
+    expect(build(repo, ...Array.from({ length: 21 }, (_, i) => ['--prototypes', `p${i}`]).flat())).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('at most 20 --prototypes patterns'),
+    });
+    // A pattern whose matches are all excluded still matched: exclude wins quietly.
+    expect(
+      build(
+        repo,
+        '--prototypes',
+        'product/prototypes',
+        '--prototypes',
+        'product/spec.md',
+        '--exclude',
+        'product/spec.md',
+      ),
+    ).toMatchObject({ status: 0 });
+    expect(build(repo, '--prototypes', 'product/prototypes', '--prototypes', 'product/nothing')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('--prototypes "product/nothing" matches no committed file'),
+    });
+  });
+
+  it('7, 9: a glob takes every matching folder; a path also excluded stays out', () => {
+    const repo = withPrototype();
+    write(repo, 'docs/guide/prototypes/y/Main.html', '<html></html>');
+    commit(repo, 'second');
+    expect(build(repo, '--prototypes', '**/prototypes', '--exclude', 'product/prototypes/x/assets')).toMatchObject({
+      status: 0,
+    });
+    const proto = filesUnder(out(repo, 'proto'));
+    expect(proto).toContain('guide/prototypes/y/Main.html');
+    expect(proto).toContain('product/prototypes/x/Main.dc.html');
+    expect(proto.some((f) => f.includes('assets'))).toBe(false);
+  });
+
+  it('10: with the docs folder at the root, prototypes are copied', () => {
+    const repo = newRepo();
+    write(repo, 'index.md', page('Home', 'x'));
+    write(repo, 'proto/a.html', '<html></html>');
+    write(repo, '.github/workflows/x.yml', 'x');
+    commit(repo, 'root');
+    expect(build(repo, '--docs', '.', '--prototypes', 'proto')).toMatchObject({ status: 0 });
+    expect(filesUnder(out(repo, 'proto'))).toEqual(['proto/a.html']);
+  });
+
+  it('5, 14: a build over the hub limits is refused with the counts and leaves no proto folder', () => {
+    const big = withPrototype();
+    writeFileSync(path.join(big, 'docs/product/prototypes/x/video.bin'), Buffer.alloc(25 * 1024 * 1024, 1));
+    commit(big, 'big');
+    expect(build(big, '--prototypes', 'product/prototypes')).toMatchObject({
+      status: 1,
+      stderr: expect.stringMatching(/the build would upload 2\d\.\d MB; the hub takes at most 25 MB/),
+    });
+    expect(existsSync(out(big, 'proto'))).toBe(false);
+    const many = withPrototype();
+    for (let i = 0; i < 5000; i++) write(many, `docs/product/prototypes/x/n/${i}.js`, String(i));
+    commit(many, 'many');
+    expect(build(many, '--prototypes', 'product/prototypes')).toMatchObject({
+      status: 1,
+      stderr: expect.stringMatching(/the build has 5\d{3} files; the hub takes at most 5000/),
+    });
+    expect(existsSync(out(many, 'proto'))).toBe(false);
+  });
+
+  it('set-aside files that differ from the committed list (a file .gitattributes leaves out of the archive) are refused', () => {
+    const repo = withPrototype();
+    write(repo, '.gitattributes', 'docs/product/prototypes/x/support.js export-ignore\n');
+    commit(repo, 'export-ignore');
+    expect(build(repo, '--prototypes', 'product/prototypes')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('the prototype files unpacked differ from those committed'),
+    });
+  });
+
+  it('the multipart framing counts: long names push a build just under 25 MB of bytes over', () => {
+    const repo = withPrototype();
+    const longName = 'n'.repeat(120);
+    // 4800 files of 5.1 KB: about 23.3 MB of bytes, under 25 MB on their own by about 5%, over it by about 5% once each part's framing counts.
+    for (let i = 0; i < 4800; i++) write(repo, `docs/product/prototypes/x/${longName}/${i}.txt`, 'x'.repeat(5100));
+    commit(repo, 'long names');
+    expect(build(repo, '--prototypes', 'product/prototypes')).toMatchObject({
+      status: 1,
+      stderr: expect.stringMatching(/the build would upload 2\d\.\d MB; the hub takes at most 25 MB/),
+    });
+  });
+
+  it('a page renamed from a prototype path keeps none of the prototype as history', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/proto/notes.md', page('Notes', 'old prototype text'));
+    commit(repo, 'first');
+    git(repo, 'mv', 'docs/proto/notes.md', 'docs/notes.md');
+    write(repo, 'docs/proto/a.html', '<html></html>');
+    commit(repo, 'move');
+    expect(build(repo, '--prototypes', 'proto')).toMatchObject({ status: 0 });
+    expect(manifestOf(repo).pages.notes.history.some((h) => h.path.startsWith('proto/'))).toBe(false);
+  });
+});

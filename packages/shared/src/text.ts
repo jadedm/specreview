@@ -39,7 +39,16 @@ export type ManifestPage = {
 };
 // csp: the Content-Security-Policy for every response of this version; absent
 // means default-src 'self'.
-export type Manifest = { commit: string; builtAt: string; csp?: string; pages: Record<string, ManifestPage> };
+// A prototype file published untouched (#111): its path in the docs folder
+// and the sha256 of its bytes, so the hub can check the bundle's proto/ part.
+export type PrototypeFile = { path: string; hash: string };
+export type Manifest = {
+  commit: string;
+  builtAt: string;
+  csp?: string;
+  pages: Record<string, ManifestPage>;
+  prototypes?: PrototypeFile[];
+};
 
 // A path left out of a site (#88), relative to the docs folder: letters,
 // digits and . _ ~ - / *, no leading / or - (it would read as an option), no . or .. segment, ** only as a
