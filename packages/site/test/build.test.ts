@@ -14,7 +14,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { isManifest, type Manifest } from '@specreview/shared';
+import { isContentAddressed, isManifest, type Manifest } from '@specreview/shared';
+import { MERMAID_VERSION } from '../src/build/mermaid';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const CLI = path.join(import.meta.dirname, '..', 'dist', 'build', 'cli.js');
@@ -917,9 +918,17 @@ describe('#102: Mermaid diagrams', () => {
     const flow = manifestOf(repo).pages.index.sections.find((s) => s.id === 'flow');
     expect(flow?.text).toContain('flowchart LR');
     const files = filesUnder(site);
-    expect(files).toContain('assets/mermaid/mermaid.esm.min.mjs');
-    expect(files.filter((f) => f.startsWith('assets/mermaid/chunks/')).length).toBeGreaterThan(50);
-    expect(files.some((f) => f.startsWith('assets/mermaid/') && f.endsWith('.map'))).toBe(false);
+    expect(files).toContain(`assets/mermaid-${MERMAID_VERSION}/mermaid.esm.min.mjs`);
+    expect(files.filter((f) => f.startsWith(`assets/mermaid-${MERMAID_VERSION}/chunks/`)).length).toBeGreaterThan(50);
+    expect(files.some((f) => f.startsWith('assets/mermaid-') && f.endsWith('.map'))).toBe(false);
+    // #104: every script and stylesheet under assets/ is one the hub may let
+    // browsers keep, except page chunks, which hold the page's text.
+    const scripts = files.filter((f) => f.startsWith('assets/') && /\.(m?js|css)$/.test(f));
+    const pageChunks = scripts.filter((f) => /^assets\/[^/]+\.md\.[\w-]{8}(\.lean)?\.js$/.test(f));
+    expect(pageChunks.length).toBeGreaterThan(0);
+    expect(pageChunks.filter(isContentAddressed)).toEqual([]);
+    expect(scripts.filter((f) => !pageChunks.includes(f) && !isContentAddressed(f))).toEqual([]);
+    expect(scripts.length - pageChunks.length).toBeGreaterThan(50);
     // Copied, not bundled: no Mermaid chunk from Vite.
     expect(files.some((f) => /^assets\/chunks\/mermaid/.test(f))).toBe(false);
   });
@@ -929,6 +938,6 @@ describe('#102: Mermaid diagrams', () => {
     write(repo, 'docs/index.md', page('Home', '```ts\nconst a = 1;\n```'));
     commit(repo, 'docs: no diagram');
     expect(build(repo)).toMatchObject({ status: 0 });
-    expect(filesUnder(path.join(repo, '.specreview', 'site')).some((f) => f.startsWith('assets/mermaid/'))).toBe(false);
+    expect(filesUnder(path.join(repo, '.specreview', 'site')).some((f) => f.startsWith('assets/mermaid'))).toBe(false);
   });
 });
