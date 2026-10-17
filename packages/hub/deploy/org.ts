@@ -12,6 +12,8 @@ export type HubJson = {
   hostname: string;
   // The admin page's own hostname (#75); without it the hub has no admin page.
   adminHostname?: string;
+  // The prototypes' own hostname (#116, epic #110); without it the hub serves none.
+  protoHostname?: string;
   worker: string;
   database: { name: string; id?: string };
   bucket: { name: string; created?: boolean };
@@ -29,6 +31,10 @@ export type HubJson = {
     adminPolicyId?: string;
     adminAppId?: string;
     adminAud?: string;
+    // With protoHostname (#116): the site's readers, on the prototype hostname.
+    protoPolicyId?: string;
+    protoAppId?: string;
+    protoAud?: string;
   };
   // Written by deploy: the logo key the live Worker uses, and every logo key
   // uploaded and not yet deleted, so no stored logo is ever lost track of.
@@ -66,6 +72,7 @@ const HUB_KEYS = new Set([
   'accountId',
   'hostname',
   'adminHostname',
+  'protoHostname',
   'worker',
   'database',
   'bucket',
@@ -84,6 +91,9 @@ const ACCESS_KEYS = new Set([
   'adminPolicyId',
   'adminAppId',
   'adminAud',
+  'protoPolicyId',
+  'protoAppId',
+  'protoAud',
 ]);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -110,6 +120,10 @@ export const hubProblems = (raw: unknown): string[] => {
     problems.push('hub.json adminHostname must be a bare lowercase hostname (no scheme, port or path)');
   if (raw.adminHostname !== undefined && raw.adminHostname === raw.hostname)
     problems.push('hub.json adminHostname must differ from hostname');
+  if (raw.protoHostname !== undefined && (typeof raw.protoHostname !== 'string' || !HOSTNAME.test(raw.protoHostname)))
+    problems.push('hub.json protoHostname must be a bare lowercase hostname (no scheme, port or path)');
+  if (raw.protoHostname !== undefined && [raw.hostname, raw.adminHostname].includes(raw.protoHostname))
+    problems.push('hub.json protoHostname must differ from hostname and adminHostname');
   if (typeof raw.worker !== 'string' || !WORKER.test(raw.worker)) {
     problems.push('hub.json worker must be a Worker name: lowercase letters, digits and dashes');
   }
@@ -153,8 +167,8 @@ export const loadOrg = (dir: string): Org => {
   const config = readJson(path.join(dir, 'specreview.config.json'));
   const problems = hubProblems(hub);
   if (!isObject(config)) problems.push('specreview.config.json is not a JSON object');
-  // The prototype hostname too (#112): it belongs in hub.json with its Access
-  // app, which setup does not create yet (#116).
+  // The prototype hostname too (#112): it belongs in hub.json, where setup
+  // keeps its Access app (#116).
   for (const key of [
     'accessTeamDomain',
     'accessAud',
@@ -194,6 +208,10 @@ export const deployable = (hub: HubJson) => {
     hub.adminHostname && !hub.access?.adminPolicyId && 'access.adminPolicyId',
     hub.adminHostname && !hub.access?.adminAppId && 'access.adminAppId',
     hub.adminHostname && !hub.access?.adminAud && 'access.adminAud',
+    // Only when the hub has a prototype hostname (#116).
+    hub.protoHostname && !hub.access?.protoPolicyId && 'access.protoPolicyId',
+    hub.protoHostname && !hub.access?.protoAppId && 'access.protoAppId',
+    hub.protoHostname && !hub.access?.protoAud && 'access.protoAud',
   ].filter(Boolean);
   if (missing.length > 0) throw new DeployError(`run setup with --apply first; hub.json lacks ${missing.join(', ')}`);
   return hub as HubJson & {
@@ -207,11 +225,14 @@ export const deployable = (hub: HubJson) => {
 // with placeholder Access fields, so both refuse exactly what the Worker would.
 export const workerConfigOf = (
   org: Org,
-  access: { teamDomain: string; aud: string; adminAud?: string },
+  access: { teamDomain: string; aud: string; adminAud?: string; protoAud?: string },
   logo?: Logo | null,
 ) => {
   const admin = org.hub.adminHostname
     ? { hostname: org.hub.hostname, adminHostname: org.hub.adminHostname, accessAdminAud: access.adminAud }
+    : {};
+  const proto = org.hub.protoHostname
+    ? { hostname: org.hub.hostname, protoHostname: org.hub.protoHostname, accessProtoAud: access.protoAud }
     : {};
   const merged = {
     ...org.config,
@@ -219,6 +240,7 @@ export const workerConfigOf = (
     accessTeamDomain: access.teamDomain,
     accessAud: access.aud,
     ...admin,
+    ...proto,
   };
   const problems = problemsIn(merged);
   if (problems.length > 0) throw new DeployError(`specreview.config.json has problems:\n  ${problems.join('\n  ')}`);
