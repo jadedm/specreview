@@ -89,6 +89,63 @@ export const readmeHome = (md: MarkdownIt) => {
   });
 };
 
+// A link into a path left out of the site (#101) would fail VitePress's
+// dead-link check, which sees each link without its page and so cannot
+// resolve it. This resolves the link against its page and, when the target is
+// left out, rewrites it to the same target from the docs folder's top and
+// records it; deadLinkKey reduces a link to the form VitePress's check
+// receives, so only these links are excused. VitePress gives /a.html and
+// /a.md one key, so a key that a docs-root link outside the left-out paths
+// also has is never excused: the build fails and names it. On the site the
+// excused links reach the build's 404 page, which links back to the site.
+export const deadLinkKey = (url: string) => {
+  // VitePress strips .md and .html more than once on its way to the check
+  // (/a.md.md reaches it as /a); stripping them all only makes keys coarser.
+  const bare = url.replace(/[?#].*$/, '').replace(/(?:\.(?:html|md))+$/, '');
+  return bare.endsWith('/') ? `${bare}index` : bare;
+};
+const decoded = (s: string) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return null;
+  }
+};
+export const excludedLinks = (
+  md: MarkdownIt,
+  exclude: string[],
+  keys: { excused: Set<string>; plain: Set<string> },
+) => {
+  const left = excludedBy(exclude);
+  // The file the link names, the page VitePress resolves it to, or that path
+  // itself (a left-out folder). Nothing else, so a near miss is still dead.
+  const leftOut = (target: string) => {
+    const page = target.endsWith('/') ? `${target}index` : target.replace(/\.(html|md)$/, '');
+    return left(target) || left(page) || left(`${page}.md`);
+  };
+  md.core.ruler.push('specreview-excluded-links', (state) => {
+    const dir = path.posix.dirname(String((state.env as { relativePath?: string }).relativePath ?? ''));
+    for (const block of state.tokens)
+      for (const token of block.children ?? []) {
+        const href = token.type === 'link_open' ? token.attrGet('href') : null;
+        if (!href || /^[a-z][a-z0-9+.-]*:|^#/i.test(href)) continue;
+        const [, target, rest] = /^([^?#]*)(.*)$/.exec(href)!;
+        // A query or hash alone stays on its own page.
+        if (target === '') continue;
+        const joined = path.posix.normalize(target.startsWith('/') ? target.slice(1) : path.posix.join(dir, target));
+        const plain = decoded(joined);
+        if (plain === null || joined === '..' || joined.startsWith('../')) continue;
+        if (!leftOut(plain)) {
+          if (target.startsWith('/')) keys.plain.add(deadLinkKey(target));
+          continue;
+        }
+        const rewritten = `/${joined}`;
+        token.attrSet('href', `${rewritten}${rest}`);
+        keys.excused.add(deadLinkKey(rewritten));
+      }
+  });
+};
+
 // A page may only use files inside the docs folder: an image or import that
 // reaches outside it (another repo file, a runner file) is refused, so nothing
 // the page hash does not cover is published. VitePress, Vue and this package's
@@ -182,6 +239,7 @@ export const siteShape = (docs: string, repo: string, home?: string | null) => {
 export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home, exclude = [] }: SiteOptions): UserConfig => {
   const { title, themeConfig } = siteShape(docs, repo, home);
   const collected: Collected = new Map();
+  const linkKeys = { excused: new Set<string>(), plain: new Set<string>() };
   return {
     title,
     base: `/${repo}/`,
@@ -191,6 +249,8 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home, exclu
     outDir: siteDirOf(out),
     cacheDir: path.join(out, '.cache'),
     cleanUrls: true,
+    // Only links into left-out paths (#101); every other dead link fails.
+    ignoreDeadLinks: [(url: string) => linkKeys.excused.has(deadLinkKey(url)) && !linkKeys.plain.has(deadLinkKey(url))],
     lastUpdated: false,
     // No colour-scheme switch: it adds an inline script and a toggle nobody needs here.
     appearance: false,
@@ -201,6 +261,7 @@ export const siteConfig = ({ repo, docs, root, docsRel, out, vpRoot, home, exclu
       attrs: { disable: true },
       config: (md) => {
         if (home === 'README.md') readmeHome(md);
+        excludedLinks(md, exclude, linkKeys);
         noInterpolation(md);
       },
     },

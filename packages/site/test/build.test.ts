@@ -941,3 +941,119 @@ describe('#102: Mermaid diagrams', () => {
     expect(filesUnder(path.join(repo, '.specreview', 'site')).some((f) => f.startsWith('assets/mermaid'))).toBe(false);
   });
 });
+
+describe('#101: a link into a left-out path', () => {
+  const html = (repo: string, file: string) => readFileSync(path.join(repo, '.specreview', 'site', file), 'utf8');
+
+  // The encoded link is excused (the build passes) and VitePress writes it decoded.
+  it('1-7: is not a dead link; it points at the path from the site root, query and hash kept', () => {
+    const repo = newRepo();
+    write(
+      repo,
+      'docs/index.md',
+      page(
+        'Home',
+        [
+          '[proto](product/prototypes/x/Main.dc.html)',
+          '[page](drafts/a.md)',
+          '[folder](drafts/)',
+          '[bare folder](drafts)',
+          '[glob](notes.draft.md)',
+          '[root](/drafts/a.md)',
+          '[query](drafts/a.md?view=review#x)',
+          '[encoded](%64rafts/a.md)',
+          '[web](https://example.com/x) [mail](mailto:a@example.com) [hash](#top)',
+        ].join('\n\n'),
+      ),
+    );
+    write(repo, 'docs/guide/b.md', page('B', '[up](../drafts/a.md)'));
+    write(repo, 'docs/drafts/a.md', page('A', 'x'));
+    write(repo, 'docs/notes.draft.md', page('Notes', 'x'));
+    write(repo, 'docs/product/prototypes/x/Main.dc.html', '<html></html>');
+    commit(repo, 'docs');
+    const r = build(repo, '--exclude', 'drafts', '--exclude', 'product/prototypes', '--exclude', '**/*.draft.md');
+    expect(r).toMatchObject({ status: 0 });
+    const index = html(repo, 'index.html');
+    for (const href of [
+      '/fixture/product/prototypes/x/Main.dc.html',
+      '/fixture/drafts/a',
+      '/fixture/drafts/',
+      '/fixture/drafts',
+      '/fixture/notes.draft',
+      '/fixture/drafts/a?view=review#x',
+      'https://example.com/x',
+      'mailto:a@example.com',
+      '#top',
+    ])
+      expect(index, href).toContain(`href="${href}"`);
+    expect(html(repo, 'guide/b.html')).toContain('href="/fixture/drafts/a"');
+    expect(Object.keys(manifestOf(repo).pages).sort()).toEqual(['guide/b', 'index']);
+  });
+
+  it('8, 9: every other dead link still fails, near misses included', () => {
+    const repo = newRepo();
+    write(
+      repo,
+      'docs/index.md',
+      page(
+        'Home',
+        ['[missing](nope.md)', '[near](drafts-old/a.md)', '[html only](other/a)', '[no slash](idx)'].join('\n\n'),
+      ),
+    );
+    write(repo, 'docs/drafts/a.md', page('A', 'x'));
+    write(repo, 'docs/other/a.html', '<html></html>');
+    write(repo, 'docs/idx/index.md', page('Idx', 'x'));
+    commit(repo, 'docs');
+    const r = build(repo, '--exclude', 'drafts', '--exclude', 'other/a.html', '--exclude', 'idx/index.md');
+    expect(r.status).toBe(1);
+    for (const link of ['./nope', './drafts-old/a', './other/a', './idx'])
+      expect(r.stderr, link).toMatch(new RegExp(`dead link ${link.replace(/[.]/g, '\\.')}\\b`));
+  });
+
+  it('a docs-root link outside the left-out paths that shares an excused key still fails', () => {
+    const repo = newRepo();
+    // VitePress keys /a.html and /a.md alike; a.html is left out, a.md is missing.
+    write(repo, 'docs/index.md', page('Home', '[left out](a.html)'));
+    write(repo, 'docs/z.md', page('Z', '[missing](/a.md)'));
+    write(repo, 'docs/a.html', '<html></html>');
+    commit(repo, 'docs');
+    const r = build(repo, '--exclude', 'a.html');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/dead link \/a\b/);
+  });
+
+  it('a missing docs-root link with a doubled suffix does not borrow an excused key', () => {
+    const repo = newRepo();
+    // VitePress reduces /a.md.md to /a, the key the left-out folder link has.
+    // One page, so the excused key is recorded before this page's check whatever the render order.
+    write(repo, 'docs/index.md', page('Home', '[left out](/a)\n\n[missing](/a.md.md)'));
+    write(repo, 'docs/a/x.md', page('X', 'x'));
+    commit(repo, 'docs');
+    const r = build(repo, '--exclude', 'a');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/dead link \/a\b/);
+  });
+
+  it('a link that is only a query is left to VitePress, never rewritten into a left-out path', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    // VitePress reads a bare query as the folder's index, missing here: a dead
+    // link, as before #101. Rewriting it to /guide?view=1 would excuse it.
+    write(repo, 'docs/guide/x.md', page('X', '[same page](?view=1)'));
+    write(repo, 'docs/guide.md', page('Old guide', 'x'));
+    commit(repo, 'docs');
+    const r = build(repo, '--exclude', 'guide.md');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/dead link \.\/index\b/);
+  });
+
+  it('with README.md as the home page (index.md left out), a link to the README still reaches the home page (no harm done)', () => {
+    const repo = newRepo();
+    write(repo, 'docs/README.md', page('Readme home', 'x'));
+    write(repo, 'docs/index.md', page('Old home', 'x'));
+    write(repo, 'docs/guide/c.md', page('C', '[home](../README.md)'));
+    commit(repo, 'docs');
+    expect(build(repo, '--exclude', 'index.md')).toMatchObject({ status: 0 });
+    expect(html(repo, 'guide/c.html')).toMatch(/href="\/fixture\/"/);
+  });
+});
