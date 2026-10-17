@@ -231,7 +231,9 @@ const addZoom = (figure: HTMLElement) => {
 
 // Copied into the site by the build (build/mermaid.ts MERMAID_DIR), not
 // bundled: Vite leaves this import alone.
-export const mermaidUrl = (base: string) => `${base}assets/mermaid/mermaid.esm.min.mjs`;
+// The installed Mermaid's version: a test fails if they differ (#104).
+export const MERMAID_VERSION = '12.2.0';
+export const mermaidUrl = (base: string) => `${base}assets/mermaid-${MERMAID_VERSION}/mermaid.esm.min.mjs`;
 const loaderFor = (base: string) => () =>
   (import(/* @vite-ignore */ mermaidUrl(base)) as Promise<{ default: Mermaid }>).then((m) => m.default);
 

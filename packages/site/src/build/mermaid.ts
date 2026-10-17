@@ -8,12 +8,18 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { BuildError, filesIn } from './checks.js';
 
-// Where the theme imports from, under the site's base (theme/diagrams.ts).
-export const MERMAID_DIR = 'assets/mermaid';
+const packageOf = () => path.dirname(createRequire(import.meta.url).resolve('mermaid/package.json'));
+const distOf = () => path.join(packageOf(), 'dist');
+
+// Where the theme imports from, under the site's base (theme/diagrams.ts),
+// named for Mermaid's version so an upgrade changes the address: the hub lets
+// browsers keep these files a year (#104).
+export const MERMAID_VERSION = (
+  JSON.parse(readFileSync(path.join(packageOf(), 'package.json'), 'utf8')) as { version: string }
+).version;
+export const MERMAID_DIR = `assets/mermaid-${MERMAID_VERSION}`;
 export const MERMAID_ENTRY = 'mermaid.esm.min.mjs';
 const CHUNKS = path.posix.join('chunks', 'mermaid.esm.min');
-
-const distOf = () => path.join(path.dirname(createRequire(import.meta.url).resolve('mermaid/package.json')), 'dist');
 
 // VitePress wraps a mermaid fence in div.language-mermaid.
 export const hasDiagram = (site: string) =>
@@ -29,6 +35,9 @@ export const mermaidFiles = (dist = distOf()) => [
     .map((f) => path.posix.join(CHUNKS, f)),
 ];
 
+// Copied byte for byte: browsers keep these a year under a folder named only
+// for Mermaid's version, so changing them in any way (a patch, a rewrite here)
+// needs a new folder name too.
 export const copyMermaid = (site: string, dist = distOf()) => {
   if (!hasDiagram(site)) return;
   for (const file of mermaidFiles(dist)) {

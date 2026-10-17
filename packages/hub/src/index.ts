@@ -9,7 +9,7 @@ import { reconcileLabels, ticketsFor } from './github';
 import { githubAuthFor } from './github-auth';
 import { AppError, errorResponse, json, readJsonBody } from './http';
 import { pageOf, pagesView } from './manifest';
-import { protectedHeaders, servePage } from './pages';
+import { CACHE_FOREVER, protectedHeaders, servePage } from './pages';
 import { withPending } from './pending';
 import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
@@ -48,10 +48,11 @@ const anonymousPage = (request: Request, route: Route) =>
 // A public site's HTML says so in its head, so the review panel stays silent
 // for a visitor the hub does not know. Without a sign-in the bytes are the
 // same for everyone, so a browser may keep them a minute; with one, never.
+// A content-addressed asset keeps its own private, year-long header (#104).
 const PUBLIC_META = '<meta name="specreview-visibility" content="public">';
 const markPublic = (res: Response, shared: boolean): Response => {
   const headers = new Headers(res.headers);
-  if (shared) headers.set('cache-control', 'public, max-age=60');
+  if (shared && headers.get('cache-control') !== CACHE_FOREVER) headers.set('cache-control', 'public, max-age=60');
   const marked = new Response(res.body, { status: res.status, headers });
   if (!headers.get('content-type')?.startsWith('text/html')) return marked;
   return new HTMLRewriter()

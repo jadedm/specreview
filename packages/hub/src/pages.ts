@@ -2,6 +2,7 @@ import type { Ctx } from './ctx';
 import { AppError } from './http';
 import { cspOf, type Snapshot } from './manifest';
 import { read } from './store';
+import { isContentAddressed } from '@specreview/shared';
 
 // Pages and assets of the site's published version, served only after the
 // caller is known to be allowed to read the site (index.ts).
@@ -33,7 +34,13 @@ const extensionOf = (path: string) => {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 };
 
-// Content behind sign-in is never stored by any cache, the browser's included.
+// A content-addressed file (#104, isContentAddressed in @specreview/shared:
+// code and style with no page text, never a page chunk) may stay in the
+// reader's own browser. Private, never public, so no shared cache holds it.
+export const CACHE_FOREVER = 'private, max-age=31536000, immutable';
+
+// Content behind sign-in is never stored by any cache, the browser's included
+// (the content-addressed code above holds no page text).
 export const protectedHeaders = (csp: string): Record<string, string> => ({
   'cache-control': 'private, no-store',
   'x-content-type-options': 'nosniff',
@@ -72,6 +79,7 @@ export const servePage = async (ctx: Ctx, method: string, path: string, director
       ...protectedHeaders(ext === 'html' ? cspOf(snapshot) : INERT),
       'content-type': known ? TYPES[ext] : 'application/octet-stream',
     };
+    if (isContentAddressed(candidate)) headers['cache-control'] = CACHE_FOREVER;
     // Anything not in the table, SVG and PDF (#97) download instead of
     // rendering in the origin; an <img> of an SVG still shows it.
     if (!known || ext === 'svg' || ext === 'pdf') headers['content-disposition'] = 'attachment';
