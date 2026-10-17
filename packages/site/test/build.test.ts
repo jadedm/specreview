@@ -48,7 +48,7 @@ const commit = (repo: string, message: string) => {
 const build = (repo: string, ...args: string[]) => {
   const r = spawnSync('node', [CLI, 'build', '--repo', 'fixture', ...args], { cwd: repo, encoding: 'utf8' });
   // VitePress colours its log on GitHub Actions (escape codes inside "dead link ./x"); matched as plain text.
-  return { status: r.status, stderr: r.stderr.replace(/\x1b\[[0-9;]*m/g, '') };
+  return { status: r.status, stderr: r.stderr.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '') };
 };
 const manifestOf = (repo: string, out = '.specreview') =>
   JSON.parse(readFileSync(path.join(repo, out, 'site', 'manifest.json'), 'utf8')) as Manifest;
