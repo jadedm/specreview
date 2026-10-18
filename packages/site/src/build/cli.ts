@@ -37,6 +37,7 @@ import {
 import { siteShape } from './config.js';
 import { git } from './manifest.js';
 import { copyMermaid } from './mermaid.js';
+import { clashesWithPrototypesPage, PROTOTYPES_PAGE, prototypesPage } from './prototypes-page.js';
 
 const USAGE =
   'usage: specreview-site build --repo <name> [--docs docs] [--out .specreview] [--exclude <path>]... [--prototypes <path>]...';
@@ -171,6 +172,19 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
     checkMarkdown(exported.docs, files);
     // Front matter, titles and the sidebar, checked before VitePress runs.
     siteShape(exported.docs, values.repo, home);
+    // The generated Prototypes page (#114), written after the author-page
+    // checks; its rows are escaped as they are made.
+    if (protoFiles.length > 0) {
+      const clash = files.find(clashesWithPrototypesPage);
+      if (clash)
+        throw new BuildError(
+          `${clash}: the build adds a generated Prototypes page (${PROTOTYPES_PAGE}) at that address; rename the docs page`,
+        );
+      // wx: never over a docs file the checks above missed.
+      writeFileSync(path.join(exported.docs, PROTOTYPES_PAGE), prototypesPage(protoFiles, exported.proto), {
+        flag: 'wx',
+      });
+    }
 
     // A fresh output every time, so nothing from an earlier build survives;
     // checkArguments allowed emptying it.

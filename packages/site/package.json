@@ -21,6 +21,7 @@
   "dependencies": {
     "@specreview/shared": "workspace:*",
     "diff": "9.0.0",
+    "entities": "8.1.0",
     "gray-matter": "^4.0.3",
     "markdown-it": "15.0.2",
     "mermaid": "12.2.0",
