@@ -153,6 +153,8 @@ async (page) => {
   await run('features, text selected', async () => {
     await page.evaluate(() => { const p = document.querySelector('.vp-doc p'); const r = document.createRange(); r.selectNodeContents(p); getSelection().removeAllRanges(); getSelection().addRange(r); });
   });
+  // Built only with SMOKE_PROTOTYPES=1 (#114); without it this is a second 404 check.
+  await run('prototypes list', async () => { await page.goto(HUB + '/sidecar/prototypes'); await page.waitForTimeout(500); });
   await run('404', async () => { await page.goto(HUB + '/sidecar/no-such-page'); await page.waitForTimeout(500); });
   await page.setViewportSize({ width: 390, height: 844 });
   await run('390px, menu open', async () => {
@@ -165,11 +167,18 @@ async (page) => {
   // #105: the Enlarge and Close buttons get the ring too.
   await open('/sidecar/diagrams');
   await page.waitForSelector('.sr-diagram-zoom');
+  // The close button is the dialog's only control, so Tab leaves the page from
+  // it: it is reached as a keyboard user reaches it, Enter on Enlarge.
   for (const sel of ['.sr-diagram-zoom', '.sr-zoom-close']) {
-    if (sel === '.sr-zoom-close') { await page.click('.sr-diagram-zoom'); await page.waitForSelector('dialog.sr-zoom[open]'); }
-    await page.focus(sel);
-    await page.keyboard.press('Shift+Tab');
-    await page.keyboard.press('Tab');
+    if (sel === '.sr-zoom-close') {
+      await page.focus('.sr-diagram-zoom');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('dialog.sr-zoom[open]');
+    } else {
+      await page.focus(sel);
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+    }
     const ring = await page.evaluate((s) => { const cs = getComputedStyle(document.querySelector(s)); return cs.outlineStyle === 'solid' && parseFloat(cs.outlineWidth) >= 2 ? '' : `${s} ${cs.outlineStyle} ${cs.outlineWidth}`; }, sel);
     if (ring) throw new Error(`theme check: no focus ring on ${ring}`);
   }

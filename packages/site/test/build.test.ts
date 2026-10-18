@@ -1096,7 +1096,9 @@ describe('#111: prototype folders published untouched', () => {
     ]);
     expect(readFileSync(out(repo, 'proto/product/prototypes/x/support.js'), 'utf8')).toBe('window.x = () => 1;');
     expect(readFileSync(out(repo, 'proto/product/prototypes/x/assets/logo.png')).equals(BINARY)).toBe(true);
-    expect(filesUnder(out(repo, 'site')).some((f) => f.includes('prototypes'))).toBe(false);
+    expect(filesUnder(out(repo, 'site')).some((f) => f.includes('product/prototypes'))).toBe(false);
+    // The generated list (#114) is the one site file about them.
+    expect(filesUnder(out(repo, 'site'))).toContain('prototypes.html');
     const manifest = manifestOf(repo);
     expect(Object.keys(manifest.pages).sort()).toEqual(['index', 'product/spec']);
     expect(manifest.prototypes).toEqual(
@@ -1371,6 +1373,98 @@ describe('#113: links into prototype folders', () => {
     expect(build(repo, '--prototypes', 'assets')).toMatchObject({
       status: 1,
       stderr: expect.stringContaining('assets/demo.html: a prototype may not be under assets/'),
+    });
+  });
+});
+
+describe('#114: the generated Prototypes page', () => {
+  const html = (repo: string, file: string) => readFileSync(path.join(repo, '.specreview', 'site', file), 'utf8');
+
+  it('1-3, 6, 10: lists the published pages, leaves the router, is not reviewed, and is covered by the CSP', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/first.md', page('First', 'x', 'order: 1\n'));
+    write(repo, 'docs/zeta.md', page('Zeta', 'x'));
+    write(repo, 'docs/proto/x/Main.html', '<title>Main screen</title>');
+    write(
+      repo,
+      'docs/proto/x/odd.html',
+      '<title><b>A</b> &amp; *x* {{ 1+1 }} https://e.example :smile: &copy;</title>',
+    );
+    write(repo, 'docs/proto/x/Gone.html', '<title>Gone</title>');
+    write(repo, 'docs/proto/y/index.html', '<title>Y</title>');
+    commit(repo, 'docs');
+    expect(build(repo, '--prototypes', 'proto', '--exclude', 'proto/x/Gone.html')).toMatchObject({ status: 0 });
+    const list = html(repo, 'prototypes.html');
+    expect(list).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html" target="_self">Main screen<\/a>/);
+    expect(list).toMatch(/<a href="\/fixture\/proto\/y\/" target="_self">Y<\/a>/);
+    expect(list.match(/target="_self"/g)).toHaveLength(3);
+    expect(list).not.toContain('Gone');
+    // The odd title is text: no element, and Vue interpolated nothing (no 2).
+    const odd = /<a href="\/fixture\/proto\/x\/odd\.html" target="_self">([^]*?)<\/a>/.exec(list)?.[1] ?? '';
+    expect(odd).toContain('&lt;b&gt;A&lt;/b&gt; &amp; *x*');
+    expect(odd).toContain('{{ 1+1 }}');
+    // Neither linkify nor the emoji plugin acts on it; the entity is decoded once.
+    expect(odd).toContain('https://e.example :smile: \u00a9');
+    expect(odd).not.toMatch(/<[a-z]|\b2\b/i);
+    // Last in the sidebar: after a page ordered first and one whose title sorts after it.
+    const data = /window\.__VP_SITE_DATA__=([^<]*)<\/script>/.exec(html(repo, 'index.html'))?.[1] ?? '';
+    expect(data.lastIndexOf('First')).toBeGreaterThan(-1);
+    expect(data.lastIndexOf('Prototypes')).toBeGreaterThan(data.lastIndexOf('Zeta'));
+    expect(data.lastIndexOf('Zeta')).toBeGreaterThan(data.lastIndexOf('First'));
+    const m = manifestOf(repo);
+    expect(Object.keys(m.pages).sort()).toEqual(['first', 'index', 'zeta']);
+    let scripts = 0;
+    for (const [, code] of list.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)) {
+      if (code.trim() === '') continue;
+      scripts++;
+      expect(m.csp).toContain(`'sha256-${createHash('sha256').update(code).digest('base64')}'`);
+    }
+    expect(scripts).toBeGreaterThan(0);
+  });
+
+  it('7, 9: without prototypes there is no generated page, and an author prototypes.md is an ordinary page', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/prototypes.md', page('Prototypes', 'written by hand'));
+    commit(repo, 'docs');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    expect(html(repo, 'prototypes.html')).toContain('written by hand');
+    expect(Object.keys(manifestOf(repo).pages).sort()).toEqual(['index', 'prototypes']);
+    const bare = newRepo();
+    write(bare, 'docs/index.md', page('Home', 'x'));
+    commit(bare, 'docs');
+    expect(build(bare)).toMatchObject({ status: 0 });
+    expect(existsSync(path.join(bare, '.specreview', 'site', 'prototypes.html'))).toBe(false);
+  });
+
+  it.each([
+    'prototypes.md',
+    'prototypes/index.md',
+    'prototypes.html.md',
+    'Prototypes.md',
+    'prototypes.html/a.md',
+    'Prototypes.MD/a.md',
+  ])('8: a docs page at %s is refused when the build lists prototypes', (file) => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, `docs/${file}`, page('Mine', 'x'));
+    write(repo, 'docs/proto/a.html', '<title>A</title>');
+    commit(repo, 'docs');
+    expect(build(repo, '--prototypes', 'proto')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining(`${file}: the build adds a generated Prototypes page (prototypes.md)`),
+    });
+  });
+
+  it('8b: a prototype at the generated page address is refused', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/prototypes.html', '<title>P</title>');
+    commit(repo, 'docs');
+    expect(build(repo, '--prototypes', 'prototypes.html')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('prototypes.html: the site also serves prototypes.html at that address'),
     });
   });
 });

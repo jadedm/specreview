@@ -18,6 +18,7 @@ import {
   type PrototypeFile,
 } from '@specreview/shared';
 import type { SiteConfig } from 'vitepress';
+import { PROTOTYPES_PAGE } from './prototypes-page.js';
 
 export const TOP_SECTION = '_top';
 
@@ -204,6 +205,8 @@ export const buildEndFor =
     const pages: Record<string, ManifestPage> = {};
 
     for (const file of config.pages) {
+      // The generated Prototypes page (#114) is not reviewed: no manifest entry, so no panel.
+      if (prototypes.length > 0 && file === PROTOTYPES_PAGE) continue;
       // A rewritten page (a README home page, #87) is built and keyed under its
       // new name; its source, and so its history, keep the old one.
       const built = config.rewrites.map[file] ?? file;

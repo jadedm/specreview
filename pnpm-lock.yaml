@@ -91,6 +91,9 @@ importers:
       diff:
         specifier: 9.0.0
         version: 9.0.0
+      entities:
+        specifier: 8.1.0
+        version: 8.1.0
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3

@@ -9,6 +9,7 @@ import type { PrototypeFile } from '@specreview/shared';
 import type { UserConfig } from 'vitepress';
 import { ASSET_TYPES, BuildError, excludedBy, filesIn, isInside } from './checks.js';
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
+import { PROTOTYPES_LINK, PROTOTYPES_PAGE } from './prototypes-page.js';
 import { sanitizeRendered } from './sanitize.js';
 import { readPage, sidebarOf } from './sidebar.js';
 
@@ -241,10 +242,11 @@ export const assertNoFunctionStrings = (value: unknown, where: string): void => 
 
 // The site title and theme config, from the pages: computed by the command
 // before VitePress starts (so a refusal is reported as it is) and again here.
-export const siteShape = (docs: string, repo: string, home?: string | null) => {
+export const siteShape = (docs: string, repo: string, home?: string | null, listsPrototypes = false) => {
   // A README.md home page is index.md to the sidebar, as VitePress's rewrite makes it.
+  // The generated Prototypes page (#114) is not an author page: it goes last.
   const read = filesIn(docs)
-    .filter((f) => f.endsWith('.md'))
+    .filter((f) => f.endsWith('.md') && !(listsPrototypes && f === PROTOTYPES_PAGE))
     .map((f) => readPage(docs, f));
   // Checked under its own name, so an error names the file the author has.
   for (const p of read) parseIssues(p.file, p.issues);
@@ -257,7 +259,8 @@ export const siteShape = (docs: string, repo: string, home?: string | null) => {
     linkText: `Go to ${title}`,
     linkLabel: `Go to ${title}`,
   };
-  const themeConfig = { sidebar: sidebarOf(pages), outline: { level: [2, 3] as [number, number] }, notFound };
+  const sidebar = [...sidebarOf(pages), ...(listsPrototypes ? [{ text: 'Prototypes', link: PROTOTYPES_LINK }] : [])];
+  const themeConfig = { sidebar, outline: { level: [2, 3] as [number, number] }, notFound };
   assertNoFunctionStrings({ title, themeConfig }, 'site');
   return { title, themeConfig };
 };
@@ -273,7 +276,7 @@ export const siteConfig = ({
   exclude = [],
   prototypes = [],
 }: SiteOptions): UserConfig => {
-  const { title, themeConfig } = siteShape(docs, repo, home);
+  const { title, themeConfig } = siteShape(docs, repo, home, prototypes.length > 0);
   const collected: Collected = new Map();
   const linkKeys = { excused: new Set<string>(), plain: new Set<string>() };
   return {
