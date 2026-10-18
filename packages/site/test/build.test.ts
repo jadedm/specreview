@@ -1284,3 +1284,93 @@ describe('#111: prototype folders published untouched', () => {
     expect(manifestOf(repo).pages.notes.history.some((h) => h.path.startsWith('proto/'))).toBe(false);
   });
 });
+
+describe('#113: links into prototype folders', () => {
+  const html = (repo: string, file: string) => readFileSync(path.join(repo, '.specreview', 'site', file), 'utf8');
+
+  it('1-3, 7: only a link the hub redirects leaves the in-site router', () => {
+    const repo = newRepo();
+    write(
+      repo,
+      'docs/index.md',
+      page(
+        'Home',
+        [
+          '[proto](proto/x/Main.html?view=1#top)',
+          '[folder](proto/y/)',
+          '[drafts](drafts/a.md)',
+          '[both](proto/z/Gone.html)',
+          '[one file](proto/w/a.html)',
+          '[no slash](proto/y)',
+          '[encoded](proto/x/Main%2Ehtml)',
+        ].join('\n\n'),
+      ),
+    );
+    write(repo, 'docs/proto/x/Main.html', '<html></html>');
+    write(repo, 'docs/proto/y/index.html', '<html></html>');
+    write(repo, 'docs/proto/z/Gone.html', '<html></html>');
+    write(repo, 'docs/proto/w/a.html', '<html></html>');
+    write(repo, 'docs/proto/w/b.html', '<html></html>');
+    write(repo, 'docs/drafts/a.md', page('A', 'x'));
+    commit(repo, 'docs');
+    const args = [
+      '--prototypes',
+      'proto',
+      '--exclude',
+      'drafts',
+      '--exclude',
+      'proto/z',
+      '--exclude',
+      'proto/w/a.html',
+    ];
+    expect(build(repo, ...args)).toMatchObject({ status: 0 });
+    const index = html(repo, 'index.html');
+    expect(index).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html\?view=1#top" target="_self">/);
+    expect(index).toMatch(/<a href="\/fixture\/proto\/y\/" target="_self">/);
+    expect(index).toMatch(/<a href="\/fixture\/drafts\/a">/);
+    expect(index).toMatch(/<a href="\/fixture\/proto\/z\/Gone\.html">/);
+    // An exact exclusion under a prototype folder wins over the folder.
+    expect(index).toMatch(/<a href="\/fixture\/proto\/w\/a\.html">/);
+    // The hub redirects a folder only with its slash; without it, the 404 page.
+    expect(index).toMatch(/<a href="\/fixture\/proto\/y">/);
+    // The hub never decodes a path, so an encoded name is not the prototype:
+    // it stays an excused link (markdown-it prints it decoded) and reaches the 404 page.
+    expect(index).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html">encoded<\/a>/);
+    expect(index.match(/target="_self"/g)).toHaveLength(2);
+  });
+
+  it('a prototype path the site also serves is refused', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/proto/notes.txt', 'proto');
+    write(repo, 'docs/public/proto/notes.txt', 'public');
+    commit(repo, 'docs');
+    expect(build(repo, '--prototypes', 'proto')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('proto/notes.txt: the site also serves proto/notes.txt at that address'),
+    });
+  });
+
+  it('a prototype a page shadows at its .html address is refused', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/guide', '<html></html>');
+    write(repo, 'docs/guide.md', page('Guide', 'x'));
+    commit(repo, 'docs');
+    expect(build(repo, '--prototypes', 'guide')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('guide: the site also serves guide.html at that address'),
+    });
+  });
+
+  it('a prototype under assets/ is refused', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/assets/demo.html', '<html></html>');
+    commit(repo, 'docs');
+    expect(build(repo, '--prototypes', 'assets')).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('assets/demo.html: a prototype may not be under assets/'),
+    });
+  });
+});

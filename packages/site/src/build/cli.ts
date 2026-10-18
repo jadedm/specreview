@@ -204,6 +204,14 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
       copyLinkedAssets(exported.docs, path.join(out, 'site'));
       copyMermaid(path.join(out, 'site'));
       if (protoFiles.length > 0) cpSync(exported.proto, path.join(out, 'proto'), { recursive: true });
+      // The hub sends a docs-host request for a prototype path to the
+      // prototype hostname only when no site file answers it (#113).
+      for (const file of protoFiles)
+        for (const served of [file, `${file}.html`, `${file}/index.html`])
+          if (existsSync(path.join(out, 'site', served)))
+            throw new BuildError(
+              `${file}: the site also serves ${served} at that address, so links could never reach the prototype`,
+            );
       checkBundle(out);
     } catch (err) {
       // A failed build leaves no half-written site behind.
