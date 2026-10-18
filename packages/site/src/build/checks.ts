@@ -234,6 +234,10 @@ export const checkPrototypes = (files: string[], patterns: string[], tree: strin
         `${file}: prototype file names may use only letters, digits and . _ ~ -, not start with a dot`,
       );
     if (RESERVED.has(parts[0])) throw new BuildError(`${file}: the path may not start with _api, _history or _signin`);
+    // The hub keeps an older build's assets/ files in the next version (#104),
+    // and a site file there would answer before the prototype redirect (#113).
+    if (parts[0] === 'assets')
+      throw new BuildError(`${file}: a prototype may not be under assets/, which the site uses`);
   }
   caseClash(files);
   // Against every committed file: a pattern whose matches are all excluded

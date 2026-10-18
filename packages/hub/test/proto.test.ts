@@ -276,16 +276,19 @@ describe('112: the prototype hostname', () => {
   it('11: the docs hostname never serves a prototype', async () => {
     const version = await published();
     const docs = async (p: string) =>
-      fetchHub(`${HOST}${p}`, { headers: { 'cf-access-jwt-assertion': await token({ email: READER, aud: HUB_AUD }) } });
-    for (const p of [
-      `/${SIDECAR}/proto/product/x/Main.dc.html`,
-      `/${SIDECAR}/p/${version}/product/x/Main.dc.html`,
-      `/${SIDECAR}/product/x/Main.dc.html`,
-    ]) {
+      fetchHub(`${HOST}${p}`, {
+        headers: { 'cf-access-jwt-assertion': await token({ email: READER, aud: HUB_AUD }) },
+        redirect: 'manual',
+      });
+    for (const p of [`/${SIDECAR}/proto/product/x/Main.dc.html`, `/${SIDECAR}/p/${version}/product/x/Main.dc.html`]) {
       const r = await docs(p);
       expect(String(r.body), p).not.toContain('PROTO-MARK');
       expect(r.status, p).toBe(404);
     }
+    // The prototype's own path is sent to the prototype hostname (#113), never served here.
+    const own = await docs(`/${SIDECAR}/product/x/Main.dc.html`);
+    expect([own.status, String(own.body)]).toEqual([302, '']);
+    expect(own.headers.get('location')).toBe(`${PROTO_HOST}/${SIDECAR}/product/x/Main.dc.html`);
   });
 
   it('13, 13b: the live version only, after the pointer cache; never a version from the URL', async () => {
@@ -348,5 +351,64 @@ describe('112: the prototype hostname in the config', () => {
     const noHostname = { ...noAdmin };
     delete noHostname.hostname;
     expect(problemsIn(noHostname)).toEqual(['hostname goes with adminHostname or protoHostname']);
+  });
+});
+
+describe('113: a docs link into a prototype folder', () => {
+  const docs = async (p: string, opts: { email?: string | null; method?: string } = {}, override = {}) => {
+    const headers: Record<string, string> = {};
+    if (opts.email !== null)
+      headers['cf-access-jwt-assertion'] = await token({ email: opts.email ?? READER, aud: HUB_AUD });
+    return fetchHub(`${HOST}${p}`, { method: opts.method ?? 'GET', headers, redirect: 'manual' }, override);
+  };
+  const published = async () => {
+    const r = await publish(await partsFor());
+    expect(r.status).toBe(200);
+  };
+
+  it('4-6, 10: a listed path is sent to the prototype hostname, query kept; a folder too; HEAD as well', async () => {
+    await published();
+    const r = await docs(`/${SIDECAR}/product/x/Main.dc.html?view=1`);
+    expect([r.status, r.headers.get('location'), r.headers.get('cache-control')]).toEqual([
+      302,
+      `${PROTO_HOST}/${SIDECAR}/product/x/Main.dc.html?view=1`,
+      'private, no-store',
+    ]);
+    const folder = await docs(`/${SIDECAR}/product/x/folder/`);
+    expect([folder.status, folder.headers.get('location')]).toEqual([
+      302,
+      `${PROTO_HOST}/${SIDECAR}/product/x/folder/`,
+    ]);
+    const head = await docs(`/${SIDECAR}/product/x/Main.dc.html`, { method: 'HEAD' });
+    expect([head.status, String(head.body)]).toEqual([302, '']);
+  });
+
+  it('7, 8: a path not listed, or a hub without a prototype hostname, gets the 404 page', async () => {
+    await published();
+    expect((await docs(`/${SIDECAR}/product/x/unlisted.html`)).status).toBe(404);
+    const r = await docs(`/${SIDECAR}/product/x/Main.dc.html`, {}, withoutProto);
+    expect(r.status).toBe(404);
+  });
+
+  it('9: no sign-in, or someone who may not read the site, gets no redirect', async () => {
+    await published();
+    expect((await docs(`/${SIDECAR}/product/x/Main.dc.html`, { email: null })).status).toBe(401);
+    expect((await docs(`/${SIDECAR}/product/x/Main.dc.html`, { email: 'x@stranger.example' })).status).toBe(403);
+  });
+
+  it('a public site: an anonymous visitor is redirected, publicly cacheable for a minute like its pages', async () => {
+    await published();
+    const cfg = structuredClone(CONFIG) as typeof CONFIG & { sites: Record<string, unknown>[] };
+    cfg.sites[0].visibility = 'public';
+    const r = await docs(
+      `/${SIDECAR}/product/x/Main.dc.html`,
+      { email: null },
+      { SPECREVIEW_CONFIG: JSON.stringify(cfg) },
+    );
+    expect([r.status, r.headers.get('location'), r.headers.get('cache-control')]).toEqual([
+      302,
+      `${PROTO_HOST}/${SIDECAR}/product/x/Main.dc.html`,
+      'public, max-age=60',
+    ]);
   });
 });

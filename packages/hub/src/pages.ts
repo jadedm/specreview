@@ -65,7 +65,13 @@ const INERT = "default-src 'none'; sandbox";
 // The manifest holds history metadata (authors, PRs) that only the team sees.
 const HIDDEN = new Set(['manifest.json']);
 
-export const servePage = async (ctx: Ctx, method: string, path: string, directory: boolean): Promise<Response> => {
+export const servePage = async (
+  ctx: Ctx,
+  method: string,
+  path: string,
+  directory: boolean,
+  search = '',
+): Promise<Response> => {
   if (method !== 'GET' && method !== 'HEAD') throw new AppError(405, 'METHOD_NOT_ALLOWED');
   const snapshot: Snapshot = await ctx.snapshot();
   for (const candidate of HIDDEN.has(path) ? [] : candidates(path, directory)) {
@@ -88,6 +94,14 @@ export const servePage = async (ctx: Ctx, method: string, path: string, director
       return new Response(null, { headers });
     }
     return new Response(obj.body, { headers });
+  }
+  // A docs link into a prototype folder (#113) comes here as a full page
+  // load: when the live version lists that path as a prototype, it opens on
+  // the prototype hostname, which asks for its own sign-in.
+  const protoPath = directory ? `${path}/index.html` : path;
+  if (ctx.config.proto && (snapshot.manifest.prototypes ?? []).some((p) => p.path === protoPath)) {
+    const location = `https://${ctx.config.proto.hostname}/${ctx.site.repo}/${directory ? `${path}/` : path}${search}`;
+    return new Response(null, { status: 302, headers: { location, 'cache-control': 'private, no-store' } });
   }
   return notFoundPage(ctx, snapshot, method);
 };

@@ -115,18 +115,34 @@ const decoded = (s: string) => {
     return null;
   }
 };
+// A link the hub sends to the prototype hostname (#113): exactly a listed
+// prototype file, or a folder with its slash whose index.html is one. An
+// excluded file is never listed, so exclusion wins; other forms (a folder
+// without its slash, a clean URL) stay excused and reach the 404 page.
+export const prototypeLink = (prototypes: PrototypeFile[]) => {
+  const listed = new Set(prototypes.map((p) => p.path));
+  return (target: string) => listed.has(target.endsWith('/') ? `${target}index.html` : target);
+};
+
 export const excludedLinks = (
   md: MarkdownIt,
   exclude: string[],
   keys: { excused: Set<string>; plain: Set<string> },
+  // A link to a prototype file (#113, prototypeLink) also leaves VitePress's
+  // in-site router (target=_self) so the hub can send it to the prototype hostname.
+  prototype: (target: string) => boolean = () => false,
+  // The site's base: VitePress leaves a link with a target as written, base
+  // and all, and never checks it for a dead link.
+  base = '/',
 ) => {
   const left = excludedBy(exclude);
   // The file the link names, the page VitePress resolves it to, or that path
   // itself (a left-out folder). Nothing else, so a near miss is still dead.
-  const leftOut = (target: string) => {
+  const formsOf = (target: string) => {
     const page = target.endsWith('/') ? `${target}index` : target.replace(/\.(html|md)$/, '');
-    return left(target) || left(page) || left(`${page}.md`);
+    return [target, page, `${page}.md`];
   };
+  const leftOut = (target: string) => formsOf(target).some(left);
   md.core.ruler.push('specreview-excluded-links', (state) => {
     const dir = path.posix.dirname(String((state.env as { relativePath?: string }).relativePath ?? ''));
     for (const block of state.tokens)
@@ -144,6 +160,12 @@ export const excludedLinks = (
           continue;
         }
         const rewritten = `/${joined}`;
+        // As written: the hub compares the path it is asked for undecoded.
+        if (prototype(joined)) {
+          token.attrSet('href', `${base}${joined}${rest}`);
+          token.attrSet('target', '_self');
+          continue;
+        }
         token.attrSet('href', `${rewritten}${rest}`);
         keys.excused.add(deadLinkKey(rewritten));
       }
@@ -275,7 +297,7 @@ export const siteConfig = ({
       attrs: { disable: true },
       config: (md) => {
         if (home === 'README.md') readmeHome(md);
-        excludedLinks(md, exclude, linkKeys);
+        excludedLinks(md, exclude, linkKeys, prototypeLink(prototypes), `/${repo}/`);
         noInterpolation(md);
       },
     },

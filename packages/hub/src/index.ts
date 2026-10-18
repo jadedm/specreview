@@ -207,7 +207,13 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   // Access assertion at all is anonymous: a present but bad one is still 401.
   if (anonymousPage(request, route)) {
     const page = route as Extract<Route, { kind: 'page' }>;
-    const served = await servePage(makeCtx(env, deps, config, page.site), request.method, page.path, page.directory);
+    const served = await servePage(
+      makeCtx(env, deps, config, page.site),
+      request.method,
+      page.path,
+      page.directory,
+      url.search,
+    );
     return markPublic(served, true);
   }
   const email = await identify(request, config);
@@ -224,7 +230,7 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const byKind: Record<Route['kind'], () => Promise<Response>> = {
     page: async () => {
       const page = route as Extract<Route, { kind: 'page' }>;
-      const served = await servePage(ctx, request.method, page.path, page.directory);
+      const served = await servePage(ctx, request.method, page.path, page.directory, url.search);
       return page.site.visibility === 'public' ? markPublic(served, false) : served;
     },
     // Access signed the visitor in on the way here; send them to the site.
