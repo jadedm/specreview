@@ -72,6 +72,20 @@ describe('titles and links', () => {
     expect(titleOf('a.md', 'text\n\n# Heading #\n', {})).toBe('Heading');
     expect(titleOf('guide/a-page.md', 'no heading', { title: '  ' })).toBe('a-page');
     expect(titleOf('guide/a-page.md', 'no heading', {}, 'given')).toBe('given');
+    // #129: the heading read as VitePress reads a page's title.
+    const t = (md: string) => titleOf('page.md', md, {});
+    expect(t('# The **x** and `y` plan')).toBe('The x and y plan');
+    expect(t('Title\n===\n')).toBe('Title');
+    expect(t('   # Indented')).toBe('Indented');
+    expect(t('> # Quoted\n\n# Later')).toBe('Quoted');
+    expect(t('# ![logo](x.png)')).toBe('page');
+    expect(t('# A &amp; B')).toBe('A &amp; B');
+    // As VitePress joins text: an escaped & becomes &amp;, a lone entity stays decoded.
+    expect(t('# A \\& B')).toBe('A &amp; B');
+    expect(t('# **&amp;**')).toBe('&');
+    expect(t('# Launch :rocket: plan')).toBe('Launch 🚀 plan');
+    expect(t('# [Linked](other.md) title')).toBe('Linked title');
+    expect(t('## Second level only')).toBe('page');
     // #124: the home page after the repo, a folder index after its folder.
     expect([
       untitledName('index', 'acme'),
