@@ -38,6 +38,10 @@ git clone -q --filter=blob:none --no-checkout https://github.com/jadedm/specrevi
 [ -n "$(git -C "$CHECKOUT" branch -r --contains "$COMMIT" 2>/dev/null)" ] ||
   { echo "run.sh: $COMMIT is not on a branch of jadedm/specreview" >&2; exit 2; }
 git -C "$CHECKOUT" checkout -q --detach "$COMMIT"
+# Releases are tags on main (#84); a develop commit still runs, with a warning.
+RELEASE=$(git -C "$CHECKOUT" tag --points-at "$COMMIT" --list 'v*' | sed -n 1p)
+[ -n "$RELEASE" ] && echo "run.sh: specreview $RELEASE" >&2 ||
+  echo "run.sh: $COMMIT is not a specreview release; pin the commit a release tag points to" >&2
 if [ -n "${PRODUCT:-}" ]; then
   (cd "$CHECKOUT" && pnpm install --frozen-lockfile --silent && pnpm --filter @specreview/shared build >/dev/null && pnpm --filter @specreview/site build >/dev/null)
   (cd "$PRODUCT" && node "$CHECKOUT/packages/site/dist/build/cli.js" build "$@" --out "$OUT")

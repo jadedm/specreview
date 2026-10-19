@@ -17,7 +17,14 @@ Thanks for looking. specreview is small and run by one maintainer, so the proces
 5. **The local gate** (below) passes before every push.
 6. **A pull request to `develop`.** The template asks for the issue, what changed and why, the tests, and the smoke run. Pull requests from outside contributors run CI after a maintainer approves the run. A maintainer checking out a fork's branch runs `node scripts/check-packages.mjs` before `pnpm install`.
 
-`main` takes releases only. Changes reach it from `develop`.
+`main` takes releases only. Changes reach it from `develop`. A release (#84):
+
+1. A ticket for it, closed by hand before the merge.
+2. A branch `release/<x.y.z>` from `develop`, and a pull request into `main` merged with a merge commit, never squashed.
+3. The tag `v<x.y.z>` on that merge commit, pushed, and a GitHub release with notes.
+4. `main` merged back into `develop`: a branch `chore/<issue>-back-merge-<x.y.z>` cut from `main` (CI refuses `main` itself as a pull request's branch), and a pull request into `develop`, also merged with a merge commit.
+
+Hubs pin the commit the tag points to, so a tag is never moved.
 
 ## Setup
 
