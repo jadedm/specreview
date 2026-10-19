@@ -130,7 +130,9 @@ export const excludedLinks = (
   exclude: string[],
   keys: { excused: Set<string>; plain: Set<string> },
   // A link to a prototype file (#113, prototypeLink) also leaves VitePress's
-  // in-site router (target=_self) so the hub can send it to the prototype hostname.
+  // in-site router (any target does) so the hub can send it to the prototype
+  // hostname, in a new tab (#126): the prototype has no way back to the docs.
+  // noopener: its unsanitized script must not reach this tab through opener.
   prototype: (target: string) => boolean = () => false,
   // The site's base: VitePress leaves a link with a target as written, base
   // and all, and never checks it for a dead link.
@@ -164,7 +166,8 @@ export const excludedLinks = (
         // As written: the hub compares the path it is asked for undecoded.
         if (prototype(joined)) {
           token.attrSet('href', `${base}${joined}${rest}`);
-          token.attrSet('target', '_self');
+          token.attrSet('target', '_blank');
+          token.attrSet('rel', 'noopener');
           continue;
         }
         token.attrSet('href', `${rewritten}${rest}`);
