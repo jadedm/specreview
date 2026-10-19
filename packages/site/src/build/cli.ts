@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -220,9 +221,18 @@ export const runBuild = async (argv: string[], cwd = process.cwd()) => {
       if (protoFiles.length > 0) cpSync(exported.proto, path.join(out, 'proto'), { recursive: true });
       // The hub sends a docs-host request for a prototype path to the
       // prototype hostname only when no site file answers it (#113).
+      // Exact names from one listing (#120): a case-insensitive disk would
+      // answer existsSync for Guide.html when asked for guide.html, and R2
+      // and the hub tell them apart. The same listing as the uploader's
+      // filesOf (packages/action/src/publish.ts): what this sees is what is sent.
+      const siteFiles = new Set(
+        readdirSync(path.join(out, 'site'), { recursive: true, withFileTypes: true })
+          .filter((e) => e.isFile())
+          .map((e) => path.relative(path.join(out, 'site'), path.join(e.parentPath, e.name)).split(path.sep).join('/')),
+      );
       for (const file of protoFiles)
         for (const served of [file, `${file}.html`, `${file}/index.html`])
-          if (existsSync(path.join(out, 'site', served)))
+          if (siteFiles.has(served))
             throw new BuildError(
               `${file}: the site also serves ${served} at that address, so links could never reach the prototype`,
             );

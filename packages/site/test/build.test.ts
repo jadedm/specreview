@@ -1458,6 +1458,18 @@ describe('#113: links into prototype folders', () => {
     });
   });
 
+  // Fails only on a case-insensitive disk (macOS), where the old existsSync
+  // answered for Guide.html; on Linux it passed before the fix too.
+  it('#120 1: a page differing only in case does not shadow a prototype', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/guide', '<html></html>');
+    write(repo, 'docs/Guide.md', page('Guide', 'x'));
+    commit(repo, 'docs');
+    // The site serves Guide.html and the prototype is guide: R2 and the hub tell them apart.
+    expect(build(repo, '--prototypes', 'guide')).toMatchObject({ status: 0 });
+  });
+
   it('a prototype under assets/ is refused', () => {
     const repo = newRepo();
     write(repo, 'docs/index.md', page('Home', 'x'));
