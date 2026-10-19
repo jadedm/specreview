@@ -1314,6 +1314,8 @@ describe('#113: links into prototype folders', () => {
     write(repo, 'docs/proto/w/a.html', '<html></html>');
     write(repo, 'docs/proto/w/b.html', '<html></html>');
     write(repo, 'docs/drafts/a.md', page('A', 'x'));
+    // #126: from a nested page, relative and docs-root links get the same.
+    write(repo, 'docs/guide/deep.md', page('Deep', '[up](../proto/x/Main.html)\n\n[root](/proto/y/)'));
     commit(repo, 'docs');
     const args = [
       '--prototypes',
@@ -1327,8 +1329,8 @@ describe('#113: links into prototype folders', () => {
     ];
     expect(build(repo, ...args)).toMatchObject({ status: 0 });
     const index = html(repo, 'index.html');
-    expect(index).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html\?view=1#top" target="_self">/);
-    expect(index).toMatch(/<a href="\/fixture\/proto\/y\/" target="_self">/);
+    expect(index).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html\?view=1#top" target="_blank" rel="noopener">/);
+    expect(index).toMatch(/<a href="\/fixture\/proto\/y\/" target="_blank" rel="noopener">/);
     expect(index).toMatch(/<a href="\/fixture\/drafts\/a">/);
     expect(index).toMatch(/<a href="\/fixture\/proto\/z\/Gone\.html">/);
     // An exact exclusion under a prototype folder wins over the folder.
@@ -1338,7 +1340,11 @@ describe('#113: links into prototype folders', () => {
     // The hub never decodes a path, so an encoded name is not the prototype:
     // it stays an excused link (markdown-it prints it decoded) and reaches the 404 page.
     expect(index).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html">encoded<\/a>/);
-    expect(index.match(/target="_self"/g)).toHaveLength(2);
+    expect(index.match(/target="_blank" rel="noopener"/g)).toHaveLength(2);
+    expect(index).not.toContain('_self');
+    const deep = html(repo, 'guide/deep.html');
+    expect(deep).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html" target="_blank" rel="noopener">up<\/a>/);
+    expect(deep).toMatch(/<a href="\/fixture\/proto\/y\/" target="_blank" rel="noopener">root<\/a>/);
   });
 
   it('a prototype path the site also serves is refused', () => {
@@ -1396,12 +1402,14 @@ describe('#114: the generated Prototypes page', () => {
     commit(repo, 'docs');
     expect(build(repo, '--prototypes', 'proto', '--exclude', 'proto/x/Gone.html')).toMatchObject({ status: 0 });
     const list = html(repo, 'prototypes.html');
-    expect(list).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html" target="_self">Main screen<\/a>/);
-    expect(list).toMatch(/<a href="\/fixture\/proto\/y\/" target="_self">Y<\/a>/);
-    expect(list.match(/target="_self"/g)).toHaveLength(3);
+    expect(list).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html" target="_blank" rel="noopener">Main screen<\/a>/);
+    expect(list).toMatch(/<a href="\/fixture\/proto\/y\/" target="_blank" rel="noopener">Y<\/a>/);
+    expect(list.match(/target="_blank" rel="noopener"/g)).toHaveLength(3);
+    expect(list).not.toContain('_self');
     expect(list).not.toContain('Gone');
     // The odd title is text: no element, and Vue interpolated nothing (no 2).
-    const odd = /<a href="\/fixture\/proto\/x\/odd\.html" target="_self">([^]*?)<\/a>/.exec(list)?.[1] ?? '';
+    const odd =
+      /<a href="\/fixture\/proto\/x\/odd\.html" target="_blank" rel="noopener">([^]*?)<\/a>/.exec(list)?.[1] ?? '';
     expect(odd).toContain('&lt;b&gt;A&lt;/b&gt; &amp; *x*');
     expect(odd).toContain('{{ 1+1 }}');
     // Neither linkify nor the emoji plugin acts on it; the entity is decoded once.
