@@ -88,7 +88,8 @@ export const viaNameservers = async (
 ) => {
   const addresses = await authoritativeAddresses(hostname, dns).catch(() => []);
   for (const address of addresses) {
-    const answer = await probe(hostname, address);
+    // A probe that fails is no answer from that address (#100).
+    const answer = await probe(hostname, address).catch(() => null);
     if (answer && redirectsToAccess(answer.status, answer.location, teamDomain)) return true;
   }
   return false;
@@ -132,7 +133,14 @@ export const waitForHost = async (
       () => false,
     );
     if (answered) return 'resolver';
-    if (await within(direct(hostname, teamDomain), directBudgetMs)) return 'nameservers';
+    // Any failure on this path only means not ready yet (#100).
+    if (
+      await within(
+        direct(hostname, teamDomain).catch(() => false),
+        directBudgetMs,
+      )
+    )
+      return 'nameservers';
     await new Promise((r) => setTimeout(r, delayMs));
   }
   throw new DeployError(

@@ -321,6 +321,23 @@ describe('9: deploy', () => {
     ).rejects.toThrow(/did not answer within 0 s; DNS or the certificate/);
   });
 
+  it('#100 6: a nameserver path that throws is not ready yet, and the wait ends as on a timeout', async () => {
+    const fails = (async () => {
+      throw new Error('ENOTFOUND');
+    }) as typeof fetch;
+    const crashes = async (): Promise<boolean> => {
+      throw new TypeError("Cannot read properties of null (reading 'setServername')");
+    };
+    await expect(
+      waitForHost('specs.acme.dev', 'acme.cloudflareaccess.com', {
+        fetchImpl: fails,
+        direct: crashes,
+        tries: 3,
+        delayMs: 1,
+      }),
+    ).rejects.toThrow(/did not answer within .*The Worker is deployed\. If `dig \+trace/);
+  });
+
   it('27 (1, 2, 10): the nameserver path is asked only when the system path fails, on every poll', async () => {
     const fails = (async () => {
       throw new Error('ENOTFOUND');
