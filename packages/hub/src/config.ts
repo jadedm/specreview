@@ -238,7 +238,18 @@ export const domainOfEmail = (email: string) => EMAIL.exec(email)?.[1] ?? null;
 
 type RawSite = Record<string, unknown>;
 const strings = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null);
-const isEmail = (e: string) => DOMAIN.test(domainOfEmail(e) ?? '');
+// An entry's part before the @ (#135): what an address may hold unquoted
+// (RFC 5322 atext and dots), with no leading, trailing or doubled dot. Only
+// for entries in the config: a signed-in email is read by domainOfEmail as
+// before, so this rule turns no one away who is let in today.
+// Letters and digits of any script count too (RFC 6531), as the rule before
+// this one let them through.
+const LOCAL = /^[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~-]+(\.[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~-]+)*$/u;
+const isEmail = (e: string) => {
+  const at = e.lastIndexOf('@');
+  // At most 64 before the @ and 254 in all, as an address can be.
+  return at > 0 && at <= 64 && e.length <= 254 && LOCAL.test(e.slice(0, at)) && DOMAIN.test(domainOfEmail(e) ?? '');
+};
 const isLowerEmail = (e: string) => isEmail(e) && e === e.toLowerCase() && e.trim() === e;
 
 const readerProblem = (entry: string): string | null => {

@@ -52,3 +52,12 @@ describe('35: roles', () => {
     expect(roleOf('not-an-email', site)).toBe('none');
   });
 });
+
+// #135 7: the stricter shape is for config entries only; a signed-in email
+// with an unusual part before the @ keeps its role by domain.
+describe('#135: signed-in emails are read as before', () => {
+  it('7: an unusual local part is still team, and reader, by domain', () => {
+    expect(roleOf('a"b@acme.dev', site)).toBe('team');
+    expect(roleOf('a"b@initech.example', site)).toBe('reader');
+  });
+});

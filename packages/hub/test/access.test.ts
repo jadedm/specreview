@@ -762,6 +762,17 @@ describe('#91: team members and approvers on the admin page', () => {
   });
 });
 
+// #135 6: an add the config rules refuse is not written.
+describe('135: an entry not shaped like an email', () => {
+  it('6: is refused with the rule, nothing committed', async () => {
+    const r = await add('readers', '<b>x</b>@gmail.com');
+    expect(r.status).toBe(400);
+    expect(html(r)).toContain('is not an email or @domain');
+    expect(html(r)).not.toContain('<b>x</b>');
+    expect(puts).toEqual([]);
+  });
+});
+
 // #133: three tabs, each its own address; a change answers on the People tab.
 describe('133: the admin page in tabs', () => {
   const tab = async (path: string) => html(await call(path, { raw: true, email: ADMIN, envOverride: env }));
