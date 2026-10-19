@@ -81,7 +81,8 @@ const excludeBlock = (exclude: string[] = []) =>
 export const workflowFor = (input: SiteInput, branch: string, origin: string, commit: string) =>
   `# Builds this repo's docs folder and publishes it to the specreview hub.
 # Added from the hub's admin page; the actions are pinned to the commit the
-# hub runs.
+# hub runs. When the hub upgrades to a new specreview release, move both pins
+# to its commit.
 name: docs
 
 on:
