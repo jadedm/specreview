@@ -392,7 +392,8 @@ describe('builds that must fail, naming the cause', () => {
     // No < or >, so this rule is what refuses it.
     const code = '_vp-fn_(function(){throw new Error("MARKER-"+(6*7))})()';
     const cases: [string, string, string][] = [
-      ['front matter title', 'docs/fm.md', page('x', 'body', `title: '${code}'\n`)],
+      // Escaped: titles are read as inline Markdown (#129, #141), where _x_ is emphasis.
+      ['front matter title', 'docs/fm.md', page('x', 'body', `title: '${code.replace(/_/g, '\\_')}'\n`)],
       // Escaped, since the heading is read as Markdown (#129): _x_ is emphasis.
       ['heading', 'docs/h.md', `# ${code.replace(/_/g, '\\_')}\n\nbody\n`],
       ['folder name', 'docs/_vp-fn_1/p.md', page('P', 'body')],
@@ -413,6 +414,50 @@ describe('builds that must fail, naming the cause', () => {
     const r = build(plain);
     expect(r.stderr).not.toContain('MARKER-42');
     expect(manifestOf(plain).pages.h.title.startsWith('_vp-fn_')).toBe(false);
+  });
+
+  it("#141 review: VitePress keeps the sidebar's title, so a crafted front matter title holds no <", () => {
+    const repo = minimal();
+    // Emphasis closing before punctuation: a lone entity decoded inside it.
+    write(repo, 'docs/fm.md', '---\ntitle: "*&amp;*#60;/script*&amp;*#62;"\n---\n\n# x\n');
+    commit(repo, 'fm');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    // The first emphasis closes (its entity decoded once), the second cannot open: literal text, no <.
+    expect(manifestOf(repo).pages.fm.title).toBe('&#60;/script*&*#62;');
+    expect(readFileSync(path.join(repo, '.specreview', 'site', 'fm.html'), 'utf8')).not.toContain('</script</title>');
+  });
+
+  it('#141 1: the browser tab, the manifest and the sidebar read an entity decoded', () => {
+    const repo = minimal();
+    write(repo, 'docs/entity.md', '# A &amp; B\n\nbody\n');
+    commit(repo, 'entity');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    const page = readFileSync(path.join(repo, '.specreview', 'site', 'entity.html'), 'utf8');
+    // Escaped once by the server render: the tab shows A & B.
+    expect(page).toContain('<title>A &amp; B | ');
+    expect(page).not.toMatch(/<title>[^<]*&amp;amp;/);
+    // The page data the client sets the tab from holds the decoded text.
+    const chunk = readdirSync(path.join(repo, '.specreview', 'site', 'assets')).find((f) =>
+      /^entity\.md\.[^.]+\.lean\.js$/.test(f),
+    );
+    expect(readFileSync(path.join(repo, '.specreview', 'site', 'assets', chunk ?? 'missing'), 'utf8')).toContain(
+      '"title":"A & B"',
+    );
+    expect(manifestOf(repo).pages.entity.title).toBe('A & B');
+  });
+
+  it('#141 5, 6: an entity cannot carry < or > past the title check, nor the function prefix into site data', () => {
+    for (const [name, heading, said] of [
+      ['angle', '# a &lt;b&gt;', 'may not contain < or >'],
+      ['prefix', '# &#95;vp-fn_x', 'which VitePress would run as code'],
+    ]) {
+      const repo = minimal();
+      write(repo, `docs/${name}.md`, `${heading}\n\nbody\n`);
+      commit(repo, name);
+      const r = build(repo);
+      expect(r.status, name).toBe(1);
+      expect(r.stderr, name).toContain(said);
+    }
   });
 
   it('a title with < or > is refused', () => {
@@ -682,10 +727,12 @@ describe('#129: the sidebar and the manifest name a heading alike', () => {
       indented: ['   # Indented title\n', 'Indented title'],
       quoted: ['> # Quoted title\n', 'Quoted title'],
       image: ['# ![logo](logo.png)\n', 'image'],
-      entity: ['# A &amp; B\n', 'A &amp; B'],
+      entity: ['# A &amp; B\n', 'A & B'],
       linked: ['# [Linked](markup.md) title\n', 'Linked title'],
       emoji: ['# Launch :rocket: plan\n', 'Launch 🚀 plan'],
-      escaped: ['# Tea \\& cake\n', 'Tea &amp; cake'],
+      escaped: ['# Tea \\& cake\n', 'Tea & cake'],
+      front: ['---\ntitle: "Q &amp; A"\n---\n\nText.\n', 'Q & A'],
+      code: ['# Use `&amp;` here\n', 'Use &amp; here'],
     };
     for (const [name, [body]] of Object.entries(pages)) write(repo, `docs/${name}.md`, body);
     write(repo, 'docs/logo.png', 'png');
