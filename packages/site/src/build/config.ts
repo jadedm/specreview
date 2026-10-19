@@ -11,7 +11,7 @@ import { ASSET_TYPES, BuildError, excludedBy, filesIn, isInside } from './checks
 import { buildEndFor, type Collected, parseIssues } from './manifest.js';
 import { PROTOTYPES_LINK, PROTOTYPES_PAGE } from './prototypes-page.js';
 import { sanitizeRendered } from './sanitize.js';
-import { readPage, sidebarOf } from './sidebar.js';
+import { readPage, sidebarOf, untitledName } from './sidebar.js';
 
 // A product repo has no node_modules: the Markdown pages it compiles import
 // Vue, so Vue resolves to the copy this package depends on.
@@ -247,7 +247,9 @@ export const siteShape = (docs: string, repo: string, home?: string | null, list
   // The generated Prototypes page (#114) is not an author page: it goes last.
   const read = filesIn(docs)
     .filter((f) => f.endsWith('.md') && !(listsPrototypes && f === PROTOTYPES_PAGE))
-    .map((f) => readPage(docs, f));
+    .map((f) =>
+      readPage(docs, f, untitledName(home === 'README.md' && f === 'README.md' ? 'index' : f.slice(0, -3), repo)),
+    );
   // Checked under its own name, so an error names the file the author has.
   for (const p of read) parseIssues(p.file, p.issues);
   const pages = read.map((p) => (home === 'README.md' && p.file === 'README.md' ? { ...p, file: 'index.md' } : p));

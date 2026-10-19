@@ -614,6 +614,37 @@ describe('15, 18: where the docs are, and git states', () => {
   });
 });
 
+describe('#124: a page with no title is named after its file', () => {
+  it('1-3, 5, 6, 8: an untitled page is named after its file, folder or repo, alike in the manifest and the sidebar', () => {
+    const repo = newRepo();
+    write(repo, 'docs/README.md', 'Start here.\n');
+    write(repo, 'docs/plans/notes.md', 'No heading at all.\n');
+    write(repo, 'docs/plans/fenced.md', '```sh\n# work, push\n```\n');
+    write(repo, 'docs/plans/blank.md', '---\ntitle: "   "\n---\n\nText.\n');
+    write(repo, 'docs/plans/named.md', '---\ntitle: Named here\n---\n\nText.\n');
+    write(repo, 'docs/plans/marked.md', '# The `x` plan\n\nText.\n');
+    write(repo, 'docs/plans/index.md', 'The plans folder.\n');
+    write(repo, 'docs/plans/both.md', '---\ntitle: " "\n---\n\n# From the heading\n');
+    commit(repo, 'docs');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    const titles = Object.fromEntries(Object.entries(manifestOf(repo).pages).map(([k, v]) => [k, v.title]));
+    expect(titles).toEqual({
+      index: 'fixture',
+      'plans/index': 'plans',
+      'plans/both': 'From the heading',
+      'plans/notes': 'notes',
+      'plans/fenced': 'fenced',
+      'plans/blank': 'blank',
+      'plans/named': 'Named here',
+      'plans/marked': 'The x plan',
+    });
+    // The sidebar names the untitled pages the same way.
+    const sidebar = readFileSync(path.join(repo, '.specreview', 'site', 'plans/notes.html'), 'utf8');
+    for (const name of ['fixture', 'plans', 'notes', 'fenced', 'blank', 'From the heading'])
+      expect(sidebar).toMatch(new RegExp(`<(p|h2) class="text"[^>]*>${name}</(p|h2)>`));
+  });
+});
+
 describe('#87: the whole repo as the docs folder, and a README home page', () => {
   const site = (repo: string, out = '.specreview') => path.join(repo, out, 'site');
   const minimal = () => {
