@@ -20,7 +20,7 @@ describe('#75 the admin hostname', () => {
   it('1: serves the admin page to an admin signed in to it', async () => {
     const r = await call('/_admin/', { raw: true, email: ADMIN });
     expect(r.status).toBe(200);
-    expect(String(r.body)).toContain('<h1>GitHub App</h1>');
+    expect(String(r.body)).toContain('<h1>People</h1>');
   });
 
   it("2: each hostname takes only its own application's sign-in", async () => {
@@ -62,6 +62,9 @@ describe('#75 the docs hostname', () => {
       ['/_admin/', `${ADMIN_HOST}/_admin/`],
       ['/_admin', `${ADMIN_HOST}/_admin/`],
       ['/_admin/github/created?code=abc&state=def', `${ADMIN_HOST}/_admin/github/created?code=abc&state=def`],
+      // #133: the Sites and GitHub App tabs.
+      ['/_admin/sites?repo=newdocs', `${ADMIN_HOST}/_admin/sites?repo=newdocs`],
+      ['/_admin/github', `${ADMIN_HOST}/_admin/github`],
     ]) {
       const r = await call(from, { raw: true, host: 'docs' });
       expect([r.status, r.headers.get('location')], from).toEqual([308, to]);

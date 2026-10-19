@@ -52,7 +52,7 @@ const conversion = (owner: Record<string, unknown> = { id: Number(OWNER_ID), typ
 
 // Starts the flow as the admin and returns the state the page put in the form.
 const startFlow = async () => {
-  const r = await admin('/_admin/');
+  const r = await admin('/_admin/github');
   const state = /settings\/apps\/new\?state=([0-9a-f]{64})/.exec(html(r))?.[1];
   if (!state) throw new Error('no state in the page');
   return state;
@@ -114,7 +114,7 @@ describe('1, 2 and 16: who and what reaches the admin page', () => {
 
 describe('3 and 14: no app yet', () => {
   it('3: the page posts the manifest to the org on GitHub with a state; the CSP allows only that target', async () => {
-    const r = await admin('/_admin/');
+    const r = await admin('/_admin/github');
     expect(r.status).toBe(200);
     const page = html(r);
     expect(page).toMatch(
@@ -150,7 +150,7 @@ describe('3 and 14: no app yet', () => {
   });
 
   it('3: without the hub key the page says to deploy first and offers no form', async () => {
-    const r = await admin('/_admin/', { envOverride: {} });
+    const r = await admin('/_admin/github', { envOverride: {} });
     expect(html(r)).toContain('The hub key is not set yet');
     expect(html(r)).not.toContain('<form');
   });
@@ -171,7 +171,7 @@ describe('5 to 10: GitHub sends the admin back', () => {
     const state = await startFlow();
     const r = await finish(state);
     expect(r.status).toBe(303);
-    expect(r.headers.get('location')).toBe('/_admin/');
+    expect(r.headers.get('location')).toBe('/_admin/github');
     expect(github.conversions).toEqual(['code123']);
     const row = await storedRow();
     expect(row).toMatchObject({ app_id: APP_ID, slug: 'specreview-acme', created_by: ADMIN });
@@ -327,7 +327,7 @@ describe('4, 11 and 13: an app stored', () => {
     github.app = appStub(String(APP_ID), keys.publicKey);
     github.app.installations.delete('acme/globex');
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const page = html(await admin('/_admin/'));
+    const page = html(await admin('/_admin/github'));
     expect(page).toContain('<strong>specreview-acme</strong>, created by owner@acme.dev on');
     expect(page).toContain('href="https://github.com/apps/specreview-acme/installations/new"');
     expect(page).toMatch(/acme\/sidecar<\/span><span class="meta">installed</);
@@ -349,7 +349,7 @@ describe('4, 11 and 13: an app stored', () => {
   it('12: the GITHUB_APP_* secrets win over the stored app; the page says so and offers no form', async () => {
     await store();
     const page = html(
-      await admin('/_admin/', { envOverride: { ...keyed, GITHUB_APP_ID: '5', GITHUB_APP_PRIVATE_KEY: PEM } }),
+      await admin('/_admin/github', { envOverride: { ...keyed, GITHUB_APP_ID: '5', GITHUB_APP_PRIVATE_KEY: PEM } }),
     );
     expect(page).toContain('set in its Worker secrets');
     expect(page).not.toContain('settings/apps/new');
@@ -369,7 +369,7 @@ describe('4, 11 and 13: an app stored', () => {
     ]);
     expect(github.calls.filter((c) => c.includes('/issues/'))).toEqual([]);
     expect(errors.mock.calls.map((c) => c.join(' ')).join('\n')).toMatch(/stored app specreview-acme cannot be opened/);
-    const page = html(await admin('/_admin/', { envOverride: other }));
+    const page = html(await admin('/_admin/github', { envOverride: other }));
     expect(page).toContain("this hub's key no longer opens it");
     expect(page).toContain('Forget this app');
   });
@@ -387,7 +387,9 @@ describe('18: forget', () => {
     const r = await admin('/_admin/github/forget', { method: 'POST', headers: { origin: ADMIN_HOST } });
     expect(r.status).toBe(303);
     expect(await storedRow()).toBeNull();
-    expect(html(await admin('/_admin/'))).toContain('settings/apps/new');
+    expect(html(await admin('/_admin/github'))).toContain('settings/apps/new');
+    // #133: People says it needs the app and points at its tab.
+    expect(html(await admin('/_admin/'))).toContain('set it up on the <a href="/_admin/github">GitHub App</a> tab');
   });
 
   it('after forgetting, tickets go back to the personal tokens', async () => {

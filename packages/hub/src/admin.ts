@@ -19,14 +19,40 @@ import { API, githubFetch } from './github-fetch';
 const STATE_TTL_MS = 60 * 60_000;
 const STATES_PER_ADMIN = 10;
 const INSTALLED_WAIT_MS = 3_000;
-const BACK = '<p><a href="/_admin/">Back to the admin page</a></p>';
-
 type Admin = { request: Request; url: URL; env: Env; config: HubConfig; email: string; deps: Deps };
-type Route = { method: string; run: (a: Admin) => Promise<Response> };
+type Run = (a: Admin) => Promise<Response>;
+type Route = Partial<Record<'GET' | 'POST', Run>>;
 
 const nameOf = (config: HubConfig) => escapeHtml(config.brand?.name ?? config.org);
+
+// Three tabs, each its own address (#133): plain links, since the page runs
+// no script; the current one is marked for screen readers too.
+const TABS = [
+  ['/_admin/', 'People'],
+  ['/_admin/sites', 'Sites'],
+  ['/_admin/github', 'GitHub App'],
+] as const;
+type Tab = (typeof TABS)[number][0];
+const tabsFor = (current: Tab | null) =>
+  `<nav class="tabs" aria-label="Admin">${TABS.map(([href, label]) => `<a href="${href}"${href === current ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+const TAB_TITLES: Record<Tab, string> = {
+  '/_admin/': 'People',
+  '/_admin/sites': 'Sites',
+  '/_admin/github': 'GitHub App',
+};
+// Only the GitHub App tab posts a form to GitHub (the app's manifest).
+const tabPage = (a: Admin, current: Tab | null, main: string, status = 200) =>
+  page(
+    status,
+    nameOf(a.config),
+    `${tabsFor(current)}${main}`,
+    false,
+    // form-action does not fall back to default-src: every page names it.
+    current === '/_admin/github' ? "'self' https://github.com" : "'self'",
+    current ? TAB_TITLES[current] : undefined,
+  );
 const say = (a: Admin, status: number, title: string, body: string) =>
-  page(status, nameOf(a.config), `<h1>${escapeHtml(title)}</h1>${body}${BACK}`, false);
+  tabPage(a, null, `<h1>${escapeHtml(title)}</h1>${body}`, status);
 
 const envApp = (env: Env) => Boolean(env.GITHUB_APP_ID?.trim() || env.GITHUB_APP_PRIVATE_KEY);
 const hubKeySet = (env: Env) =>
@@ -135,12 +161,15 @@ const INTRO =
 // GitHub (#63) in two steps, since the page runs no script: the repo, then a
 // form with its branches. The lists only help; the post is checked as before.
 const sitesFor = async (a: Admin, found: Found) => {
-  const listed = [...a.config.sites.keys()]
-    .map((r) => `<li><span class="site"><span class="title">${escapeHtml(r)}</span></span></li>`)
+  const listed = [...a.config.sites.values()]
+    .map(
+      (s) =>
+        `<li><span class="site"><span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepo)}${s.visibility === 'public' ? ', public' : ''}</span></span></li>`,
+    )
     .join('');
-  const current = `<h2>Sites</h2><ul>${listed}</ul>`;
+  const current = `<p class="note">Each site is a repo's docs, published at <code>/&lt;repo&gt;/</code> on the docs hostname.</p><ul>${listed}</ul>`;
   const missing = [
-    !envApp(a.env) && found.kind !== 'app' && 'a GitHub App (above)',
+    !usable(a, found) && 'a GitHub App (the <a href="/_admin/github">GitHub App</a> tab)',
     !a.config.configRepo && '<code>configRepo</code> in the config (the repo holding it)',
     !a.env.SPECREVIEW_COMMIT && 'a real commit in <code>specreview.commit</code>, then a deploy',
   ].filter(Boolean);
@@ -179,7 +208,7 @@ const chooseRepo = async (a: Admin, note: string) => {
     );
   if (repos.length === 0)
     return `${said}<p class="note">Every repo the app can reach is already a site. Install the app on another repo first.</p>`;
-  return `${said}<form method="get" action="/_admin/">${select('repo', 'Repo', repos, '', `The repo whose docs to publish, in ${escapeHtml(a.config.org)}`)}<button type="submit">Next</button></form>`;
+  return `${said}<form method="get" action="/_admin/sites">${select('repo', 'Repo', repos, '', `The repo whose docs to publish, in ${escapeHtml(a.config.org)}`)}<button type="submit">Next</button></form>`;
 };
 
 const siteForm = async (a: Admin, repo: string) => {
@@ -204,7 +233,7 @@ const siteForm = async (a: Admin, repo: string) => {
   const tickets = ticketRepos
     ? select('ticketRepo', 'Ticket repo', ticketRepos, repo, 'Where its tickets are')
     : field('ticketRepo', 'Ticket repo', repo, 'Where its tickets are');
-  return `<form method="post" action="/_admin/sites"><p><strong>${escapeHtml(repo)}</strong> <a href="/_admin/">Choose another repo</a></p><input type="hidden" name="repo" value="${escapeHtml(repo)}">${branch}${field('docs', 'Docs folder', 'docs', '. for the whole repo, when it holds only pages and images')}${field('exclude', 'Leave out', '', 'Paths in the docs folder not to publish, comma separated; * and ** are wildcards')}${tickets}${suggest('teamDomain', 'Team domain', teamDomains(a), "Everyone at this domain is the site's team; pick one or type another")}<button type="submit">Open the pull requests</button></form>`;
+  return `<form method="post" action="/_admin/sites"><p><strong>${escapeHtml(repo)}</strong> <a href="/_admin/sites">Choose another repo</a></p><input type="hidden" name="repo" value="${escapeHtml(repo)}">${branch}${field('docs', 'Docs folder', 'docs', '. for the whole repo, when it holds only pages and images')}${field('exclude', 'Leave out', '', 'Paths in the docs folder not to publish, comma separated; * and ** are wildcards')}${tickets}${suggest('teamDomain', 'Team domain', teamDomains(a), "Everyone at this domain is the site's team; pick one or type another")}<button type="submit">Open the pull requests</button></form>`;
 };
 
 // Today's form, typed: when GitHub cannot list.
@@ -233,12 +262,14 @@ const select = (name: string, label: string, options: string[], chosen: string, 
 // config repo, which is where they live, marked against what the hub runs.
 const accessFor = async (a: Admin, found: Found) => {
   const configRepo = a.config.configRepo;
-  if (!configRepo || (!envApp(a.env) && found.kind !== 'app')) return '';
+  if (!usable(a, found)) return NEEDS_APP;
+  if (!configRepo)
+    return '<p class="note">The lists can be changed here once the config names <code>configRepo</code>, the repo holding it.</p>';
   const file = await within(readConfig(a.deps.github, configRepo), null, LISTS_WAIT_MS);
   const history = file
     ? ` <a href="https://github.com/${escapeHtml(configRepo)}/commits/${file.branch.split('/').map(encodeURIComponent).join('/')}/specreview.config.json">History</a>`
     : '';
-  const intro = `<h2>Who reads and approves</h2><p class="note">Each change is a commit to ${escapeHtml(configRepo)}; its apply workflow carries it to the sign-in and the hub in a couple of minutes, so someone added may be refused until then. A removal takes effect here at once.${history}</p>`;
+  const intro = `<p class="note">Who can read and approve each site. Each change is a commit to ${escapeHtml(configRepo)}; its apply workflow carries it to the sign-in and the hub in a couple of minutes, so someone added may be refused until then. A removal takes effect here at once.${history}</p>`;
   if (!file)
     return `${intro}<p class="note">The hub could not read the config from GitHub, so the lists cannot be changed right now.</p>`;
   const sites = await Promise.all(
@@ -246,8 +277,9 @@ const accessFor = async (a: Admin, found: Found) => {
       const git = listsIn(file.config, site.repo) ?? { readers: [], approvers: [], team: [] };
       const removed = await pendingFor(a.env, site.key).catch(() => null);
       if (!removed)
-        return `<h2>${escapeHtml(site.repo)}</h2><p class="note">The hub cannot read its list of removals right now, so these lists cannot be changed.</p>`;
-      const lists = (['readers', 'approvers', 'team'] as const).map((list) => {
+        return `<section class="box"><h2>${escapeHtml(site.repo)}</h2><p class="note">The hub cannot read its list of removals right now, so these lists cannot be changed.</p></section>`;
+      // Most powerful first, as the mockup approved on #133 has them.
+      const lists = (['approvers', 'team', 'readers'] as const).map((list) => {
         const live = site[list];
         const refused = new Map(removed.filter((r) => r.list === list).map((r) => [r.entry, r.removedAt]));
         const committed = git[list];
@@ -278,14 +310,19 @@ const accessFor = async (a: Admin, found: Found) => {
           // in, and is kept so that a config listing them again cannot either.
         ];
         const title = { readers: 'Readers', approvers: 'Approvers', team: 'Team members' }[list];
+        const allows = {
+          approvers: 'Sign pages off as ready, and see what the team sees.',
+          team: `People outside ${site.teamDomains.join(' and ')} who see what the team sees: emails, ticket titles, history.`,
+          readers: 'Read, comment and see page status; other people show as Reader or the team.',
+        }[list];
         const hint = {
           readers: 'name@company.com, or @company.com for everyone there',
           approvers: 'name@company.com, or @company.com for everyone there; approvers see what the team sees',
           team: `name@company.com, seeing what the team sees (everyone at ${site.teamDomains.join(' or ')} already does)`,
         }[list];
-        return `<p><strong>${title}</strong></p><ul>${rows.join('') || '<li><span class="site"><span class="meta">None</span></span></li>'}</ul><form method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(site.repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="add"><p><label>Add ${{ readers: 'a reader', approvers: 'an approver', team: 'a team member' }[list]}<br><input name="entry" autocomplete="off"></label><br><span class="note">${escapeHtml(hint)}</span></p><button class="quiet" type="submit">Add</button></form>`;
+        return `<h3>${title}</h3><p class="note">${escapeHtml(allows)}</p><ul>${rows.join('') || '<li><span class="site"><span class="meta">None</span></span></li>'}</ul><form method="post" action="/_admin/access"><input type="hidden" name="site" value="${escapeHtml(site.repo)}"><input type="hidden" name="list" value="${list}"><input type="hidden" name="action" value="add"><p><label>Add ${{ readers: 'a reader', approvers: 'an approver', team: 'a team member' }[list]}<br><input name="entry" autocomplete="off"></label><br><span class="note">${escapeHtml(hint)}</span></p><button class="quiet" type="submit">Add</button></form>`;
       });
-      return `<h2>${escapeHtml(site.repo)}</h2>${lists.join('')}`;
+      return `<section class="box"><h2>${escapeHtml(site.repo)}</h2><p class="note">Anyone at ${escapeHtml(site.teamDomains.join(' or '))} is on the team.</p>${lists.join('')}</section>`;
     }),
   );
   return intro + sites.join('');
@@ -323,6 +360,8 @@ const docsHostnameOf = (a: Admin) => {
 
 const accessPost = async (a: Admin) => {
   if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
+  // The answer is the People tab with the result at the top (#133).
+  const answer = (status: number, title: string, body: string) => people(a, resultBox(title, body), status);
   const form = await formOf(a.request);
   const value = (k: string) => (form.get(k) ?? '').trim();
   const list = value('list');
@@ -335,9 +374,9 @@ const accessPost = async (a: Admin) => {
     (action === 'add' || action === 'remove' || action === 'restore') &&
     change.entry.length > 0 &&
     change.entry.length <= 254;
-  if (!shaped) return say(a, 400, 'Check the form', '<p>A site, a list and an entry are needed.</p>');
+  if (!shaped) return answer(400, 'Check the form', '<p>A site, a list and an entry are needed.</p>');
   if (action === 'restore' && removedAt === undefined)
-    return say(a, 400, 'Check the form', '<p>Reload the admin page and try again.</p>');
+    return answer(400, 'Check the form', '<p>Reload the admin page and try again.</p>');
   const outcome = await changeAccess(change as AccessChange, {
     config: a.config,
     env: a.env,
@@ -347,31 +386,27 @@ const accessPost = async (a: Admin) => {
   const who = `${escapeHtml(change.entry)} ${action === 'add' ? 'added to' : 'removed from'} ${escapeHtml(change.site)}'s ${list}`;
   const answers: Record<Outcome['kind'], () => Promise<Response>> = {
     done: () =>
-      say(
-        a,
+      answer(
         200,
         action === 'add' ? 'Added' : 'Removed',
         `<p>${outcome.kind === 'done' && outcome.note ? escapeHtml(outcome.note) : `${who}. The apply workflow deploys it in a couple of minutes.${action === 'remove' ? ' The hub refuses them from now.' : ''}`}</p>${outcome.kind === 'done' && outcome.still ? `<p class="note">They still ${{ readers: 'read', approvers: 'approve', team: 'see what the team sees' }[list as 'readers' | 'approvers' | 'team']} through ${escapeHtml(outcome.still)}.</p>` : ''}${outcome.kind === 'done' && outcome.keeps ? `<p class="note">They keep ${{ reader: 'reading', team: 'the team&#39;s view', approver: 'approving', none: '' }[outcome.keeps]} here through another entry in the config.</p>` : ''}${outcome.kind === 'done' && outcome.refused ? `<p class="note">${outcome.refused === true ? 'A removal still refuses them here; the admin page offers Let back in.' : 'The hub could not check for a removal; reload the admin page to see whether one still refuses them.'}</p>` : ''}`,
       ),
     unchanged: () =>
-      say(a, 200, 'Nothing to change', `<p>${escapeHtml(outcome.kind === 'unchanged' ? outcome.why : '')}.</p>`),
+      answer(200, 'Nothing to change', `<p>${escapeHtml(outcome.kind === 'unchanged' ? outcome.why : '')}.</p>`),
     refused: () =>
-      say(
-        a,
+      answer(
         outcome.kind === 'refused' ? outcome.status : 400,
         'Not changed',
         `<p>${escapeHtml(outcome.kind === 'refused' ? outcome.why : '')}.</p>`,
       ),
     standing: () =>
-      say(
-        a,
+      answer(
         502,
         'Removed here, not committed',
         `<p>The hub refuses ${escapeHtml(change.entry)} on ${escapeHtml(change.site)} from now, but the change to the config did not go through cleanly: ${escapeHtml(outcome.kind === 'standing' ? outcome.why : '')}.</p><p class="note">Check the config's history, and remove them again if the commit is not there. To undo, let them back in from the admin page.</p>`,
       ),
     restored: () =>
-      say(
-        a,
+      answer(
         200,
         'Let back in',
         `<p>The hub no longer refuses ${escapeHtml(change.entry)} on ${escapeHtml(change.site)} because of an earlier removal.</p>`,
@@ -380,16 +415,35 @@ const accessPost = async (a: Admin) => {
   return answers[outcome.kind]();
 };
 
-const home = async (a: Admin) => {
+// A usable app: the Worker's secrets, or one stored here that opens.
+const usable = (a: Admin, found: Found) => envApp(a.env) || found.kind === 'app';
+const NEEDS_APP =
+  '<p class="note">This needs the hub\'s GitHub App first: set it up on the <a href="/_admin/github">GitHub App</a> tab.</p>';
+
+// People (#133): the tab used most, so the page's own address.
+// A change that did not go through shows its result alone: reading the
+// lists back means GitHub again, which is often why it failed.
+const people = async (a: Admin, result = '', status = 200) => {
+  if (status >= 300)
+    return tabPage(a, '/_admin/', `<h1>People</h1>${result}<p><a href="/_admin/">Back to the lists</a></p>`, status);
   const found = await findApp(a.env);
-  return page(
-    200,
-    nameOf(a.config),
-    `<h1>GitHub App</h1>${await bodyFor(a, found)}${await sitesFor(a, found)}${await accessFor(a, found)}`,
-    false,
-    "'self' https://github.com",
-  );
+  const body = usable(a, found) ? await accessFor(a, found) : NEEDS_APP;
+  return tabPage(a, '/_admin/', `${result}<h1>People</h1>${body}`, status);
 };
+
+const sitesPage = async (a: Admin) => {
+  const found = await findApp(a.env);
+  return tabPage(a, '/_admin/sites', `<h1>Sites</h1>${await sitesFor(a, found)}`);
+};
+
+const githubPage = async (a: Admin) => {
+  const found = await findApp(a.env);
+  return tabPage(a, '/_admin/github', `<h1>GitHub App</h1>${await bodyFor(a, found)}`);
+};
+
+// A change's result, at the top of the People tab.
+const resultBox = (title: string, body: string) =>
+  `<div class="result" role="status"><p><strong>${escapeHtml(title)}</strong></p>${body}</div>`;
 
 // A small form: counted as it arrives, so a large body is never held.
 const MAX_FORM = 4096;
@@ -435,7 +489,7 @@ const addSitePost = async (a: Admin) => {
     a,
     200,
     `Pull requests opened for ${input.repo}`,
-    `<ol><li>Merge ${link(added.config)} and wait for the apply workflow to finish green.</li><li>Then merge ${link(added.product)}. Its push publishes the site at <a href="/${escapeHtml(input.repo)}/">/${escapeHtml(input.repo)}/</a>.</li></ol><p class="note">If the docs run is refused because the hub did not know the site yet, re-run it once the hub is deployed.</p>`,
+    `<ol><li>Merge ${link(added.config)} and wait for the apply workflow to finish green.</li><li>Then merge ${link(added.product)}. Its push publishes the site at <a href="https://${escapeHtml(docsHostnameOf(a))}/${escapeHtml(input.repo)}/">/${escapeHtml(input.repo)}/</a>.</li></ol><p class="note">If the docs run is refused because the hub did not know the site yet, re-run it once the hub is deployed.</p>`,
   );
 };
 
@@ -472,7 +526,7 @@ const created = async (a: Admin) => {
       a,
       400,
       'This link is incomplete',
-      "<p>It did not come from GitHub's app creation. Start again from the admin page.</p>",
+      `<p>It did not come from GitHub's app creation. Start again from the <a href="/_admin/github">GitHub App</a> tab.</p>`,
     );
   // Checked before the state is spent: GitHub's code lasts an hour, so the
   // admin can fix these and open the link again.
@@ -488,14 +542,14 @@ const created = async (a: Admin) => {
       a,
       409,
       'An app is already set up',
-      '<p>Forget the current app on the admin page before adding another. Delete the new one on GitHub if you do not need it.</p>',
+      '<p>Forget the current app on the <a href="/_admin/github">GitHub App</a> tab before adding another. Delete the new one on GitHub if you do not need it.</p>',
     );
   if (!(await takeState(a.env, a.email, state)))
     return say(
       a,
       400,
       'This link has expired',
-      '<p>It was already used, is over an hour old, or was started by another admin. Start again from the admin page.</p>',
+      '<p>It was already used, is over an hour old, or was started by another admin. Start again from the <a href="/_admin/github">GitHub App</a> tab.</p>',
     );
   const { status, app } = await convert(code);
   if (!app)
@@ -543,7 +597,10 @@ const created = async (a: Admin) => {
       `<p>GitHub created ${escapeHtml(slug)}, but the hub could not store its key, and GitHub gives the key only once. <a href="${appSettings(a.config, slug)}">Delete the app on GitHub</a> and start again.</p>`,
     );
   forgetStoredAuth();
-  return new Response(null, { status: 303, headers: { location: '/_admin/', 'cache-control': 'private, no-store' } });
+  return new Response(null, {
+    status: 303,
+    headers: { location: '/_admin/github', 'cache-control': 'private, no-store' },
+  });
 };
 
 // A form on our own page: the browser sends our origin; another site's form
@@ -552,15 +609,19 @@ const forget = async (a: Admin) => {
   if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
   await forgetApp(a.env);
   forgetStoredAuth();
-  return new Response(null, { status: 303, headers: { location: '/_admin/', 'cache-control': 'private, no-store' } });
+  return new Response(null, {
+    status: 303,
+    headers: { location: '/_admin/github', 'cache-control': 'private, no-store' },
+  });
 };
 
 const ROUTES: Record<string, Route> = {
-  '/_admin/': { method: 'GET', run: home },
-  '/_admin/github/created': { method: 'GET', run: created },
-  '/_admin/github/forget': { method: 'POST', run: forget },
-  '/_admin/sites': { method: 'POST', run: addSitePost },
-  '/_admin/access': { method: 'POST', run: accessPost },
+  '/_admin/': { GET: (a) => people(a) },
+  '/_admin/sites': { GET: sitesPage, POST: addSitePost },
+  '/_admin/github': { GET: githubPage },
+  '/_admin/github/created': { GET: created },
+  '/_admin/github/forget': { POST: forget },
+  '/_admin/access': { POST: accessPost },
 };
 
 export const adminRoute = (pathname: string) => (Object.hasOwn(ROUTES, pathname) ? ROUTES[pathname] : null);
@@ -575,10 +636,16 @@ const notAdmin = (a: Admin) =>
     false,
   );
 
+// The three tabs answer a non-admin with a page; the GitHub return and posts
+// keep the JSON answer.
+const TAB_PATHS = new Set<string>(TABS.map(([href]) => href));
+
 export const serveAdmin = async (route: Route, a: Admin): Promise<Response> => {
   const admin = a.config.admins.includes(a.email);
-  if (!admin && route.run === home && a.request.method === 'GET') return notAdmin(a);
+  if (!admin && TAB_PATHS.has(a.url.pathname) && a.request.method === 'GET') return notAdmin(a);
   if (!admin) throw new AppError(403, 'FORBIDDEN');
-  if (a.request.method !== route.method) throw new AppError(405, 'METHOD_NOT_ALLOWED');
-  return route.run(a);
+  const method = a.request.method;
+  const run = method === 'GET' || method === 'POST' ? route[method] : undefined;
+  if (!run) throw new AppError(405, 'METHOD_NOT_ALLOWED');
+  return run(a);
 };

@@ -17,6 +17,8 @@ where() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$@"; }
 
 echo "== admin hostname"
 check "1 GET /_admin/ as admin" "$(code -H "cf-access-jwt-assertion: $(tok admin:owner@acme.dev)" "$A/_admin/")" 200
+# #133: the Sites and GitHub App tabs.
+for p in /_admin/sites /_admin/github; do check "1 GET $p as admin" "$(code -H "cf-access-jwt-assertion: $(tok admin:owner@acme.dev)" "$A$p")" 200; done
 check "2 docs sign-in on the admin host" "$(code -H "cf-access-jwt-assertion: $(tok owner@acme.dev)" "$A/_admin/")" 401
 check "2 admin sign-in on the docs host" "$(code -H "cf-access-jwt-assertion: $(tok admin:dev@acme.dev)" "$D/sidecar/_api/me")" 401
 check "3 GET /_admin/ as a non-admin" "$(code -H "cf-access-jwt-assertion: $(tok admin:dev@acme.dev)" "$A/_admin/")" 403
@@ -26,6 +28,7 @@ check "8 post with the docs origin" "$(code -X POST -H "cf-access-jwt-assertion:
 
 echo "== docs hostname"
 check "5 GET /_admin/ redirects" "$(where "$D/_admin/")" "308 https://admin.localhost/_admin/"
+check "5 GET /_admin/sites redirects" "$(where "$D/_admin/sites?repo=x")" "308 https://admin.localhost/_admin/sites?repo=x"
 check "5 GET with a query keeps it" "$(where "$D/_admin/github/created?code=a&state=b")" "308 https://admin.localhost/_admin/github/created?code=a&state=b"
 for p in /_admin/access /_admin/sites /_admin/github/forget; do
   check "6 POST $p is not here" "$(code -X POST -H "cf-access-jwt-assertion: $(tok owner@acme.dev)" -H "origin: $D" "$D$p")" 404

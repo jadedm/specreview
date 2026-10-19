@@ -175,7 +175,7 @@ describe('1 to 3: who and when', () => {
     '2 and 3: %s: the page says what is missing and has no form; a post is refused',
     async (_n, change, word, refusal) => {
       const e = { ...env, ...change };
-      const page = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: e }));
+      const page = html(await call('/_admin/sites', { raw: true, email: ADMIN, envOverride: e }));
       expect(page).toContain(word);
       expect(page).not.toContain('action="/_admin/sites"');
       const r = await add(NEW, { envOverride: e });
@@ -187,9 +187,9 @@ describe('1 to 3: who and when', () => {
   );
 
   it('the page starts the add-site form when all is there; step 2 fills in the docs folder', async () => {
-    const page = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: env }));
-    expect(page).toContain('<form method="get" action="/_admin/">');
-    const step2 = html(await call('/_admin/?repo=newdocs', { raw: true, email: ADMIN, envOverride: env }));
+    const page = html(await call('/_admin/sites', { raw: true, email: ADMIN, envOverride: env }));
+    expect(page).toContain('<form method="get" action="/_admin/sites">');
+    const step2 = html(await call('/_admin/sites?repo=newdocs', { raw: true, email: ADMIN, envOverride: env }));
     expect(step2).toContain('<form method="post" action="/_admin/sites">');
     expect(step2).toContain('name="docs" value="docs"');
   });
@@ -505,7 +505,7 @@ describe('the review fixes', () => {
 
 describe('#63: the form offers lists from GitHub', () => {
   const page = async (query = '') =>
-    html(await call(`/_admin/${query}`, { raw: true, email: ADMIN, envOverride: env }));
+    html(await call(`/_admin/sites${query}`, { raw: true, email: ADMIN, envOverride: env }));
   const options = (htmlText: string, name: string) => {
     const block = new RegExp(`<select name="${name}">(.*?)</select>`, 's').exec(htmlText)?.[1] ?? '';
     return [...block.matchAll(/<option value="([^"]*)"( selected)?>/g)].map((m) => (m[2] ? `*${m[1]}` : m[1]));
@@ -518,7 +518,7 @@ describe('#63: the form offers lists from GitHub', () => {
     github.app!.installations.set('acme/.github', 7);
     github.app!.installations.set('acme/.github-private', 7);
     const p = await page();
-    expect(p).toContain('<form method="get" action="/_admin/">');
+    expect(p).toContain('<form method="get" action="/_admin/sites">');
     expect(options(p, 'repo')).toEqual(['newdocs']);
   });
 
@@ -613,7 +613,7 @@ describe('#63 review fixes: listing', () => {
       if (url.pathname === '/orgs/acme/installation' && ++lookups === 1) return new Response('down', { status: 503 });
       return real(input, init);
     });
-    const page = () => call('/_admin/', { raw: true, email: ADMIN, envOverride: env });
+    const page = () => call('/_admin/sites', { raw: true, email: ADMIN, envOverride: env });
     const [first] = await Promise.all([page(), page()]);
     expect(html(first)).toContain('GitHub did not list the repos in time, or could not');
     // Within 30 seconds the failure is remembered: no new lookup, still the typed form.
