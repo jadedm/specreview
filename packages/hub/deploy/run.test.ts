@@ -28,6 +28,8 @@ vi.setConfig({ testTimeout: 180_000 });
 const STUBS: Record<string, string> = {
   git: `[ "$2" = clone ] || [ "$1" = clone ] && exit 0
 for a in "$@"; do [ "$a" = branch ] && { echo "  origin/develop"; exit 0; }; done
+# A release tag only for exactly: tag --points-at <the pinned commit> --list v*
+[ "$3 $4 $5 $6 $7" = "tag --points-at ${COMMIT} --list v*" ] && { [ -n "\${STUB_TAG:-}" ] && printf '%s\\n' $STUB_TAG; exit 0; }
 exit 0`,
   pnpm: `echo "pnpm $*" >> "$STUB_LOG"`,
   node: `{ echo "node cwd=$PWD"; for a in "$@"; do echo "arg $a"; done; } >> "$STUB_LOG"
@@ -70,21 +72,24 @@ const argsOf = (log: string) =>
 describe('92: run.sh check-docs', () => {
   it('15 and the plan review: builds the site package and passes every option through as its own argument', () => {
     const t = setup();
-    const r = t.run([
-      'check-docs',
-      'product',
-      '--repo',
-      'product',
-      '--docs',
-      'spec docs',
-      '--exclude',
-      'drafts/**',
-      '--exclude',
-      'old.md',
-      '--prototypes',
-      'proto',
-    ]);
-    expect([r.code, r.err]).toEqual([0, '']);
+    const r = t.run(
+      [
+        'check-docs',
+        'product',
+        '--repo',
+        'product',
+        '--docs',
+        'spec docs',
+        '--exclude',
+        'drafts/**',
+        '--exclude',
+        'old.md',
+        '--prototypes',
+        'proto',
+      ],
+      { STUB_TAG: 'v0.1.0' },
+    );
+    expect([r.code, r.err]).toEqual([0, 'run.sh: specreview v0.1.0\n']);
     expect(r.out).toContain('check-docs: the docs build; nothing was published');
     expect(r.log).toContain('pnpm --filter @specreview/site build');
     expect(r.log).not.toContain('@specreview/hub build');
@@ -165,6 +170,32 @@ describe('92: run.sh check-docs', () => {
     expect(r.log).toContain('pnpm --filter @specreview/hub build');
     expect(r.log).not.toContain('@specreview/site build');
     expect(readFileSync(path.join(keep, 'file'), 'utf8')).toBe('mine');
+  });
+
+  it('#84 (1, 3): a release commit is named, for every command', () => {
+    const t = setup();
+    for (const args of [
+      ['setup', '--token-file', '/x'],
+      ['check-docs', 'product', '--repo', 'product'],
+    ]) {
+      const r = t.run(args, { STUB_TAG: 'v0.1.0' });
+      expect([r.code, r.err], args[0]).toEqual([0, 'run.sh: specreview v0.1.0\n']);
+    }
+  });
+
+  it('#84 review: with two release tags on the commit, one is named', () => {
+    const r = setup().run(['setup', '--token-file', '/x'], { STUB_TAG: 'v0.1.0 v0.1.1' });
+    expect([r.code, r.err]).toEqual([0, 'run.sh: specreview v0.1.0\n']);
+  });
+
+  it('#84 (2): a commit no release tag points to runs, with one warning line', () => {
+    const t = setup();
+    const r = t.run(['setup', '--token-file', '/x']);
+    expect(r.code).toBe(0);
+    expect(r.err).toBe(`run.sh: ${COMMIT} is not a specreview release; pin the commit a release tag points to\n`);
+    expect(r.log).toContain('deploy.mjs');
+    const failing = t.run(['check-docs', 'product', '--repo', 'product'], { STUB_NODE: '3' });
+    expect(failing.code).toBe(3);
   });
 
   it('19: other commands still build the hub and pass --org', () => {

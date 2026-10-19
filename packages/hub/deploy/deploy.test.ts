@@ -601,6 +601,13 @@ describe('#75: the admin hostname in deploy', () => {
     ]);
   });
 
+  it("#84 (9): upgrading moves the hub and each product repo's two action pins", () => {
+    const readme = readFileSync(path.join(EXAMPLE, 'README.md'), 'utf8');
+    const upgrading = readme.split('\n').find((l) => l.startsWith('- Upgrading:')) ?? '';
+    for (const part of ['specreview.commit', '.github/workflows/docs.yml', 'jadedm/specreview/build@', 'publish@'])
+      expect(upgrading, part).toContain(part);
+  });
+
   it('#92 (13, 14): the template asks for an admin hostname, names its config repo and starts with no sites', () => {
     const hub = JSON.parse(readFileSync(path.join(EXAMPLE, 'hub.json'), 'utf8')) as Record<string, unknown>;
     const config = JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8'));
