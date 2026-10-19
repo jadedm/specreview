@@ -2,25 +2,27 @@
 
 The template for the private repo an organisation keeps for its specreview hub. The repo holds the hub's settings; a workflow applies them to the organisation's Cloudflare account on every push to `main`.
 
-| File                          | Holds                                                                                  | Written by             |
-| ----------------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
-| `specreview.config.json`      | sites, team domains, approvers, readers, admins; optional `brand` (name, logo file)    | you                    |
-| `hub.json`                    | account id, hostname, Worker name, D1 database and R2 bucket names; the ids below them | you, then the workflow |
-| `specreview.commit`           | the full specreview commit to run                                                      | you                    |
-| `.github/workflows/apply.yml` | runs `apply.sh` on pushes to `main` and by hand                                        | copied                 |
-| `apply.sh`                    | setup, then deploy, committing `hub.json` after each                                   | copied                 |
-| `run.sh`                      | fetches that commit fresh, builds the hub, runs one command; also for use on a laptop  | copied                 |
+| File                          | Holds                                                                                  | Written by               |
+| ----------------------------- | -------------------------------------------------------------------------------------- | ------------------------ |
+| `specreview.config.json`      | the organisation, admins, this repo's name; sites and their people; optional `brand`   | you, then the admin page |
+| `hub.json`                    | account id, hostname, Worker name, D1 database and R2 bucket names; the ids below them | you, then the workflow   |
+| `specreview.commit`           | the full specreview commit to run                                                      | you                      |
+| `.github/workflows/apply.yml` | runs `apply.sh` on pushes to `main` and by hand                                        | copied                   |
+| `apply.sh`                    | setup, then deploy, committing `hub.json` after each                                   | copied                   |
+| `run.sh`                      | fetches that commit fresh, builds the hub, runs one command; also for use on a laptop  | copied                   |
 
 ## Install
 
-1. Create a private repo in the organisation's GitHub account from this template (or copy this folder into one, hidden files included: `.github/` and `.gitignore`). Until step 6, the apply workflow's runs (on this first push, or any push to `main`) fail for want of the token; that is expected.
-2. Enable Zero Trust on the Cloudflare account (dashboard: Zero Trust, then the Free plan), and create the install token (below). Keep it in a file on your laptop; it never goes into GitHub.
-3. Edit `hub.json`: `accountId` (the 32-character id on the Cloudflare dashboard), `hostname` (where the docs sites will live, in a zone on that account) and `adminHostname` (the admin page's own hostname, also in a zone on the account; a sibling such as `specs-admin.example.com` beside `specs.example.com` reads clearly). Leave the rest; setup writes the ids.
-4. Edit `specreview.config.json` for your sites and people, and set `specreview.commit` to a commit of specreview's `develop` (run.sh refuses a commit that is on no branch of specreview, such as one whose branch was deleted) (run.sh stops with "set specreview.commit" until you do).
-5. From a laptop, with the install token: `./run.sh setup --token-file <file> --apply` (creates the Access apps and policy, the one-time PIN login, the database and the bucket, and records their ids in `hub.json`), then `./run.sh deploy --token-file <file>`.
-6. Create the workflow's token: `./run.sh workflow-token --token-file <install token file> --out <new file>`, naming a file outside this repo (`/tmp/.cf-workflow-token`, say). It writes the new token to that file and nothing else, and prints the command that stores it as this repo's `CLOUDFLARE_API_TOKEN` Actions secret. Run that, then delete the file.
-7. Commit and push to `main`. From now on the apply workflow applies every push.
-8. Give the hub its GitHub App from the admin page (`https://<adminHostname>/_admin/`, for the config's `admins`; see GitHub below). Until then the hub works but shows tickets as unavailable and sets no labels.
+1. Create a private repo in the organisation's GitHub account from this template (or copy this folder into one, hidden files included: `.github/` and `.gitignore`). Until step 7, the apply workflow's runs (on this first push, or any push to `main`) fail for want of the token; that is expected.
+2. Set `specreview.commit` to a commit of specreview's `develop` (run.sh stops with "set specreview.commit" until you do, and refuses a commit that is on no branch of specreview, such as one whose branch was deleted). Then check that each product repo's docs build, before any Cloudflare work: `./run.sh check-docs <path to a full clone of the product repo> --repo <its name>` (add `--docs <folder>` when the docs are not in `docs/`; a shallow clone is refused, since the build reads every page's history). It runs the site build the publish workflow runs, on the docs folder as committed, and stops at the first thing it refuses, naming the file; run it again after each fix. the docs folder takes Markdown pages and plain images, fonts, PDFs and text files, with no scripts or styles in pages (other HTML shows as text). It needs no token and publishes nothing.
+3. Enable Zero Trust on the Cloudflare account (dashboard: Zero Trust, then the Free plan), and create the install token (below). Keep it in a file on your laptop; it never goes into GitHub.
+4. Edit `hub.json`: `accountId` (the 32-character id on the Cloudflare dashboard), `hostname` (where the docs sites will live, in a zone on that account) and `adminHostname` (the admin page's own hostname, also in a zone on the account; a sibling such as `specs-admin.example.com` beside `specs.example.com` reads clearly). Leave the rest; setup writes the ids.
+5. Edit `specreview.config.json`: `org` (the organisation's GitHub login, lowercase), `ownerId` (its numeric id: `gh api orgs/<org> --jq .id`, or the `id` at `https://api.github.com/orgs/<org>`), `configRepo` (the name of this repo; the admin page commits its changes here), and `admins` (the emails that may open the admin page). Leave `sites` empty: sites are added on the admin page once the hub is running (step 10).
+6. From a laptop, with the install token: `./run.sh setup --token-file <file> --apply` (creates the Access apps and policy, the one-time PIN login, the database and the bucket, and records their ids in `hub.json`), then `./run.sh deploy --token-file <file>`.
+7. Create the workflow's token: `./run.sh workflow-token --token-file <install token file> --out <new file>`, naming a file outside this repo (`/tmp/.cf-workflow-token`, say). It writes the new token to that file and nothing else, and prints the command that stores it as this repo's `CLOUDFLARE_API_TOKEN` Actions secret. Run that, then delete the file.
+8. Commit and push to `main`. From now on the apply workflow applies every push.
+9. Give the hub its GitHub App from the admin page's GitHub App tab (`https://<adminHostname>/_admin/github`, for the config's `admins`; see GitHub below), and install it on this repo, the product repos and the ticket repos. Until then the hub works but shows tickets as unavailable and sets no labels.
+10. Add each site on the admin page's Sites tab. It opens two pull requests: one adding the site to `specreview.config.json` here, one adding the docs workflow to the product repo. Merge this repo's first, wait for its apply run to finish green, then merge the product repo's. Readers and approvers are then set on the People tab.
 
 If a run fails part way, fix the cause and run it again: it resumes from the ids already recorded. If the workflow could not push `hub.json` (someone changed it at the same moment), it prints the file in the run's log; copy it into the repo by hand. If an id could not be recorded at all (the run was lost while creating something), setup refuses that resource and says what to add to `hub.json` by hand.
 
@@ -63,7 +65,7 @@ The hub talks to GitHub as a GitHub App owned by the organisation, created from 
 
 Edit and commit to `main`; the workflow applies it.
 
-- Readers, approvers, admins or sites: `specreview.config.json`. setup brings the Access policy to exactly what the config says, removals included.
+- Readers, approvers, admins or sites: `specreview.config.json`, or the admin page, which commits to it. setup brings the Access policy to exactly what the config says, removals included. A site added by hand needs its repo's numeric id as `repositoryId` (`gh api repos/<org>/<repo> --jq .id`); the admin page fills it in.
 - The organisation's name and logo in each site's header: `"brand": { "name": "Acme", "logo": "logo.png" }` in `specreview.config.json`, with the PNG or WebP (at most 256 KB) beside it. Leave out `logo` for the name alone, or `brand` for neither.
 - The admin page lives only on `adminHostname` (#75). A hub set up before that has no admin page until `adminHostname` is added to `hub.json` and pushed: the apply run checks the name is free, creates its Access application for the admins, and deploys the second hostname. `/_admin/` on the docs hostname then points there. Removing `adminHostname` deletes its Access application and policy; then remove the hostname from the hub's Worker in the Cloudflare dashboard (Workers, the Worker, Domains), since a deploy may leave it attached. To rename it, remove it in one push and add the new name in the next.
 - Upgrading: change `specreview.commit`. Migrations only add, so the previous Worker keeps working on the newer schema.
@@ -81,6 +83,7 @@ Edit and commit to `main`; the workflow applies it.
 ./run.sh secret --token-file <file> --name GITHUB_APP_ID --value-file <file>
 ./run.sh secret --token-file <file> --name GITHUB_APP_PRIVATE_KEY --value-file <file>
 ./run.sh workflow-token --token-file <file> --out <new file>  # the workflow's token, into a new file
+./run.sh check-docs <product repo> --repo <name> [--docs docs]  # builds its docs, publishes nothing
 ```
 
 Run setup from one place at a time: not from a laptop while the workflow runs. Each run fetches the pinned commit into a new temporary folder and deletes it after; a `.specreview` folder left by an older `run.sh` is no longer used and can be deleted.

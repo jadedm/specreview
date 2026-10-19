@@ -396,7 +396,8 @@ export const problemsIn = (raw: unknown): string[] => {
   if (!admins || admins.length === 0) problems.push('admins must be a non-empty list');
   if (admins && admins.some((e) => !isLowerEmail(e))) problems.push('admins has a malformed email');
   if (admins && new Set(admins).size !== admins.length) problems.push('admins has a duplicate');
-  if (!Array.isArray(cfg.sites) || cfg.sites.length === 0) return [...problems, 'sites must be a non-empty list'];
+  // No sites is a hub just installed (#92): sites are added on the admin page.
+  if (!Array.isArray(cfg.sites)) return [...problems, 'sites must be a list'];
   const repos = new Set<string>();
   const teamsByTicketRepo = new Map<string, string>();
   (cfg.sites as unknown[]).forEach((site, i) => {

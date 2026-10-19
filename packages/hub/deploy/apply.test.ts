@@ -287,11 +287,12 @@ describe('14: the template as a new organisation gets it', () => {
     expect(hub).toEqual({
       accountId: '',
       hostname: '',
+      adminHostname: '',
       worker: 'specreview-hub',
       database: { name: 'specreview' },
       bucket: { name: 'specreview-sites' },
     });
-    expect(() => loadOrg(TEMPLATE)).toThrow(/accountId must be[\s\S]*hostname must be/);
+    expect(() => loadOrg(TEMPLATE)).toThrow(/accountId must be[\s\S]*hostname must be[\s\S]*adminHostname must be/);
   });
 
   it('run.sh refuses the placeholder commit before cloning anything', () => {

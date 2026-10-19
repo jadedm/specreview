@@ -14,6 +14,10 @@ describe('config rules, one at a time', () => {
     expect(problemsIn(valid())).toEqual([]);
   });
 
+  it('#92 (1): no sites is a hub just installed, and valid', () => {
+    expect(problemsIn({ ...valid(), sites: [] })).toEqual([]);
+  });
+
   it('company domains that share a name with a mail brand are fine', () => {
     for (const domain of ['web.dev', 'hey.app', 'orange.com', 'mac.org']) {
       const c = valid();
@@ -167,7 +171,8 @@ describe('config rules, one at a time', () => {
       /environment must be/,
     ],
     ['unknown top-level key', (c) => ({ ...c, sitez: [] }), /unknown key sitez/],
-    ['no sites', (c) => ({ ...c, sites: [] }), /sites must be a non-empty list/],
+    ['sites missing', (c) => ({ ...c, sites: undefined }), /sites must be a list/],
+    ['sites not a list', (c) => ({ ...c, sites: {} }), /sites must be a list/],
     ['bad repo', (c) => ((c.sites[2].repo = 'Globex'), c), /sites\[2\]\.repo must be/],
     ['repo with an owner', (c) => ((c.sites[2].repo = 'acme/globex'), c), /sites\[2\]\.repo must be/],
     ['duplicate repo', (c) => ((c.sites[1].repo = c.sites[0].repo), c), /sites\[1\]\.repo is listed twice/],

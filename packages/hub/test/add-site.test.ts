@@ -258,6 +258,39 @@ describe('4 to 8: refused before anything is written', () => {
   });
 });
 
+describe('92: a hub with no sites yet', () => {
+  const none = { ...env, SPECREVIEW_CONFIG: JSON.stringify({ ...HUB_CONFIG, sites: [] }) };
+  beforeEach(() => {
+    repos.set(
+      'acme/docs-hub',
+      repoWith(4001, { 'specreview.config.json': `${JSON.stringify({ ...orgFile, sites: [] }, null, 2)}\n` }),
+    );
+    github.app?.installations.set('acme/docs-hub', 7);
+  });
+
+  it('8: the Sites tab says there are none and offers the form', async () => {
+    const page = html(await call('/_admin/sites', { raw: true, email: ADMIN, envOverride: none }));
+    expect(page).toContain('<p>No sites yet.</p>');
+    expect(page).not.toContain('<ul></ul>');
+    expect(page).toContain('<form method="get" action="/_admin/sites">');
+  });
+
+  it('9: the People tab says there are none and links the Sites tab, reading nothing from GitHub', async () => {
+    const page = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: none }));
+    expect(page).toContain('No sites yet. Add one on the <a href="/_admin/sites">Sites</a> tab');
+    expect(calls).toEqual([]);
+  });
+
+  it('10: the first site added makes the config list exactly that site', async () => {
+    const r = await add(NEW, { envOverride: none });
+    expect(r.status).toBe(200);
+    const cfg = JSON.parse(text(fileOn('acme/docs-hub', 'specreview/add-newdocs', 'specreview.config.json')!)) as {
+      sites: { repo: string }[];
+    };
+    expect(cfg.sites.map((s) => s.repo)).toEqual(['newdocs']);
+  });
+});
+
 describe('9, 10 and 12: the pull requests', () => {
   it('9: opens both, with the exact workflow, a first page, and the site in the config', async () => {
     const r = await add(NEW);

@@ -410,6 +410,12 @@ describe('9: setup', () => {
     config.sites.push({ ...config.sites[0], repo: 'web', readers: ['@initech.example'] });
     expect(wantedInclude(config)).toEqual(WANT);
   });
+
+  it('#92 (11): with no sites yet, only the admins sign in', () => {
+    expect(wantedInclude({ ...structuredClone(CONFIG), sites: [] })).toEqual(
+      CONFIG.admins.map((email) => ({ email: { email } })),
+    );
+  });
 });
 
 describe('33: a brand in the config', () => {
