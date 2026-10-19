@@ -43,7 +43,25 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-        run: pnpm exec commitlint --from "$BASE" --to "$HEAD"
+        # Only the commits the pull request brings that develop does not
+        # already hold (#84): a release PR into main carries all of develop,
+        # whose history is never rewritten, so its old messages cannot change.
+        run: |
+          git fetch -q --no-tags origin develop
+          # An assignment, so a failing rev-list fails the step (bash -e) rather
+          # than leaving nothing to check.
+          shas=$(git rev-list --no-merges "$HEAD" "^$BASE" ^FETCH_HEAD)
+          echo "checking $(echo "$shas" | grep -c .) commit(s)"
+          for sha in $shas; do
+            git log -1 --format=%B "$sha" | pnpm exec commitlint || exit 1
+          done
+      # A squash merge lands the title as the commit's subject, which no
+      # commit on the branch carries; it is checked here instead.
+      - name: Pull request title
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$TITLE" | pnpm exec commitlint
       - name: No secrets files
         if: github.event_name == 'pull_request'
         env:
