@@ -12,6 +12,7 @@ import { AppError } from './http';
 import { extensionOf, TYPES } from './pages';
 import { withPending } from './pending';
 import { canRead, roleOf } from './roles';
+import { page } from './root';
 import { read } from './store';
 
 // An exported mockup compiles its template in the browser and loads its
@@ -40,14 +41,33 @@ const typeOf = (path: string) => {
   return Object.hasOwn(TYPES, ext) ? TYPES[ext] : 'application/octet-stream';
 };
 
+// A miss is a page with the way back to the docs (#125), not the API's JSON:
+// people reach this hostname by typing it or trimming a prototype's address.
+// It names no site and no organisation, so it may answer before any sign-in.
+const notFound = (docsHostname: string, head: boolean) =>
+  page(
+    404,
+    'Prototypes',
+    `<h1>Prototype not found</h1><p>Nothing is published at this address.</p><p class="note"><a href="https://${docsHostname}/">Go to the docs</a></p>`,
+    head,
+  );
+
 export const handleProtoHost = async (
   request: Request,
   url: URL,
   env: Env,
   config: HubConfig,
   deps: Deps,
-  proto: { aud: string },
+  proto: { aud: string; docsHostname: string },
 ): Promise<Response> => {
+  const head = request.method === 'HEAD';
+  const reads = request.method === 'GET' || head;
+  // The hostname alone leads to the docs' index, where the sites are listed.
+  if (url.pathname === '/' && reads)
+    return new Response(null, {
+      status: 302,
+      headers: { location: `https://${proto.docsHostname}/`, 'cache-control': 'private, no-store' },
+    });
   // /<repo>/<path>, a trailing slash meaning that folder's index.html; any
   // other shape is not here, before any identity check.
   const [, repo, ...rest] = url.pathname.split('/');
@@ -55,8 +75,8 @@ export const handleProtoHost = async (
   const directory = url.pathname.endsWith('/');
   const parts = directory ? rest.slice(0, -1) : rest;
   if (!site || parts.length === 0 || !parts.every(plain) || RESERVED.has(parts[0]))
-    throw new AppError(404, 'NOT_FOUND');
-  if (request.method !== 'GET' && request.method !== 'HEAD') throw new AppError(405, 'METHOD_NOT_ALLOWED');
+    return notFound(proto.docsHostname, head);
+  if (!reads) throw new AppError(405, 'METHOD_NOT_ALLOWED');
   const path = directory ? `${parts.join('/')}/index.html` : parts.join('/');
   const email = await identify(request, config, proto.aud);
   // Who may read the site may open its prototypes; removals count first (#12).
@@ -67,7 +87,7 @@ export const handleProtoHost = async (
   // stored there is exactly the manifest's list (publish refuses any other).
   const snapshot = await makeCtx(env, deps, config, site).snapshot();
   const obj = await read(deps.store, `${site.repo}/p/${snapshot.version}/${path}`);
-  if (!obj) throw new AppError(404, 'NOT_FOUND');
+  if (!obj) return notFound(proto.docsHostname, head);
   const headers = {
     'content-type': typeOf(path),
     'content-security-policy': PROTO_CSP,
@@ -76,7 +96,7 @@ export const handleProtoHost = async (
     'referrer-policy': 'same-origin',
     'x-frame-options': 'DENY',
   };
-  if (request.method === 'HEAD') {
+  if (head) {
     await obj.body?.cancel();
     return new Response(null, { headers });
   }

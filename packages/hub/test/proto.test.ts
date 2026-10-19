@@ -227,7 +227,6 @@ describe('112: the prototype hostname', () => {
   it('6, 6b: other shapes and every other hub route are not here, before any sign-in', async () => {
     await published();
     for (const path of [
-      '/',
       `/${SIDECAR}`,
       `/${SIDECAR}/`,
       '/nosuch/x.html',
@@ -239,9 +238,50 @@ describe('112: the prototype hostname', () => {
       `/${SIDECAR}/_api/me`,
     ]) {
       const r = await proto(path, { aud: null });
-      expect([r.status, code(r)], path).toEqual([404, 'NOT_FOUND']);
+      expect([r.status, r.headers.get('content-type')], path).toEqual([404, 'text/html; charset=utf-8']);
+      expect(String(r.body), path).toContain('Prototype not found');
     }
     expect((await proto(`/${SIDECAR}/product/x/unlisted.html`)).status).toBe(404);
+  });
+
+  // #125: the hostname alone leads to the docs; a miss is a page with the way back.
+  it('125 1-3: the hostname alone redirects to the docs index, GET and HEAD only, before any sign-in', async () => {
+    for (const method of ['GET', 'HEAD']) {
+      const r = await proto('/', { aud: null, method });
+      expect([r.status, r.headers.get('location'), r.headers.get('cache-control')], method).toEqual([
+        302,
+        `${HOST}/`,
+        'private, no-store',
+      ]);
+    }
+    const post = await proto('/', { aud: null, method: 'POST' });
+    expect([post.status, post.headers.get('location')]).toEqual([404, null]);
+  });
+
+  it('125 4, 5, 8, 10: a miss is an HTML page naming nothing, linking the docs, with the protected headers', async () => {
+    await published();
+    const misses = [
+      await proto('/nosuch/x.html', { aud: null }),
+      await proto(`/${SIDECAR}/_api/me`, { aud: null }),
+      await proto(`/${SIDECAR}/product/x/unlisted.html`),
+    ];
+    for (const r of misses) {
+      expect(r.status).toBe(404);
+      expect(r.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(r.headers.get('cache-control')).toBe('private, no-store');
+      expect(r.headers.get('x-frame-options')).toBe('DENY');
+      expect(r.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(r.headers.get('content-security-policy')).toMatch(/^default-src 'none'; style-src 'sha256-/);
+      const body = String(r.body);
+      expect(body).toContain(`<a href="${HOST}/">Go to the docs</a>`);
+      expect(body).not.toContain(SIDECAR);
+      expect(body).not.toContain(CONFIG.org);
+      expect(body).not.toContain('<script');
+    }
+    const head = await proto(`/${SIDECAR}/product/x/unlisted.html`, { method: 'HEAD' });
+    expect([head.status, String(head.body)]).toEqual([404, '']);
+    // A path a configured site could serve still needs a sign-in first.
+    expect((await proto(`/${SIDECAR}/product/x/unlisted.html`, { aud: null })).status).toBe(401);
   });
 
   it('7, 7b: no sign-in, or the docs or admin hostname’s sign-in, is refused', async () => {
@@ -326,7 +366,11 @@ describe('112: the prototype hostname in the config', () => {
     delete noAdmin.adminHostname;
     delete noAdmin.accessAdminAud;
     expect(problemsIn(noAdmin)).toEqual([]);
-    expect(configOf(JSON.stringify(noAdmin)).proto).toEqual({ hostname: 'proto.example.com', aud: PROTO_AUD });
+    expect(configOf(JSON.stringify(noAdmin)).proto).toEqual({
+      hostname: 'proto.example.com',
+      aud: PROTO_AUD,
+      docsHostname: 'docs.example.com',
+    });
     expect(configOf(JSON.stringify(noAdmin)).admin).toBeNull();
     for (const [patch, problem] of [
       [{ protoHostname: undefined }, 'protoHostname and accessProtoAud go together'],

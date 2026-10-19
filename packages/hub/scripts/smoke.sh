@@ -82,11 +82,20 @@ hit GET /sidecar/demo/index.html riya@initech.example 401
 hit GET /sidecar/demo/index.html admin:dev@acme.dev 401
 hit GET /sidecar/demo/index.html proto:x@stranger.example 403
 hit POST /sidecar/demo/index.html proto:riya@initech.example 405
-hit GET / - 404
+# #125: the hostname alone leads to the docs; a miss is a page with the way back.
+hit GET / - 302
+loc=$(grep -i '^location:' "$here/hdr" | tr -d '\r' | cut -d' ' -f2-)
+[ "$loc" = "https://docs.localhost/" ] || { echo "FAIL location $loc"; fails=$((fails+1)); }
 hit GET /sidecar/_api/me - 404
+grep -q 'Prototype not found' "$here/body" || { echo "FAIL miss page"; fails=$((fails+1)); }
+hit GET /sidecar/demo/nope.html proto:riya@initech.example 404
+grep -q 'Prototype not found' "$here/body" || { echo "FAIL miss page after sign-in"; fails=$((fails+1)); }
 hit POST /_publish/sidecar - 404
 W=$D
-hit GET /sidecar/demo/index.html riya@initech.example 404
+# The docs hostname sends a prototype's path to the prototype hostname (#113), never serving it.
+hit GET /sidecar/demo/index.html riya@initech.example 302
+loc=$(grep -i '^location:' "$here/hdr" | tr -d '\r' | cut -d' ' -f2-)
+[ "$loc" = "https://proto.localhost/sidecar/demo/index.html" ] || { echo "FAIL location $loc"; fails=$((fails+1)); }
 hit GET /sidecar/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-101/demo/index.html riya@initech.example 404
 echo "publish V2: $(curl -s $C/publish-v2)"
 hit GET /sidecar/onboarding/signup riya@initech.example 200

@@ -53,8 +53,9 @@ export type HubConfig = {
   admin: { hostname: string; aud: string; docsHostname: string } | null;
   // The prototypes' own hostname and its Access application's audience
   // (#112): prototypes are served only there, apart from the docs and admin
-  // origins. Null when the hub has none.
-  proto: { hostname: string; aud: string } | null;
+  // origins, which it names (docsHostname) for the way back from a miss
+  // (#125). Null when the hub has none.
+  proto: { hostname: string; aud: string; docsHostname: string } | null;
   admins: string[];
   // GitHub's numeric id of the org: publish tokens must carry it.
   ownerId: string;
@@ -457,7 +458,7 @@ export const configOf = (text: string | undefined): HubConfig => {
         : null,
     proto:
       cfg.hostname && cfg.protoHostname && cfg.accessProtoAud
-        ? { hostname: cfg.protoHostname, aud: cfg.accessProtoAud }
+        ? { hostname: cfg.protoHostname, aud: cfg.accessProtoAud, docsHostname: cfg.hostname }
         : null,
     admins: cfg.admins,
     ownerId: cfg.ownerId,
