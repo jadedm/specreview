@@ -378,3 +378,73 @@ describe('#91: team by email, approvers by email or @domain anywhere', () => {
     expect(problemsIn(c)).toEqual([]);
   });
 });
+
+// #135: people entries must be shaped like an email; what an address may hold
+// before the @ is RFC 5322 atext and dots.
+describe('#135: entries shaped like an email', () => {
+  const withSite = (patch: Record<string, unknown>, i = 2) => {
+    const c = valid() as unknown as { sites: Record<string, unknown>[] };
+    c.sites[i] = { ...c.sites[i], ...patch };
+    return c;
+  };
+  const bad = ['<b>x</b>@acme.dev', 'a b@acme.dev', '"q"@acme.dev', 'a,b@acme.dev', 'a@b@acme.dev'];
+  // A bare @ is read as an @domain with no domain, and refused as one.
+  const dots = ['.a@acme.dev', 'a.@acme.dev', 'a..b@acme.dev'];
+  const good = [
+    "o'brien@acme.dev",
+    'first.last+tag@acme.dev',
+    'a_b-c@acme.dev',
+    'x!#$%&*/=?^{}~@acme.dev',
+    '12345@acme.dev',
+    // Letters of any script, as the rule before this one allowed.
+    'josé@acme.dev',
+    '用户@acme.dev',
+  ];
+
+  it('1, 2, 3: readers and approvers refuse what an address cannot hold, by position, and take real ones', () => {
+    for (const list of ['readers', 'approvers']) {
+      for (const entry of [...bad, ...dots]) {
+        const problems = problemsIn(withSite({ [list]: [entry] }));
+        expect(problems, `${list} ${entry}`).toEqual([`sites[2].${list}[0] is not an email or @domain`]);
+        expect(problems.join(' '), entry).not.toContain(entry);
+      }
+      for (const entry of good) expect(problemsIn(withSite({ [list]: [entry] })), `${list} ${entry}`).toEqual([]);
+    }
+  });
+
+  it('4: team and admins alike', () => {
+    for (const entry of [...bad, ...dots]) {
+      expect(problemsIn(withSite({ team: [entry] })), entry).toEqual(['sites[2].team[0] must be a lowercase email']);
+      expect(problemsIn({ ...valid(), admins: [entry] }), entry).toEqual(['admins has a malformed email']);
+    }
+    for (const entry of good) {
+      expect(problemsIn(withSite({ team: [entry] })), entry).toEqual([]);
+      expect(problemsIn({ ...valid(), admins: [entry] }), entry).toEqual([]);
+    }
+  });
+
+  it('lengths: 64 before the @ and 254 in all, no more', () => {
+    // A domain of exactly n characters, in labels of at most 63, ending .dev.
+    const domainOf = (n: number) => {
+      const labels: string[] = [];
+      let left = n - 4;
+      while (left > 0) {
+        const take = Math.min(63, left === 64 ? 62 : left);
+        labels.push('d'.repeat(take));
+        left -= take + 1;
+      }
+      return `${labels.join('.')}.dev`;
+    };
+    const ok = (e: string) => problemsIn(withSite({ readers: [e] })).length === 0;
+    expect(domainOf(189)).toHaveLength(189);
+    expect(ok(`${'a'.repeat(64)}@acme.dev`)).toBe(true);
+    expect(ok(`${'a'.repeat(65)}@acme.dev`)).toBe(false);
+    expect(ok(`${'a'.repeat(64)}@${domainOf(189)}`)).toBe(true);
+    expect(ok(`${'a'.repeat(64)}@${domainOf(190)}`)).toBe(false);
+  });
+
+  it('5: @domain entries are unchanged', () => {
+    expect(problemsIn(withSite({ readers: ['@partner.example'], approvers: ['@acme.dev'] }))).toEqual([]);
+    expect(problemsIn(withSite({ readers: ['@'] }))).toEqual(['sites[2].readers[0] is a malformed @domain']);
+  });
+});
