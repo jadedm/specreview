@@ -267,7 +267,9 @@ export const siteShape = (docs: string, repo: string, home?: string | null, list
   const sidebar = [...sidebarOf(pages), ...(listsPrototypes ? [{ text: 'Prototypes', link: PROTOTYPES_LINK }] : [])];
   const themeConfig = { sidebar, outline: { level: [2, 3] as [number, number] }, notFound };
   assertNoFunctionStrings({ title, themeConfig }, 'site');
-  return { title, themeConfig };
+  // Each page's title as the sidebar has it, by the page VitePress builds (#141).
+  const titles = new Map(pages.map((p) => [p.file, p.title]));
+  return { title, themeConfig, titles };
 };
 
 export const siteConfig = ({
@@ -281,7 +283,7 @@ export const siteConfig = ({
   exclude = [],
   prototypes = [],
 }: SiteOptions): UserConfig => {
-  const { title, themeConfig } = siteShape(docs, repo, home, prototypes.length > 0);
+  const { title, themeConfig, titles } = siteShape(docs, repo, home, prototypes.length > 0);
   const collected: Collected = new Map();
   const linkKeys = { excused: new Set<string>(), plain: new Set<string>() };
   return {
@@ -311,6 +313,17 @@ export const siteConfig = ({
     },
     themeConfig,
     transformPageData(pageData) {
+      // VitePress's own title is HTML text (A &amp; B), and its client sets
+      // the browser tab from it as plain text. Each author page takes the
+      // sidebar's title instead (#141): the same parse, entities decoded where
+      // they are entities, already checked for < and >; the server render
+      // escapes it for the <title> element.
+      const known = titles.get(pageData.relativePath);
+      const own =
+        pageData.relativePath === '404.md' || (prototypes.length > 0 && pageData.relativePath === PROTOTYPES_PAGE);
+      if (known === undefined && !own)
+        throw new BuildError(`${pageData.relativePath}: no title was read for this page`);
+      if (known !== undefined) pageData.title = known;
       collected.set(pageData.relativePath, {
         title: pageData.title,
         issues: parseIssues(pageData.relativePath, pageData.frontmatter.issues),

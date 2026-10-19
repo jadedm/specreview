@@ -79,9 +79,21 @@ describe('titles and links', () => {
     expect(t('   # Indented')).toBe('Indented');
     expect(t('> # Quoted\n\n# Later')).toBe('Quoted');
     expect(t('# ![logo](x.png)')).toBe('page');
-    expect(t('# A &amp; B')).toBe('A &amp; B');
+    // #141: decoded once, as the page shows it.
+    expect(t('# A &amp; B')).toBe('A & B');
+    expect(t('# Q&A')).toBe('Q&A');
+    expect(titleOf('page.md', '', { title: 'Q &amp; A' })).toBe('Q & A');
+    // Only real entities are decoded: inline code keeps what was typed, a lone
+    // entity in bold is decoded once, front matter is read as inline Markdown.
+    expect(t('# Use `&amp;` here')).toBe('Use &amp; here');
+    // Not bold (the closing ** follows punctuation): the text stays as typed, as VitePress has it.
+    expect(t('# **&amp;**copy;')).toBe('**&**copy;');
+    expect(titleOf('page.md', '', { title: 'Q **&amp;** A' })).toBe('Q & A');
+    expect(t('# `&lt;div&gt;` tag')).toBe('&lt;div&gt; tag');
+    // Emphasis that closes around an entity: decoded once, the rest is text.
+    expect(t('# *&amp;*#60;x')).toBe('&#60;x');
     // As VitePress joins text: an escaped & becomes &amp;, a lone entity stays decoded.
-    expect(t('# A \\& B')).toBe('A &amp; B');
+    expect(t('# A \\& B')).toBe('A & B');
     expect(t('# **&amp;**')).toBe('&');
     expect(t('# Launch :rocket: plan')).toBe('Launch 🚀 plan');
     expect(t('# [Linked](other.md) title')).toBe('Linked title');
