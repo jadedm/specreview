@@ -159,6 +159,36 @@ describe('27: probing one address', () => {
     expect(await probeAddress({ port, ca: cert })('other.acme.test', '127.0.0.1')).toBeNull();
   });
 
+  it('#100 1, 4: one address, no family autoselection; a throw from request() is no answer', async () => {
+    const seenOptions: Record<string, unknown>[] = [];
+    const throwing = ((options: Record<string, unknown>) => {
+      seenOptions.push(options);
+      throw new TypeError("Cannot read properties of null (reading 'setServername')");
+    }) as unknown as typeof import('node:https').request;
+    expect(await probeAddress({ requestImpl: throwing })(HOST, '192.0.2.1')).toBeNull();
+    expect(await probeAddress({ requestImpl: throwing })(HOST, '2001:db8::1')).toBeNull();
+    expect(seenOptions.map((o) => [o.family, o.autoSelectFamily])).toEqual([
+      [4, false],
+      [6, false],
+    ]);
+  });
+
+  it('#100 2, 3: a probe that rejects is no answer from that address; the next is tried', async () => {
+    const { dns } = fakeDns({ 'acme.test': ['192.0.2.53'] }, { [HOST]: { addresses: ['192.0.2.1', '192.0.2.2'] } });
+    const tried: string[] = [];
+    const flaky = async (_h: string, address: string) => {
+      tried.push(address);
+      if (address === '192.0.2.1') throw new TypeError('setServername');
+      return toAccess;
+    };
+    expect(await viaNameservers(HOST, TEAM, { dns, probe: flaky })).toBe(true);
+    expect(tried).toEqual(['192.0.2.1', '192.0.2.2']);
+    const always = async () => {
+      throw new TypeError('setServername');
+    };
+    expect(await viaNameservers(HOST, TEAM, { dns, probe: always })).toBe(false);
+  });
+
   it('5: an address that refuses falls through to the next', async () => {
     const { dns } = fakeDns({ 'acme.test': ['192.0.2.53'] }, { [HOST]: { addresses: ['::1', '127.0.0.1'] } });
     seen.length = 0;

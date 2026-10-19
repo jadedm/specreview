@@ -82,37 +82,56 @@ export type Probe = (hostname: string, address: string) => Promise<{ status: num
 // GET https://<hostname>/ connected to one address: TLS name and Host are the
 // hostname, so the certificate is checked for it as a normal request would.
 // Redirects are not followed. null when there was no answer.
+// It names one address, so Node is told not to try address families in
+// turn (#100: that path threw "Cannot read properties of null (reading
+// 'setServername')" inside request(), which rejected the probe, and the
+// rejection ended the deploy); a throw from request() is no answer, and the
+// callers treat a rejected probe the same way.
 export const probeAddress =
-  ({ port = 443, ca, timeoutMs = 5_000 }: { port?: number; ca?: string; timeoutMs?: number } = {}): Probe =>
+  ({
+    port = 443,
+    ca,
+    timeoutMs = 5_000,
+    requestImpl = request,
+  }: { port?: number; ca?: string; timeoutMs?: number; requestImpl?: typeof request } = {}): Probe =>
   (hostname, address) =>
     new Promise((resolve) => {
       const family = isIPv6(address) ? 6 : 4;
-      const req = request(
-        {
-          host: hostname,
-          servername: hostname,
-          port,
-          path: '/',
-          method: 'GET',
-          agent: false,
-          ca,
-          timeout: timeoutMs,
-          // Node asks for every address when it may try several families.
-          lookup: (_name, opts, callback) => {
-            if ((opts as { all?: boolean }).all) {
-              (callback as unknown as (e: null, a: { address: string; family: number }[]) => void)(null, [
-                { address, family },
-              ]);
-              return;
-            }
-            callback(null, address, family);
+      let req: ReturnType<typeof request>;
+      try {
+        req = requestImpl(
+          {
+            host: hostname,
+            servername: hostname,
+            port,
+            path: '/',
+            method: 'GET',
+            agent: false,
+            ca,
+            timeout: timeoutMs,
+            family,
+            // Passed through to the socket; Node's types leave it off RequestOptions.
+            ...{ autoSelectFamily: false },
+            // Node asks for every address when it may try several families.
+            lookup: (_name, opts, callback) => {
+              if ((opts as { all?: boolean }).all) {
+                (callback as unknown as (e: null, a: { address: string; family: number }[]) => void)(null, [
+                  { address, family },
+                ]);
+                return;
+              }
+              callback(null, address, family);
+            },
           },
-        },
-        (res) => {
-          res.resume();
-          resolve({ status: res.statusCode ?? 0, location: res.headers.location ?? null });
-        },
-      );
+          (res) => {
+            res.resume();
+            resolve({ status: res.statusCode ?? 0, location: res.headers.location ?? null });
+          },
+        );
+      } catch {
+        resolve(null);
+        return;
+      }
       req.on('timeout', () => req.destroy(new Error('timeout')));
       req.on('error', () => resolve(null));
       req.end();
