@@ -107,6 +107,49 @@ describe('43: the hub root', () => {
   });
 });
 
+describe('92: a hub with no sites yet', () => {
+  const empty = () => withConfig({ ...structuredClone(CONFIG), sites: [] });
+  const links = (r: { body: unknown }) => [...String(r.body).matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+
+  it('3, 4: the config is valid, and an admin is told there are none and pointed at the Sites tab', async () => {
+    const r = await root('owner@acme.dev', empty());
+    expect(r.status).toBe(200);
+    expect(text(r)).toContain('No sites yet.');
+    expect(links(r)).toEqual([`https://${CONFIG.adminHostname}/_admin/sites`]);
+  });
+
+  it('5: anyone else gets the no-access page, with no admin link', async () => {
+    const r = await root('dev@acme.dev', empty());
+    expect(r.status).toBe(403);
+    expect(text(r)).not.toContain('No sites yet');
+    expect(text(r)).not.toContain('_admin');
+  });
+
+  it('6: without an admin hostname the admin is told, with no link', async () => {
+    const cfg = { ...structuredClone(CONFIG), sites: [] } as Record<string, unknown>;
+    delete cfg.adminHostname;
+    delete cfg.accessAdminAud;
+    const r = await root('owner@acme.dev', withConfig(cfg));
+    expect(r.status).toBe(200);
+    expect(text(r)).toContain('No sites yet.');
+    expect(links(r)).toEqual([]);
+  });
+
+  it('7: with sites, an admin who reads none still gets the no-access page', async () => {
+    const r = await root(
+      'x@stranger.example',
+      withConfig({ ...structuredClone(CONFIG), admins: ['x@stranger.example'] }),
+    );
+    expect(r.status).toBe(403);
+    expect(text(r)).not.toContain('No sites yet');
+  });
+
+  it('HEAD for the admin answers 200 with no body', async () => {
+    const r = await root('owner@acme.dev', { ...empty(), method: 'HEAD' });
+    expect([r.status, String(r.body ?? '')]).toEqual([200, '']);
+  });
+});
+
 describe('48: the index in the house style', () => {
   // [href, title, summary line or null] per row.
   const rows = (r: { body: unknown }) =>

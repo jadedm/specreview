@@ -167,7 +167,7 @@ const sitesFor = async (a: Admin, found: Found) => {
         `<li><span class="site"><span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepo)}${s.visibility === 'public' ? ', public' : ''}</span></span></li>`,
     )
     .join('');
-  const current = `<p class="note">Each site is a repo's docs, published at <code>/&lt;repo&gt;/</code> on the docs hostname.</p><ul>${listed}</ul>`;
+  const current = `<p class="note">Each site is a repo's docs, published at <code>/&lt;repo&gt;/</code> on the docs hostname.</p>${listed ? `<ul>${listed}</ul>` : '<p>No sites yet.</p>'}`;
   const missing = [
     !usable(a, found) && 'a GitHub App (the <a href="/_admin/github">GitHub App</a> tab)',
     !a.config.configRepo && '<code>configRepo</code> in the config (the repo holding it)',
@@ -263,6 +263,8 @@ const select = (name: string, label: string, options: string[], chosen: string, 
 const accessFor = async (a: Admin, found: Found) => {
   const configRepo = a.config.configRepo;
   if (!usable(a, found)) return NEEDS_APP;
+  if (a.config.sites.size === 0)
+    return '<p>No sites yet. Add one on the <a href="/_admin/sites">Sites</a> tab; its readers and approvers are set here.</p>';
   if (!configRepo)
     return '<p class="note">The lists can be changed here once the config names <code>configRepo</code>, the repo holding it.</p>';
   const file = await within(readConfig(a.deps.github, configRepo), null, LISTS_WAIT_MS);

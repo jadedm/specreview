@@ -601,6 +601,15 @@ describe('#75: the admin hostname in deploy', () => {
     ]);
   });
 
+  it('#92 (13, 14): the template asks for an admin hostname, names its config repo and starts with no sites', () => {
+    const hub = JSON.parse(readFileSync(path.join(EXAMPLE, 'hub.json'), 'utf8')) as Record<string, unknown>;
+    const config = JSON.parse(readFileSync(path.join(EXAMPLE, 'specreview.config.json'), 'utf8'));
+    expect(hub.adminHostname).toBe('');
+    expect([typeof config.configRepo, config.sites]).toEqual(['string', []]);
+    // Left blank, loadOrg says so.
+    expect(() => loadOrg(EXAMPLE)).toThrow(/adminHostname must be a bare lowercase hostname/);
+  });
+
   it('hub.json refuses an admin hostname equal to the docs one, or malformed; the config file may not set it', () => {
     const same = orgDir({ ...exampleHub(), adminHostname: 'specs.acme.dev' }).dir;
     expect(() => loadOrg(same)).toThrow('hub.json adminHostname must differ from hostname');

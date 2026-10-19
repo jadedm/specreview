@@ -163,6 +163,14 @@ export const serveRoot = async (
   );
   const readable = sites.filter((site) => canRead(roleOf(email, site)));
   const name = escapeHtml(config.brand?.name ?? config.org);
+  // A hub just installed has no sites (#92); its admins are pointed at the
+  // admin page, where sites are added. Anyone else gets the no-access page.
+  if (config.sites.size === 0 && config.admins.includes(email)) {
+    const add = config.admin
+      ? ` Add one on the <a href="https://${escapeHtml(config.admin.hostname)}/_admin/sites">admin page</a>.`
+      : '';
+    return page(200, name, `<h1>${name} docs</h1><p>No sites yet.${add}</p>`, head);
+  }
   if (readable.length === 0) {
     // Access's own sign-out ends the session, so the next visit asks for an
     // email again.

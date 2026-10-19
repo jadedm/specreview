@@ -1,18 +1,8 @@
 {
   "org": "acme",
   "ownerId": "1001",
+  "configRepo": "specreview-hub",
   "admins": ["owner@acme.dev"],
   "teamLabel": "Acme team",
-  "sites": [
-    {
-      "repo": "sidecar",
-      "teamDomains": ["acme.dev"],
-      "approvers": ["pm@acme.dev"],
-      "readers": ["@initech.example", "riya@partner.example"],
-      "ticketRepo": "sidecar",
-      "branch": "develop",
-      "repositoryId": "2001",
-      "workflow": ".github/workflows/docs.yml"
-    }
-  ]
+  "sites": []
 }

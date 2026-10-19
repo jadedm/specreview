@@ -260,7 +260,7 @@ describe('config', () => {
   });
 
   it('M24: with an invalid config even / and unknown sites are 500, not 404', async () => {
-    const broken = { SPECREVIEW_CONFIG: configWith((c) => ({ ...c, sites: [] })) };
+    const broken = { SPECREVIEW_CONFIG: configWith((c) => ({ ...c, sites: {} })) };
     expect((await call('/', { envOverride: broken })).status).toBe(500);
     expect((await call('/no/_api/me', { envOverride: broken, raw: true })).status).toBe(500);
   });
