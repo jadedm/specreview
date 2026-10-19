@@ -130,6 +130,18 @@ const linkTo = (file: string) => {
   return folder === '.' ? '/' : `/${folder}/`;
 };
 
+// A folder's heading without the leading folders every prototype folder
+// shares (#136), keeping at least its own name: product/prototypes/admin
+// beside product/prototypes/clipper reads admin.
+export const headingsFor = (folders: string[]): Map<string, string> => {
+  if (folders.length === 0) return new Map();
+  const parts = folders.map((f) => f.split('/'));
+  const most = Math.min(...parts.map((p) => p.length - 1));
+  let shared = 0;
+  while (shared < most && parts.every((p) => p[shared] === parts[0][shared])) shared++;
+  return new Map(folders.map((f, i) => [f, parts[i].slice(shared).join('/')]));
+};
+
 export const prototypesPage = (files: string[], protoDir: string): string => {
   const pages = files.filter((f) => f.endsWith('.html')).sort();
   // Pages at the docs folder's top lead, without a heading.
@@ -143,8 +155,11 @@ export const prototypesPage = (files: string[], protoDir: string): string => {
         const title = titleIn(readFileSync(path.join(protoDir, f), 'utf8')) ?? path.posix.basename(f);
         return `- [${markdownText(title)}](${linkTo(f)})`;
       });
+  const headings = headingsFor(folders.filter((f) => f !== '.'));
   const sections = folders.map((folder) =>
-    folder === '.' ? rowsIn(folder).join('\n') : `## ${markdownText(folder)}\n\n${rowsIn(folder).join('\n')}`,
+    folder === '.'
+      ? rowsIn(folder).join('\n')
+      : `## ${markdownText(headings.get(folder) ?? folder)}\n\n${rowsIn(folder).join('\n')}`,
   );
   const body = pages.length === 0 ? 'This site publishes no prototype pages.' : sections.join('\n\n');
   return `---\ntitle: Prototypes\n---\n\n# Prototypes\n\nEvery prototype page this site publishes. Each opens on its own.\n\n${body}\n`;

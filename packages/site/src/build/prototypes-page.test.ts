@@ -4,7 +4,7 @@ import path from 'node:path';
 import MarkdownIt from 'markdown-it';
 import { afterEach, describe, expect, it } from 'vitest';
 import { siteShape } from './config.js';
-import { markdownText, prototypesPage, titleIn } from './prototypes-page.js';
+import { headingsFor, markdownText, prototypesPage, titleIn } from './prototypes-page.js';
 
 const dirs: string[] = [];
 const tempDir = () => {
@@ -110,13 +110,34 @@ describe('#114: the generated page', () => {
     const body = page.slice(page.indexOf('# Prototypes'));
     expect(body.split('\n').filter((l) => /^(## |- )/.test(l))).toEqual([
       '- [Top](/top.html)',
-      '## proto\\/x',
+      '## x',
       '- [Main screen](/proto/x/Main.html)',
       '- [b\\.html](/proto/x/b.html)',
-      '## proto\\/y',
+      '## y',
       '- [Y](/proto/y/)',
     ]);
     expect(page).not.toMatch(/app\.js|style\.css|logo\.png/);
+  });
+
+  it("136: headings drop the folders every prototype folder shares, keeping each one's name", () => {
+    const of = (folders: string[]) => [...headingsFor(folders).values()];
+    expect(of(['product/prototypes/admin', 'product/prototypes/campaign-owner', 'product/prototypes/clipper'])).toEqual(
+      ['admin', 'campaign-owner', 'clipper'],
+    );
+    expect(of(['product/prototypes/admin'])).toEqual(['admin']);
+    expect(of(['a/b', 'a/b/c'])).toEqual(['b', 'b/c']);
+    expect(of(['x', 'y/z'])).toEqual(['x', 'y/z']);
+    // Whole folder names, never a shared beginning of one.
+    expect(of(['p/ab/x', 'p/abc/y'])).toEqual(['ab/x', 'abc/y']);
+    expect(of([])).toEqual([]);
+  });
+
+  it("136: prototypes only at the docs folder's top: rows, no heading", () => {
+    const proto = tempDir();
+    put(proto, 'a.html', '<title>A</title>');
+    const page = prototypesPage(['a.html'], proto);
+    expect(page).toContain('- [A](/a.html)');
+    expect(page).not.toMatch(/^## /m);
   });
 
   it('1, 7: the sidebar ends with Prototypes only when the build lists them', () => {
