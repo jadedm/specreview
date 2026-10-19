@@ -61,6 +61,15 @@ describe('#114: the title of a prototype page', () => {
     expect(titleIn('<script>'.repeat(400_000))).toBeNull();
     expect(titleIn('<!--'.repeat(400_000))).toBeNull();
     expect(titleIn("<a title='".repeat(400_000))).toBeNull();
+    // #122: nesting counted in one pass; unquoted values.
+    expect(titleIn('<svg>'.repeat(400_000))).toBeNull();
+    expect(titleIn(`${'<svg>'.repeat(200_000)}${'</svg>'.repeat(200_000)}<title>T</title>`)).toBe('T');
+    expect(titleIn('<img alt=x'.repeat(400_000))).toBeNull();
+    expect(titleIn(`<svg>${"<a b='".repeat(400_000)}`)).toBeNull();
+    expect(titleIn(`<svg>${'<!--'.repeat(400_000)}`)).toBeNull();
+    expect(titleIn(`<template>${'<script>'.repeat(400_000)}`)).toBeNull();
+    expect(titleIn(`<svg>${'<a>'.repeat(400_000)}`)).toBeNull();
+    expect(titleIn(`<template>${'<script></script>'.repeat(200_000)}`)).toBeNull();
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
@@ -68,7 +77,8 @@ describe('#114: the title of a prototype page', () => {
     expect(titleIn('<html><body>no title</body></html>')).toBeNull();
     expect(titleIn('<title>  \n\t </title>')).toBeNull();
     expect([...(titleIn(`<title>${'é'.repeat(300)}</title>`) ?? '')]).toHaveLength(120);
-    expect(titleIn('<title>a\u0000b‮c\n\nd</title>')).toBe('a b c d');
+    // A bidi control is removed, not a space (#122).
+    expect(titleIn('<title>a\u0000b‮c\n\nd</title>')).toBe('a bc d');
   });
 
   it('3: escaped, it renders as the same text and makes no element, link or interpolation', () => {
@@ -117,6 +127,49 @@ describe('#114: the generated page', () => {
       '- [Y](/proto/y/)',
     ]);
     expect(page).not.toMatch(/app\.js|style\.css|logo\.png/);
+  });
+
+  it('122: titles read as the browser reads them', () => {
+    // 1-4: joiners and marks shape the text and stay; bidi controls go; controls and space runs are one space.
+    expect(titleIn('<title>\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Family plan</title>')).toBe(
+      '\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Family plan',
+    );
+    expect(titleIn('<title>\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645</title>')).toBe(
+      '\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645',
+    );
+    expect(titleIn('<title>a\u202Eb\u2066c</title>')).toBe('abc');
+    expect(titleIn('<title>a\u0007\n\t  b</title>')).toBe('a b');
+    // 5, 6: a quote opens a value only where a value starts.
+    expect(titleIn("<img alt=Don't src=x.png><title>Real</title>")).toBe('Real');
+    expect(titleIn("<a title='x>y'><title>Real</title>")).toBe('Real');
+    // 7, 8: nested svg and template are counted; 9: raw text ends at its first closer.
+    expect(titleIn('<svg><svg></svg><title>icon</title></svg><title>Real</title>')).toBe('Real');
+    expect(titleIn('<template><template></template><title>t</title></template><title>Real</title>')).toBe('Real');
+    expect(titleIn('<script>"<script>"</script><title>Real</title>')).toBe('Real');
+    // Review: all bidi controls go (LRM, RLM, ALM); nothing visible is no title.
+    expect(titleIn('<title>a\u200Eb\u200Fc\u061Cd</title>')).toBe('abcd');
+    expect(titleIn('<title>&#x200B;\u2060\u{E0041}</title>')).toBeNull();
+    // Review: an unquoted value keeps a quote or an = as text.
+    expect(titleIn("<img alt=x='oops><title>Real</title>")).toBe('Real');
+    expect(titleIn('<a b=c="x><title>Real</title>')).toBe('Real');
+    expect(titleIn('<a b = "x>y"><title>Real</title>')).toBe('Real');
+    // Review: inside an svg or template, self-closing tags, comments, CDATA,
+    // attribute values and raw text children open and close nothing.
+    expect(titleIn('<svg><svg/></svg><title>Real</title>')).toBe('Real');
+    expect(titleIn('<svg><!-- </svg> --><title>icon</title></svg><title>Real</title>')).toBe('Real');
+    expect(titleIn('<svg><![CDATA[ </svg> ]]><title>icon</title></svg><title>Real</title>')).toBe('Real');
+    expect(titleIn('<svg><g data-x="</svg>"><title>icon</title></g></svg><title>Real</title>')).toBe('Real');
+    expect(titleIn('<template><script>"</template><title>Fake</title>"</script></template><title>Real</title>')).toBe(
+      'Real',
+    );
+    // Round 2: inside an svg a <style> holds markup, so its </svg> closes the svg.
+    expect(titleIn('<svg><style></svg><title>A</title><svg></style></svg><title>B</title>')).toBe('A');
+    // In a template, <![CDATA[ is no section: its > ends it.
+    expect(titleIn('<template><![CDATA[></template><title>A</title><template>]]></template><title>B</title>')).toBe(
+      'A',
+    );
+    // A value ending in / is not a self-closing tag.
+    expect(titleIn('<svg><svg a=/></svg><title>icon</title></svg><title>Real</title>')).toBe('Real');
   });
 
   it("136: headings drop the folders every prototype folder shares, keeping each one's name", () => {
