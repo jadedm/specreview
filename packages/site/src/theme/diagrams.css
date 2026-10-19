@@ -1,0 +1,67 @@
+.sr-diagram {
+  margin: 16px 0;
+  /* Room for the buttons' 2px ring and its 2px offset inside the scroll box. */
+  padding: 4px;
+  overflow-x: auto;
+}
+.sr-diagram svg {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+.sr-diagram-source {
+  display: none;
+}
+.sr-diagram-error {
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+}
+.sr-diagram-zoom,
+.sr-zoom-close {
+  padding: 2px 10px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  line-height: 22px;
+}
+.sr-diagram-zoom-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+/* Full size: the dialog fits the diagram up to the screen and scrolls both
+   ways past that; the bar with the close button stays in view. */
+.sr-zoom {
+  width: fit-content;
+  height: fit-content;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+}
+.sr-zoom::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.sr-zoom-bar {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  padding: 12px;
+  background: var(--vp-c-bg);
+}
+.sr-zoom-body {
+  padding: 0 16px 16px;
+}
+.sr-zoom-body svg {
+  display: block;
+  max-width: none;
+}

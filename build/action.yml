@@ -1,0 +1,53 @@
+name: specreview build
+description: Build a repository's docs folder, as committed, into a site for a specreview hub. Builds only; it never publishes and needs no token.
+inputs:
+  repo:
+    description: The repository's lowercase name, the site's path on the hub.
+    required: true
+  docs:
+    description: The docs folder.
+    default: docs
+  out:
+    description: Where the build goes; upload it as an artifact for the publish job.
+    default: .specreview
+  exclude:
+    description: Paths in the docs folder to leave out of the site, one per line; * and ** are wildcards.
+    default: ''
+  prototypes:
+    description: Paths in the docs folder to publish untouched as prototypes (as git archive exports them), one per line; * and ** are wildcards. Needs a hub that accepts prototypes (specreview #112 or later).
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      with:
+        version: 10.28.0
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 22
+    # The build tool comes from this action's own checkout, at the commit the
+    # caller pinned. This job holds no OIDC permission. Only the site build,
+    # shared and the root (its dev tools, TypeScript among them) are
+    # installed, not the hub's Workers runtime or the other packages.
+    - name: Install the build tool
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: pnpm install --frozen-lockfile --filter . --filter "@specreview/site..." && pnpm --filter "@specreview/site..." build
+    - name: Build the site
+      shell: bash
+      env:
+        INPUT_REPO: ${{ inputs.repo }}
+        INPUT_DOCS: ${{ inputs.docs }}
+        INPUT_OUT: ${{ inputs.out }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_PROTOTYPES: ${{ inputs.prototypes }}
+      # Each non-empty line is one --exclude or --prototypes, never word-split.
+      run: |
+        args=()
+        while IFS= read -r line || [ -n "$line" ]; do
+          [ -n "$line" ] && args+=(--exclude "$line")
+        done <<< "$INPUT_EXCLUDE"
+        while IFS= read -r line || [ -n "$line" ]; do
+          [ -n "$line" ] && args+=(--prototypes "$line")
+        done <<< "$INPUT_PROTOTYPES"
+        node "$GITHUB_ACTION_PATH/../packages/site/dist/build/cli.js" build --repo "$INPUT_REPO" --docs "$INPUT_DOCS" --out "$INPUT_OUT" "${args[@]}"

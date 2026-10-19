@@ -1,0 +1,8 @@
+{
+  "accountId": "",
+  "hostname": "",
+  "adminHostname": "",
+  "worker": "specreview-hub",
+  "database": { "name": "specreview" },
+  "bucket": { "name": "specreview-sites" }
+}

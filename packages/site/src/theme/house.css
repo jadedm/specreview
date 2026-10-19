@@ -1,0 +1,127 @@
+/* The house style: black, white and greys only, and the system font.
+   VitePress builds every colour from a few palettes; pointing those at true
+   greys (equal red, green and blue) turns links, buttons, the sidebar and
+   alerts grey; code blocks need one rule of their own (below). Links in the
+   page text keep their underline, and the sidebar's current page gets one
+   (below), so neither depends on colour. Sites are light only (appearance:
+   false in the build), so only the light palette is set. */
+
+:root {
+  --vp-c-white: #ffffff;
+  --vp-c-black: #000000;
+
+  --vp-c-gray-1: #dddddd;
+  --vp-c-gray-2: #e5e5e5;
+  --vp-c-gray-3: #ececec;
+  --vp-c-gray-soft: rgba(128, 128, 128, 0.14);
+
+  /* Accent palettes: every one is grey. Status, alerts and diffs are told
+     apart by their words and their form, never by hue. */
+  --vp-c-indigo-1: #1f1f1f;
+  --vp-c-indigo-2: #3a3a3a;
+  --vp-c-indigo-3: #1f1f1f;
+  --vp-c-indigo-soft: rgba(128, 128, 128, 0.14);
+  --vp-c-purple-1: #1f1f1f;
+  --vp-c-purple-2: #3a3a3a;
+  --vp-c-purple-3: #555555;
+  --vp-c-purple-soft: rgba(128, 128, 128, 0.14);
+  --vp-c-green-1: #1f1f1f;
+  --vp-c-green-2: #3a3a3a;
+  --vp-c-green-3: #555555;
+  --vp-c-green-soft: rgba(128, 128, 128, 0.14);
+  --vp-c-yellow-1: #1f1f1f;
+  --vp-c-yellow-2: #3a3a3a;
+  --vp-c-yellow-3: #555555;
+  --vp-c-yellow-soft: rgba(128, 128, 128, 0.14);
+  --vp-c-red-1: #1f1f1f;
+  --vp-c-red-2: #3a3a3a;
+  --vp-c-red-3: #555555;
+  --vp-c-red-soft: rgba(128, 128, 128, 0.14);
+  --vp-c-sponsor: #555555;
+
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #f5f5f5;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #f5f5f5;
+  --vp-c-border: #c4c4c4;
+  --vp-c-divider: #e5e5e5;
+  --vp-c-gutter: #e5e5e5;
+
+  /* Contrast on white and on the #f5f5f5 blocks: 16.5 and 15.1, 7.5 and 6.8,
+     5.3 and 4.9 to 1. text-3 is the faintest text the site uses. */
+  --vp-c-text-1: #1f1f1f;
+  --vp-c-text-2: #555555;
+  --vp-c-text-3: #6b6b6b;
+
+  --vp-font-family-base:
+    system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+
+  accent-color: var(--vp-c-text-1);
+}
+
+/* Code in one colour: Shiki colours each token from its own theme. The
+   selector outranks VitePress's html:not(.dark) .vp-code span. */
+:root:not(.dark) .vp-code span {
+  color: var(--vp-c-text-1);
+}
+
+::selection {
+  background: #d6d6d6;
+  color: var(--vp-c-text-1);
+}
+
+/* Outranks VitePress's button:focus-visible (its blue 4px auto ring) and its
+   input and textarea rules that remove the outline. */
+:is(a, button, input, textarea, select, summary, [tabindex]:not([tabindex='-1'])):focus-visible {
+  outline: 2px solid var(--vp-c-text-1);
+  outline-offset: 2px;
+}
+
+/* VitePress marks the current page in the sidebar only by the accent colour,
+   now grey like the rest; an underline marks it instead, and on hover. */
+.VPSidebarItem.is-active > .item .text,
+.VPSidebarItem.is-link > .item > .link:hover .text {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Long spec pages: a little more air between lines. */
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.7;
+}
+
+/* The 404 page (#52): its title is sentence case, so no capitals spacing, and
+   its sentence gets room for one line on a phone and two on a desktop. */
+.NotFound .title.title {
+  letter-spacing: normal;
+}
+.NotFound .quote.quote {
+  max-width: 320px;
+}
+
+/* In its place when the sign-in has expired (#123, signed-out.ts), laid out
+   as the 404 is (VitePress's styles for it are scoped to its component). */
+.sr-signed-out {
+  padding: 64px 24px 96px;
+  text-align: center;
+}
+.sr-signed-out h1 {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 20px;
+}
+.sr-signed-out p {
+  margin: 24px auto 18px;
+  max-width: 320px;
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+.sr-signed-out-reload {
+  border: 1px solid var(--vp-c-text-2);
+  border-radius: 16px;
+  padding: 3px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vp-c-text-1);
+}

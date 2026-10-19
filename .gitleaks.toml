@@ -1,0 +1,14 @@
+# gitleaks' default rules, less two kinds of test value: the PEM header around
+# keys the hub's tests generate at run time, and the site build test's marker.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "test values, not secrets"
+regexTarget = "match"
+regexes = [
+  '''-----BEGIN PRIVATE KEY-----\\n\$\{btoa''',
+  '''SECRET_ON_DISK=1''',
+]
+paths = ['''^packages/(hub|site)/test/[a-z-]+\.test\.ts$''']
+condition = "AND"

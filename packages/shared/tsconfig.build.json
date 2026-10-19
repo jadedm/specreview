@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "declaration": true
+  },
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/test-utils/**", "vitest.config.ts"]
+}

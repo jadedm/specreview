@@ -1,0 +1,34 @@
+{
+  "name": "@specreview/site",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "specreview-site": "./dist/build/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.theme.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "pnpm --filter @specreview/shared build && pnpm run build && vitest run",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc -p tsconfig.theme.json && cp src/theme/house.css dist/theme/ && cp src/theme/review/review.css dist/theme/review/ && cp src/theme/diagrams.css dist/theme/"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
+    "@types/markdown-it-emoji": "3.0.1",
+    "@types/sanitize-html": "^2.16.2"
+  },
+  "dependencies": {
+    "@specreview/shared": "workspace:*",
+    "diff": "9.0.0",
+    "entities": "8.1.0",
+    "gray-matter": "^4.0.3",
+    "markdown-it": "15.0.2",
+    "markdown-it-emoji": "3.0.0",
+    "mermaid": "12.2.0",
+    "sanitize-html": "^2.18.0",
+    "vitepress": "1.6.4",
+    "vue": "^3.5.43"
+  }
+}

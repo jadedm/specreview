@@ -1,0 +1,8 @@
+{
+  "org": "acme",
+  "ownerId": "1001",
+  "configRepo": "specreview-hub",
+  "admins": ["owner@acme.dev"],
+  "teamLabel": "Acme team",
+  "sites": []
+}
