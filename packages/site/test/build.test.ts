@@ -1434,6 +1434,8 @@ describe('#114: the generated Prototypes page', () => {
     expect(build(repo, '--prototypes', 'proto', '--exclude', 'proto/x/Gone.html')).toMatchObject({ status: 0 });
     const list = html(repo, 'prototypes.html');
     expect(list).toMatch(/<a href="\/fixture\/proto\/x\/Main\.html" target="_blank" rel="noopener">Main screen<\/a>/);
+    // #136: folder headings without the shared proto/.
+    expect([...list.matchAll(/<h2 id="[^"]*" tabindex="-1">([^<]*)</g)].map((m) => m[1].trim())).toEqual(['x', 'y']);
     expect(list).toMatch(/<a href="\/fixture\/proto\/y\/" target="_blank" rel="noopener">Y<\/a>/);
     expect(list.match(/target="_blank" rel="noopener"/g)).toHaveLength(3);
     expect(list).not.toContain('_self');
