@@ -257,6 +257,25 @@ describe('builds that must fail, naming the cause', () => {
     }
   });
 
+  it('#132 3: an error while rendering a page on the server fails the build, naming the page', () => {
+    const repo = minimal();
+    write(repo, 'docs/guide.md', page('Guide', 'Text.'));
+    commit(repo, 'docs: guide');
+    // The theme's test switch makes /fixture/guide throw while it renders.
+    const r = spawnSync('node', [CLI, 'build', '--repo', 'fixture'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: { ...process.env, SPECREVIEW_RENDER_ERROR_FOR_TESTS: '/fixture/guide' },
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('while rendering /fixture/guide: a render error the build test asked for');
+    // The failing component's own frames are kept.
+    expect(r.stderr).toMatch(/while rendering \/fixture\/guide: [^\n]*\n\s+at setup/);
+    expect(existsSync(path.join(repo, '.specreview', 'site'))).toBe(false);
+    // The same repo builds without the switch.
+    expect(build(repo)).toMatchObject({ status: 0 });
+  });
+
   it('#79: a refused name in the log cannot start a workflow command', () => {
     const r = minimal();
     write(r, 'docs/x\n::error::y ##[warning]z.md', page('X', 'x'));
