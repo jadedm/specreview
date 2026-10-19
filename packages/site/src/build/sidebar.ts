@@ -4,6 +4,9 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
+import MarkdownIt from 'markdown-it';
+import type { StateCore, Token } from 'markdown-it';
+import { full as emoji } from 'markdown-it-emoji';
 import { BuildError } from './checks.js';
 import { escapeHtml } from './sanitize.js';
 
@@ -17,19 +20,57 @@ const refuse = () => {
 export type SidebarItem = { text: string; link?: string; items?: SidebarItem[] };
 type PageInfo = { file: string; title: string; order: number };
 
-// The first level-one heading outside fenced code.
-const firstHeading = (markdown: string): string | undefined => {
-  let fence: string | null = null;
-  for (const line of markdown.split('\n')) {
-    const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marker && fence === null) fence = marker;
-    else if (marker && fence !== null && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
-    else if (fence === null) {
-      const heading = /^#\s+(.+?)\s*#*\s*$/.exec(line)?.[1];
-      if (heading) return heading;
+// The first level-one heading's text, read as VitePress reads a page's
+// title (#129: its titlePlugin, 1.6.4): the first h1 anywhere in the parsed
+// page, a quote or list included, setext or ATX, and of its inline parts
+// only the text and inline code, so **bold** and links read as their text
+// and an image-only heading as none. HTML is off, as the site
+// builds it. The emoji plugin is VitePress's own (markdown-it-emoji, full).
+// VitePress's own text joining (its restoreEntities, 1.6.4), so entities
+// and an escaped & read as VitePress reads them: when text tokens are joined
+// an entity keeps its markup (&amp; as typed) and \& becomes &amp;; a lone
+// one stays decoded.
+const contentOf = (t: Token) =>
+  t.info === 'entity' ? t.markup : t.info === 'escape' && t.content === '&' ? '&amp;' : t.content;
+const restoreEntities = (state: StateCore) => {
+  for (const block of state.tokens) {
+    if (block.type !== 'inline') continue;
+    const tokens = block.children ?? [];
+    for (const t of tokens) if (t.type === 'text_special') t.type = 'text';
+    let last = 0;
+    for (let curr = 0; curr < tokens.length; curr++) {
+      const next = tokens[curr + 1];
+      if (tokens[curr].type === 'text' && next?.type === 'text') {
+        next.content = contentOf(tokens[curr]) + contentOf(next);
+        next.info = '';
+        next.markup = '';
+      } else {
+        tokens[last++] = tokens[curr];
+      }
     }
+    tokens.length = last;
   }
-  return undefined;
+};
+// As VitePress sets its parser: links found in text, no fuzzy ones.
+const parser = new MarkdownIt({ html: false, linkify: true });
+parser.linkify.set({ fuzzyLink: false });
+parser.core.ruler.at('text_join', restoreEntities);
+// markdown-it-emoji 3.0.0 (the version VitePress bundles, with markdown-it 14)
+// calls md.utils.assign and md.utils.has, which markdown-it 15 dropped:
+// they were Object.assign and Object.hasOwn. (utils is shared by every
+// markdown-it 15 instance in the build; the two only add what 14 had.)
+Object.assign(parser.utils, { assign: Object.assign, has: Object.hasOwn });
+parser.use(emoji as unknown as Parameters<typeof parser.use>[0]);
+const firstHeading = (markdown: string): string | undefined => {
+  const tokens = parser.parse(markdown, {});
+  const at = tokens.findIndex((t) => t.type === 'heading_open' && t.tag === 'h1');
+  if (at < 0) return undefined;
+  const text = (tokens[at + 1]?.children ?? [])
+    .filter((t) => t.type === 'text' || t.type === 'code_inline' || t.type === 'emoji')
+    .map((t) => t.content)
+    .join('')
+    .trim();
+  return text === '' ? undefined : text;
 };
 
 export const titleOf = (

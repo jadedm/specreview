@@ -393,7 +393,8 @@ describe('builds that must fail, naming the cause', () => {
     const code = '_vp-fn_(function(){throw new Error("MARKER-"+(6*7))})()';
     const cases: [string, string, string][] = [
       ['front matter title', 'docs/fm.md', page('x', 'body', `title: '${code}'\n`)],
-      ['heading', 'docs/h.md', `# ${code}\n\nbody\n`],
+      // Escaped, since the heading is read as Markdown (#129): _x_ is emphasis.
+      ['heading', 'docs/h.md', `# ${code.replace(/_/g, '\\_')}\n\nbody\n`],
       ['folder name', 'docs/_vp-fn_1/p.md', page('P', 'body')],
     ];
     for (const [name, file, text] of cases) {
@@ -405,6 +406,13 @@ describe('builds that must fail, naming the cause', () => {
       expect(r.stderr, name).toContain('which VitePress would run as code');
       expect(r.stderr, name).not.toContain('MARKER-42');
     }
+    // Unescaped, the heading reads as emphasis and runs nothing.
+    const plain = minimal();
+    write(plain, 'docs/h.md', `# ${code}\n\nbody\n`);
+    commit(plain, 'plain');
+    const r = build(plain);
+    expect(r.stderr).not.toContain('MARKER-42');
+    expect(manifestOf(plain).pages.h.title.startsWith('_vp-fn_')).toBe(false);
   });
 
   it('a title with < or > is refused', () => {
@@ -661,6 +669,35 @@ describe('#124: a page with no title is named after its file', () => {
     const sidebar = readFileSync(path.join(repo, '.specreview', 'site', 'plans/notes.html'), 'utf8');
     for (const name of ['fixture', 'plans', 'notes', 'fenced', 'blank', 'From the heading'])
       expect(sidebar).toMatch(new RegExp(`<(p|h2) class="text"[^>]*>${name}</(p|h2)>`));
+  });
+});
+
+describe('#129: the sidebar and the manifest name a heading alike', () => {
+  it('1-7 and more: markup, setext, indented, quoted, image-only, entities, links, emoji and an escaped &', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'Text.'));
+    const pages: Record<string, [string, string]> = {
+      markup: ['# The **x** and `y` plan\n', 'The x and y plan'],
+      setext: ['Setext title\n============\n', 'Setext title'],
+      indented: ['   # Indented title\n', 'Indented title'],
+      quoted: ['> # Quoted title\n', 'Quoted title'],
+      image: ['# ![logo](logo.png)\n', 'image'],
+      entity: ['# A &amp; B\n', 'A &amp; B'],
+      linked: ['# [Linked](markup.md) title\n', 'Linked title'],
+      emoji: ['# Launch :rocket: plan\n', 'Launch 🚀 plan'],
+      escaped: ['# Tea \\& cake\n', 'Tea &amp; cake'],
+    };
+    for (const [name, [body]] of Object.entries(pages)) write(repo, `docs/${name}.md`, body);
+    write(repo, 'docs/logo.png', 'png');
+    commit(repo, 'docs');
+    expect(build(repo)).toMatchObject({ status: 0 });
+    const m = manifestOf(repo);
+    const sidebar = readFileSync(path.join(repo, '.specreview', 'site', 'index.html'), 'utf8');
+    for (const [name, [, title]] of Object.entries(pages)) {
+      expect(m.pages[name].title, name).toBe(title);
+      const shown = title.replace(/&/g, '&amp;').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(sidebar, name).toMatch(new RegExp(`<p class="text"[^>]*>${shown}</p>`));
+    }
   });
 });
 
