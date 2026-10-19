@@ -6,6 +6,7 @@ import { h } from 'vue';
 import { OrgBrand } from './brand';
 import { Diagrams } from './diagrams';
 import { BOTTOM_MOUNT, TOP_MOUNT, startReview } from './review/start';
+import { expired, SignedOutMessage, SignedOutProbe } from './signed-out';
 import './house.css';
 import './review/review.css';
 
@@ -19,6 +20,9 @@ export default {
       'nav-bar-content-after': () => h(OrgBrand),
       'doc-before': () => h('div', { id: TOP_MOUNT }),
       'doc-after': () => [h('div', { id: BOTTOM_MOUNT }), h(Diagrams)],
+      // #123: a 404 shown because the sign-in expired says so.
+      'layout-bottom': () => h(SignedOutProbe),
+      ...(expired.value ? { 'not-found': () => h(SignedOutMessage) } : {}),
     }),
   enhanceApp({ router, siteData }) {
     if (typeof window === 'undefined') return;
