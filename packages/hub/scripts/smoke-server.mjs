@@ -183,6 +183,9 @@ delete orgFile.accessAud;
 delete orgFile.hostname;
 delete orgFile.adminHostname;
 delete orgFile.accessAdminAud;
+// Nor the prototype hostname's (#116: deploy sets them from hub.json).
+delete orgFile.protoHostname;
+delete orgFile.accessProtoAud;
 const repoState = {
   newdocs: repoWith(3001, { 'README.md': '# newdocs\n' }),
   'docs-hub': repoWith(4001, {

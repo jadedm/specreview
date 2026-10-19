@@ -452,7 +452,7 @@ describe('14: the page', () => {
     await remove('readers', 'ana@partner.example');
     await add('readers', 'zed@partner.example');
     const p = html(await call('/_admin/', { raw: true, email: ADMIN, envOverride: env }));
-    expect(p).toContain('<h2>Who reads and approves</h2>');
+    expect(p).toContain('<h1>People</h1>');
     expect(p).toContain('href="https://github.com/acme/docs-hub/commits/main/specreview.config.json"');
     expect(p).toMatch(/zed@partner\.example<\/span><span class="meta">added, deploy pending/);
     expect(p).toMatch(/ana@partner\.example<\/span><span class="meta">removed, deploy pending/);
@@ -461,7 +461,7 @@ describe('14: the page', () => {
     expect(p).toContain('Add a reader');
     expect(p).toContain('approvers see what the team sees');
     // #91: a list of people who are team individually, per site.
-    expect(p).toContain('<p><strong>Team members</strong></p>');
+    expect(p).toContain('<h3>Team members</h3>');
     expect(p).toContain('everyone at acme.dev already does');
   });
 
@@ -491,7 +491,7 @@ describe('#67: finished removals and the clear races', () => {
   it('1, 5: a removal listed nowhere is not shown, and its row is kept', async () => {
     await remove('readers', 'ana@partner.example');
     const p = await adminPage(envWithout('ana@partner.example'));
-    expect(p).toContain('<h2>Who reads and approves</h2>');
+    expect(p).toContain('<h1>People</h1>');
     expect(p).toMatch(/@initech\.example<\/span><\/span><span><form class="inline"/);
     expect(p).not.toContain('ana@partner.example');
     expect(p).not.toContain('Let back in');
@@ -759,5 +759,105 @@ describe('#91: team members and approvers on the admin page', () => {
     expect(html(await remove('readers', 'boss@elsewhere.example'))).toContain(
       'They keep approving here through another entry in the config.',
     );
+  });
+});
+
+// #133: three tabs, each its own address; a change answers on the People tab.
+describe('133: the admin page in tabs', () => {
+  const tab = async (path: string) => html(await call(path, { raw: true, email: ADMIN, envOverride: env }));
+  const current = (p: string) => /<a href="([^"]*)" aria-current="page">/.exec(p)?.[1];
+
+  it('1, 2, 4, 16: each tab marks itself and holds only its own part', async () => {
+    const people = await tab('/_admin/');
+    const sites = await tab('/_admin/sites');
+    const github = await tab('/_admin/github');
+    for (const p of [people, sites, github]) {
+      expect(p).toContain('<nav class="tabs" aria-label="Admin">');
+      for (const href of ['/_admin/', '/_admin/sites', '/_admin/github']) expect(p).toContain(`<a href="${href}"`);
+      expect(p.match(/aria-current="page"/g)).toHaveLength(1);
+    }
+    expect([current(people), current(sites), current(github)]).toEqual(['/_admin/', '/_admin/sites', '/_admin/github']);
+    // People: the lists, most powerful first, each saying what it allows.
+    expect(people).toContain('<h1>People</h1>');
+    const order = ['<h3>Approvers</h3>', '<h3>Team members</h3>', '<h3>Readers</h3>'].map((h) => people.indexOf(h));
+    expect(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1]))).toBe(true);
+    expect(people).toContain('Sign pages off as ready');
+    expect(people).not.toMatch(
+      /apps\/new|github\/forget|action="\/_admin\/sites"|<h2>Ticket repos<\/h2>|tickets in |Add a site/,
+    );
+    // Sites: the list with its ticket repo; nothing of People or the app.
+    expect(sites).toContain('<h1>Sites</h1>');
+    expect(sites).toContain('tickets in acme/');
+    expect(sites).not.toMatch(/action="\/_admin\/access"|github\/forget|apps\/new|<h2>Ticket repos<\/h2>|<h3>/);
+    // GitHub App: the app; nothing of People or adding a site.
+    expect(github).toContain('<h1>GitHub App</h1>');
+    expect(github).toContain('<h2>Ticket repos</h2>');
+    expect(github).not.toMatch(/action="\/_admin\/access"|action="\/_admin\/sites"|tickets in |<h3>/);
+  });
+
+  it('6: an add answers with the People tab and its result at the top', async () => {
+    const r = await add('readers', 'tab@partner.example');
+    expect(r.status).toBe(200);
+    const p = html(r);
+    expect(current(p)).toBe('/_admin/');
+    const result = p.indexOf('<div class="result" role="status">');
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeLessThan(p.indexOf('<h1>People</h1>'));
+    expect(p).toContain('<p><strong>Added</strong></p>');
+    // A refusal answers there too, with its own status.
+    const bad = await change({ site: 'nosuch', list: 'readers', action: 'add', entry: 'x@y.example' });
+    expect(bad.status).toBe(400);
+    expect(html(bad)).toContain('<p><strong>Check the form</strong></p>');
+    expect(current(html(bad))).toBe('/_admin/');
+  });
+
+  it('review: a refusal shows its result alone, escaped; titles name the tab; only GitHub App may post to GitHub', async () => {
+    const bad = await change({ site: 'sidecar', list: 'readers', action: 'restore', entry: 'x@y.example' });
+    expect(bad.status).toBe(400);
+    expect(html(bad)).toContain('<a href="/_admin/">Back to the lists</a>');
+    expect(html(bad)).toContain('<h1>People</h1>');
+    expect(html(bad)).not.toContain('<h3>Approvers</h3>');
+    // What the admin typed comes back as text.
+    const removed = await remove('readers', '<b>x</b>@y.example');
+    expect(removed.status).toBe(200);
+    const odd = html(removed);
+    expect(odd).toContain('<p><strong>Nothing to change</strong></p>');
+    expect(odd).toContain('&lt;b&gt;x&lt;/b&gt;@y.example');
+    expect(odd).not.toContain('<b>x</b>');
+    for (const [path, title] of [
+      ['/_admin/', 'People'],
+      ['/_admin/sites', 'Sites'],
+      ['/_admin/github', 'GitHub App'],
+    ]) {
+      const r = await call(path, { raw: true, email: ADMIN, envOverride: env });
+      expect(html(r), path).toContain(`<title>${title} · `);
+      const csp = r.headers.get('content-security-policy') ?? '';
+      expect(csp, path).toMatch(
+        path === '/_admin/github' ? /form-action 'self' https:\/\/github\.com(;|$)/ : /form-action 'self'(;|$)/,
+      );
+    }
+  });
+
+  it('9, 10, 11: a non-admin gets the page on each tab; unknown paths 404; other methods 405', async () => {
+    for (const path of ['/_admin/', '/_admin/sites', '/_admin/github']) {
+      const r = await call(path, { raw: true, email: 'dev@acme.dev', envOverride: env });
+      expect([r.status, html(r).includes('Admins only')], path).toEqual([403, true]);
+    }
+    expect((await call('/_admin/nosuch', { raw: true })).status).toBe(404);
+    expect((await call('/_admin/sites', { raw: true })).status).toBe(401);
+    for (const [method, path] of [
+      ['PUT', '/_admin/sites'],
+      ['POST', '/_admin/github'],
+      ['POST', '/_admin/'],
+    ]) {
+      const r = await call(path, {
+        raw: true,
+        email: ADMIN,
+        envOverride: env,
+        method,
+        headers: { origin: ADMIN_HOST },
+      });
+      expect(r.status, `${method} ${path}`).toBe(405);
+    }
   });
 });

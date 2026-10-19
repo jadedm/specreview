@@ -47,6 +47,16 @@ const STYLE = [
   // The admin page's list rows with a remove button (#12).
   '.row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0}',
   'form.inline{margin:0}',
+  // The admin page's tabs (#133): links, the current one marked and underlined.
+  'nav.tabs{display:flex;gap:28px;border-bottom:1px solid #e2e2e2;margin:-24px 0 32px}',
+  'nav.tabs a{display:block;padding:10px 0 12px;margin-bottom:-1px;color:#6b6b6b;text-decoration:none;font-size:15px;font-weight:600;border-bottom:2px solid transparent}',
+  'nav.tabs a:hover{color:#1f1f1f}',
+  'nav.tabs a[aria-current=page]{color:#1f1f1f;border-bottom-color:#1f1f1f}',
+  // A site's lists in a box, and a change's result above them.
+  '.box{border:1px solid #e2e2e2;border-radius:8px;padding:4px 18px 12px;margin:0 0 20px}',
+  '.box h2{margin-top:16px}',
+  'h3{font-size:16px;font-weight:600;margin:24px 0 2px}',
+  '.result{border:1px solid #c4c4c4;background:#f6f6f6;border-radius:6px;padding:12px 14px 2px;margin:0 0 28px}',
   '@media (max-width:640px){.bar{padding:0 16px}main{margin:32px auto;padding:0 16px}h1{font-size:24px}}',
 ].join('');
 
@@ -61,11 +71,19 @@ export const escapeHtml = (s: string) =>
 // HEAD gets the same status and headers with no body, as pages.ts does. A
 // page with forms names where they may post (form-action does not fall back
 // to default-src).
-export const page = async (status: number, name: string, main: string, head: boolean, formAction?: string) =>
+// `title` names the page in the browser tab before the organisation (#133).
+export const page = async (
+  status: number,
+  name: string,
+  main: string,
+  head: boolean,
+  formAction?: string,
+  title?: string,
+) =>
   new Response(
     head
       ? null
-      : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title><style>${STYLE}</style></head><body><header><div class="bar"><span class="org">${name}</span></div></header><main>${main}</main></body></html>`,
+      : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title ? `${title} · ${name}` : name}</title><style>${STYLE}</style></head><body><header><div class="bar"><span class="org">${name}</span></div></header><main>${main}</main></body></html>`,
     {
       status,
       headers: {
