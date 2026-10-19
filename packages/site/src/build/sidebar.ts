@@ -32,9 +32,24 @@ const firstHeading = (markdown: string): string | undefined => {
   return undefined;
 };
 
-export const titleOf = (file: string, markdown: string, data: Record<string, unknown>): string => {
+export const titleOf = (
+  file: string,
+  markdown: string,
+  data: Record<string, unknown>,
+  untitled = path.posix.basename(file, '.md'),
+): string => {
   if (typeof data.title === 'string' && data.title.trim() !== '') return data.title.trim();
-  return firstHeading(markdown) ?? path.posix.basename(file, '.md');
+  return firstHeading(markdown) ?? untitled;
+};
+
+// A page with no title is named after its file (#124); a folder's index page
+// after its folder, and the site's home page after the repo, as the hub's
+// index names a site with no titled home page. `page` is the page's key, the
+// path without `.md` after the README rewrite (#87).
+export const untitledName = (page: string, repo: string): string => {
+  if (page === 'index') return repo;
+  if (page.endsWith('/index')) return path.posix.basename(path.posix.dirname(page));
+  return path.posix.basename(page);
 };
 
 // A title is shown as text everywhere. The site title goes into an inline
@@ -42,7 +57,7 @@ export const titleOf = (file: string, markdown: string, data: Record<string, unk
 // refused rather than trusted to every place a title lands.
 const titleProblem = (title: string) => (/[<>]/.test(title) ? 'may not contain < or >' : null);
 
-export const readPage = (docs: string, file: string): PageInfo & { issues: unknown } => {
+export const readPage = (docs: string, file: string, untitled?: string): PageInfo & { issues: unknown } => {
   const raw = readFileSync(path.join(docs, file), 'utf8');
   // Front matter in another language (---js) is evaluated by the parser:
   // refused before any parsing. The same check runs before VitePress (checks.ts).
@@ -59,7 +74,7 @@ export const readPage = (docs: string, file: string): PageInfo & { issues: unkno
   if (data.order !== undefined && (typeof data.order !== 'number' || !Number.isFinite(data.order))) {
     throw new BuildError(`${file}: front matter "order" must be a number`);
   }
-  const title = titleOf(file, content, data);
+  const title = titleOf(file, content, data, untitled);
   const problem = titleProblem(title);
   if (problem) throw new BuildError(`${file}: the title ${problem}`);
   return {

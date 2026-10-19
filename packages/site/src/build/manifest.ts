@@ -19,6 +19,7 @@ import {
 } from '@specreview/shared';
 import type { SiteConfig } from 'vitepress';
 import { PROTOTYPES_PAGE } from './prototypes-page.js';
+import { readPage, untitledName } from './sidebar.js';
 
 export const TOP_SECTION = '_top';
 
@@ -203,6 +204,8 @@ export const buildEndFor =
   (config: SiteConfig): void => {
     const contentPrefix = docsRel === '' ? '' : `${docsRel}/`;
     const pages: Record<string, ManifestPage> = {};
+    // The site's name, from its base /<name>/ (`repo` here is the repo's folder).
+    const siteName = config.site.base.replace(/^\/|\/$/g, '');
 
     for (const file of config.pages) {
       // The generated Prototypes page (#114) is not reviewed: no manifest entry, so no panel.
@@ -241,7 +244,10 @@ export const buildEndFor =
         return { ...entry, hash: sha256(old) };
       });
       pages[page] = {
-        title: meta.title,
+        // VitePress's title is the front-matter title, else the first heading,
+        // as text. When it finds none the sidebar's own rule names the page
+        // (#124), so the two agree and the title is never blank.
+        title: meta.title.trim() || readPage(config.srcDir, file, untitledName(page, siteName)).title,
         hash: sha256(source),
         issues: meta.issues,
         sections: sectionsOf(docBodyOf(html)),

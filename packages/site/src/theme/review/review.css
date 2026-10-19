@@ -200,6 +200,9 @@
 .rv-board {
   width: 100%;
 }
+.rv-board th {
+  text-align: left;
+}
 .rv-all-pages {
   margin-bottom: 32px;
 }

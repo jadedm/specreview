@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { linkOf, readPage, sidebarOf, titleOf } from './sidebar.js';
+import { linkOf, readPage, sidebarOf, titleOf, untitledName } from './sidebar.js';
 
 const page = (file: string, title: string, order = Number.POSITIVE_INFINITY) => ({ file, title, order });
 
@@ -71,6 +71,13 @@ describe('titles and links', () => {
     expect(titleOf('a.md', '# Heading', { title: 'From front matter' })).toBe('From front matter');
     expect(titleOf('a.md', 'text\n\n# Heading #\n', {})).toBe('Heading');
     expect(titleOf('guide/a-page.md', 'no heading', { title: '  ' })).toBe('a-page');
+    expect(titleOf('guide/a-page.md', 'no heading', {}, 'given')).toBe('given');
+    // #124: the home page after the repo, a folder index after its folder.
+    expect([
+      untitledName('index', 'acme'),
+      untitledName('guide/index', 'acme'),
+      untitledName('guide/a', 'acme'),
+    ]).toEqual(['acme', 'guide', 'a']);
     // A # line inside fenced code is not the page's heading.
     expect(titleOf('a.md', '```sh\n# a comment\n```\n\n# Real', {})).toBe('Real');
   });
