@@ -99,3 +99,29 @@
 .NotFound .quote.quote {
   max-width: 320px;
 }
+
+/* In its place when the sign-in has expired (#123, signed-out.ts), laid out
+   as the 404 is (VitePress's styles for it are scoped to its component). */
+.sr-signed-out {
+  padding: 64px 24px 96px;
+  text-align: center;
+}
+.sr-signed-out h1 {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 20px;
+}
+.sr-signed-out p {
+  margin: 24px auto 18px;
+  max-width: 320px;
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
+.sr-signed-out-reload {
+  border: 1px solid var(--vp-c-text-2);
+  border-radius: 16px;
+  padding: 3px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vp-c-text-1);
+}
