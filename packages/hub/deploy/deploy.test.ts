@@ -720,3 +720,25 @@ describe('#116: the prototype hostname in deploy', () => {
     }
   });
 });
+
+describe('#93: first impressions', () => {
+  it('#93 (1, 2): every README image exists, is a PNG under 300 KB and has alt text', () => {
+    const root = path.join(EXAMPLE, '..', '..');
+    const images = [...readFileSync(path.join(root, 'README.md'), 'utf8').matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)];
+    expect(images.length).toBeGreaterThanOrEqual(4);
+    for (const [, alt, file] of images) {
+      expect(alt.trim().length, file).toBeGreaterThan(20);
+      const bytes = readFileSync(path.join(root, file));
+      expect(bytes.subarray(0, 8).toString('hex'), file).toBe('89504e470d0a1a0a');
+      expect(bytes.length, file).toBeLessThan(300 * 1024);
+    }
+  });
+
+  it("#93 (4): the install says where the sign-in page's team name is set", () => {
+    const step = readFileSync(path.join(EXAMPLE, 'README.md'), 'utf8')
+      .split('\n')
+      .find((l) => l.startsWith('3. Enable Zero Trust'));
+    expect(step).toContain('The sign-in page shows the organisation name');
+    expect(step).toContain('Custom pages, Access login page');
+  });
+});
