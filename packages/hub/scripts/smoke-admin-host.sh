@@ -23,7 +23,10 @@ check "2 docs sign-in on the admin host" "$(code -H "cf-access-jwt-assertion: $(
 check "2 admin sign-in on the docs host" "$(code -H "cf-access-jwt-assertion: $(tok admin:dev@acme.dev)" "$D/sidecar/_api/me")" 401
 check "3 GET /_admin/ as a non-admin" "$(code -H "cf-access-jwt-assertion: $(tok admin:dev@acme.dev)" "$A/_admin/")" 403
 check "4 GET / goes to the admin page" "$(where "$A/")" "302 $A/_admin/"
-for p in /sidecar/ /sidecar/_api/me /_publish/sidecar /_admin/nope; do check "4 GET $p is not here" "$(code "$A$p")" 404; done
+# #161: any other address opened there goes to the admin page too; the target is fixed.
+for p in /admin /sidecar/ /sidecar/_api/me /_publish/sidecar /_admin/nope '/x?next=https://evil.example'; do check "4 GET $p goes to the admin page" "$(where "$A$p")" "302 $A/_admin/"; done
+check "4 HEAD /admin goes to the admin page" "$(curl -s -I -o /dev/null -w '%{http_code} %{redirect_url}' "$A/admin")" "302 $A/_admin/"
+for p in /admin /_admin/nope; do check "4 POST $p is not here" "$(code -X POST -H "cf-access-jwt-assertion: $(tok admin:owner@acme.dev)" -H "origin: $A" "$A$p")" 404; done
 check "8 post with the docs origin" "$(code -X POST -H "cf-access-jwt-assertion: $(tok admin:owner@acme.dev)" -H "origin: $D" "$A/_admin/github/forget")" 403
 
 echo "== docs hostname"

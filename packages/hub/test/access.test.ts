@@ -849,12 +849,12 @@ describe('133: the admin page in tabs', () => {
     }
   });
 
-  it('9, 10, 11: a non-admin gets the page on each tab; unknown paths 404; other methods 405', async () => {
+  it('9, 10, 11: a non-admin gets the page on each tab; unknown paths go to the admin page (#161); other methods 405', async () => {
     for (const path of ['/_admin/', '/_admin/sites', '/_admin/github']) {
       const r = await call(path, { raw: true, email: 'dev@acme.dev', envOverride: env });
       expect([r.status, html(r).includes('Admins only')], path).toEqual([403, true]);
     }
-    expect((await call('/_admin/nosuch', { raw: true })).status).toBe(404);
+    expect((await call('/_admin/nosuch', { raw: true })).headers.get('location')).toBe('/_admin/');
     expect((await call('/_admin/sites', { raw: true })).status).toBe(401);
     for (const [method, path] of [
       ['PUT', '/_admin/sites'],

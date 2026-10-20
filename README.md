@@ -4,7 +4,7 @@ Review specs where they are rendered. A team keeps its specs as Markdown in each
 
 ## Status
 
-Early. Releases are tags on `main`, `v0.2.0` the newest ([releases](https://github.com/jadedm/specreview/releases)). One organisation runs a hub in production. To run one, pin the commit a release tag points to in your hub repo's `specreview.commit` (`gh api repos/jadedm/specreview/commits/v0.2.0 --jq .sha` gives it). The plan and its order are on issue #1.
+Early. Releases are tags on `main`, `v0.3.0` the newest ([releases](https://github.com/jadedm/specreview/releases)). One organisation runs a hub in production. To run one, pin the commit a release tag points to in your hub repo's `specreview.commit` (`gh api repos/jadedm/specreview/commits/v0.3.0 --jq .sha` gives it). The plan and its order are on issue #1.
 
 Built and tested:
 
