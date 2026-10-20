@@ -1,6 +1,6 @@
 // #111: the manifest's optional prototypes list.
 import { describe, expect, it } from 'vitest';
-import { isManifest } from './manifest.js';
+import { isManifest, issueParts } from './manifest.js';
 
 const base = { commit: 'a'.repeat(40), builtAt: '2026-10-17T00:00:00.000Z', pages: {} };
 const hash = (c: string) => c.repeat(64);
@@ -39,5 +39,24 @@ describe('#111: prototypes in the manifest', () => {
       [null],
     ])
       expect(isManifest({ ...base, prototypes }), JSON.stringify(prototypes)).toBe(false);
+  });
+});
+
+describe('#90: ticket links in the manifest', () => {
+  const page = (issues: unknown[]) => ({
+    ...base,
+    pages: { a: { title: 'A', hash: 'h', issues, sections: [], history: [] } },
+  });
+
+  it('7: numbers and <repo>#<number>, each once, are accepted; anything else refused', () => {
+    expect(isManifest(page([3, 'backend#4']))).toBe(true);
+    for (const issues of [['backend#0'], ['Backend#4'], [3, 3], ['backend#4', 'backend#4'], [{}], ['x']])
+      expect(isManifest(page(issues)), JSON.stringify(issues)).toBe(false);
+  });
+
+  it('issueParts reads both forms', () => {
+    expect(issueParts(3)).toEqual({ repo: null, number: 3 });
+    expect(issueParts('backend#4')).toEqual({ repo: 'backend', number: 4 });
+    expect(issueParts('.#4')).toBeNull();
   });
 });

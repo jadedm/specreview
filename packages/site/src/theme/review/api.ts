@@ -83,7 +83,8 @@ export type PageStatus = {
   wasReadyAt: string | null;
 };
 // Title and link are the team's; a reader gets the number, state and label.
-export type Ticket =
+// On a site with several ticket repos (#90) each ticket names its repo.
+export type Ticket = { repo?: string } & (
   | {
       number: number;
       title?: string;
@@ -94,9 +95,17 @@ export type Ticket =
       stale: boolean;
     }
   | { number: number; unavailable: true }
-  | { number: number; notFound: true };
+  | { number: number; notFound: true }
+  | { number: number; notLinked: true }
+);
 // History is sent to the team only.
-export type PageData = { title: string; hash: string; issues: number[]; sections: Section[]; history?: HistoryEntry[] };
+export type PageData = {
+  title: string;
+  hash: string;
+  issues: (number | string)[];
+  sections: Section[];
+  history?: HistoryEntry[];
+};
 export type Pages = { commit: string; pages: Record<string, PageData> };
 // The organisation's name and whether it has a logo (#33).
 export type Brand = { name: string | null; logo: boolean };

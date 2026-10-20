@@ -66,10 +66,13 @@ export const ticketBox = (tickets: Ticket[]) =>
           'ul',
           {},
           ...tickets.map((t) => {
-            if ('notFound' in t) return el('li', {}, `#${t.number}: not found`);
-            if ('unavailable' in t) return el('li', {}, `#${t.number}: could not load from GitHub`);
+            // backend#4 on a site with several ticket repos (#90), #4 otherwise.
+            const id = `${t.repo ?? ''}#${t.number}`;
+            if ('notFound' in t) return el('li', {}, `${id}: not found`);
+            if ('unavailable' in t) return el('li', {}, `${id}: could not load from GitHub`);
+            if ('notLinked' in t) return el('li', {}, `${id}: not in a ticket repo this site lists`);
             // Readers get no title or link: the number and status are theirs.
-            const number = t.url ? el('a', { href: t.url, rel: 'noreferrer' }, `#${t.number}`) : `#${t.number}`;
+            const number = t.url ? el('a', { href: t.url, rel: 'noreferrer' }, id) : id;
             return el(
               'li',
               {},

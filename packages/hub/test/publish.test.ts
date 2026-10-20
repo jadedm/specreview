@@ -411,6 +411,39 @@ describe('4, 6, 10: the bundle is checked whole', () => {
   });
 });
 
+describe("90: ticket links are checked against the site's ticket repos", () => {
+  const withIssues = async (issues: (number | string)[]) => {
+    const m = await manifestFor();
+    m.pages['onboarding/signup'].issues = issues;
+    return bundleParts(m);
+  };
+  const twoRepos = () => {
+    const cfg = structuredClone(CONFIG) as typeof CONFIG & { sites: Record<string, unknown>[] };
+    delete (cfg.sites[0] as Record<string, unknown>).ticketRepo;
+    cfg.sites[0].ticketRepos = ['sidecar', 'backend'];
+    return { SPECREVIEW_CONFIG: JSON.stringify(cfg) };
+  };
+  const message = (r: { body: unknown }) => (r.body as { error?: { message?: string } }).error?.message;
+
+  it('8: a repo the site does not list is 422 naming the page and the link; nothing written', async () => {
+    const r = await publishWith(await oidcToken(), await withIssues([52, 'backend#4']));
+    expect([r.status, code(r)]).toEqual([422, 'INVALID_BUNDLE']);
+    expect(message(r)).toBe('onboarding/signup: ticket backend#4 is not in a ticket repo this site lists');
+    expect(await pointer()).toBeNull();
+  });
+
+  it('8b: 52 and sidecar#52 are one ticket, refused as listed twice', async () => {
+    const r = await publishWith(await oidcToken(), await withIssues([52, 'sidecar#52']));
+    expect([r.status, message(r)]).toEqual([422, 'onboarding/signup: ticket sidecar#52 is listed twice']);
+  });
+
+  it('a site listing backend publishes backend#4', async () => {
+    const r = await publishWith(await oidcToken(), await withIssues([52, 'backend#4']), SIDECAR, twoRepos());
+    expect(r.status).toBe(200);
+    expect(await pointer()).not.toBeNull();
+  });
+});
+
 describe('7, 11: the pointer', () => {
   it('7: a run older than the live one is not promoted', async () => {
     expect((await publishWith(await oidcToken({ run_id: '200' }))).status).toBe(200);
