@@ -32,6 +32,8 @@ export const permissionFor = (method: string, path: string) => {
   return found && `${found[1]} ${method === 'GET' ? 'Read' : 'Write'}`;
 };
 
+const R2_NOT_ENABLED = 10042;
+
 export class CloudflareError extends DeployError {
   constructor(
     readonly status: number,
@@ -39,9 +41,19 @@ export class CloudflareError extends DeployError {
     method: string,
     path: string,
   ) {
-    const needs = status === 403 ? permissionFor(method, path) : undefined;
+    // Cloudflare's own list, read only as far as it is one, so a malformed
+    // answer still gives a message rather than a TypeError.
+    const list = (Array.isArray(errors) ? errors : []).filter((e): e is CfError => typeof e === 'object' && e !== null);
+    // Code 10042 is an account without R2, whatever the token holds (#153).
+    const noR2 = list.some((e) => e.code === R2_NOT_ENABLED);
+    const needs = status === 403 && !noR2 ? permissionFor(method, path) : undefined;
+    const hint = noR2
+      ? '; R2 is not enabled on this account: enable it in the dashboard (R2 Object Storage), then run again'
+      : needs
+        ? `; the token may lack ${needs}`
+        : '';
     super(
-      `Cloudflare refused ${method} ${path} (${status}): ${errors.map((e) => `${e.code ?? ''} ${e.message ?? ''}`.trim()).join('; ') || 'no reason given'}${needs ? `; the token may lack ${needs}` : ''}`,
+      `Cloudflare refused ${method} ${path} (${status}): ${list.map((e) => `${e.code ?? ''} ${e.message ?? ''}`.trim()).join('; ') || 'no reason given'}${hint}`,
     );
   }
 }

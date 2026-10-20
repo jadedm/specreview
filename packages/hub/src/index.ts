@@ -14,7 +14,7 @@ import { withPending } from './pending';
 import { handleProtoHost } from './proto';
 import { publish } from './publish';
 import { canRead, isTeam, roleOf } from './roles';
-import { page, serveRoot } from './root';
+import { escapeHtml, page, serveRoot } from './root';
 import { type Route, routeOf } from './routes';
 import { changeStatus, listStatuses } from './status';
 import { read, unconfiguredStore } from './store';
@@ -39,6 +39,25 @@ const serveLogo = async ({ ctx }: Req): Promise<Response> => {
     headers: { ...protectedHeaders("default-src 'none'"), 'content-type': logo.type },
   });
 };
+
+// A site that has never published (#153): a page request gets a page saying
+// so, not the API's JSON. Never cached, on a public site too, so it is gone
+// the moment the first build lands.
+const unpublished = (err: unknown) => err instanceof AppError && err.code === 'SITE_NOT_PUBLISHED';
+const notPublishedPage = (config: HubConfig, repo: string, method: string) =>
+  page(
+    503,
+    escapeHtml(config.brand?.name ?? config.org),
+    `<h1>Not published yet</h1><p>${escapeHtml(repo)} has no published docs yet. They appear here once its docs workflow publishes them.</p><p class="note"><a href="/">All docs</a></p>`,
+    method === 'HEAD',
+    undefined,
+    'Not published yet',
+  );
+const pageOrNull = (served: Promise<Response>) =>
+  served.catch((err: unknown) => {
+    if (unpublished(err)) return null;
+    throw err;
+  });
 
 const anonymousPage = (request: Request, route: Route) =>
   route.kind === 'page' &&
@@ -207,13 +226,10 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   // Access assertion at all is anonymous: a present but bad one is still 401.
   if (anonymousPage(request, route)) {
     const page = route as Extract<Route, { kind: 'page' }>;
-    const served = await servePage(
-      makeCtx(env, deps, config, page.site),
-      request.method,
-      page.path,
-      page.directory,
-      url.search,
+    const served = await pageOrNull(
+      servePage(makeCtx(env, deps, config, page.site), request.method, page.path, page.directory, url.search),
     );
+    if (!served) return notPublishedPage(config, page.site.repo, request.method);
     return markPublic(served, true);
   }
   const email = await identify(request, config);
@@ -230,7 +246,8 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const byKind: Record<Route['kind'], () => Promise<Response>> = {
     page: async () => {
       const page = route as Extract<Route, { kind: 'page' }>;
-      const served = await servePage(ctx, request.method, page.path, page.directory, url.search);
+      const served = await pageOrNull(servePage(ctx, request.method, page.path, page.directory, url.search));
+      if (!served) return notPublishedPage(config, page.site.repo, request.method);
       return page.site.visibility === 'public' ? markPublic(served, false) : served;
     },
     // Access signed the visitor in on the way here; send them to the site.
