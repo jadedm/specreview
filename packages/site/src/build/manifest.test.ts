@@ -25,6 +25,24 @@ describe('front matter tickets', () => {
       expect(() => parseIssues('a.md', bad), JSON.stringify(bad)).toThrow('distinct ticket numbers');
     }
   });
+
+  it('#90 (5, 6): takes <repo>#<number> for another ticket repo, in the repo name grammar', () => {
+    expect(parseIssues('a.md', [3, 'backend#4', 'web.app_2-x#10'])).toEqual([3, 'backend#4', 'web.app_2-x#10']);
+    for (const bad of [
+      ['Backend#4'],
+      ['backend#0'],
+      ['backend#04'],
+      ['#4'],
+      ['a/b#4'],
+      ['backend#4', 'backend#4'],
+      ['backend #4'],
+      ['backend#4.5'],
+      ['..#4'],
+      [`backend#${'9'.repeat(17)}`],
+    ]) {
+      expect(() => parseIssues('a.md', bad), JSON.stringify(bad)).toThrow('<repo>#<number>');
+    }
+  });
 });
 
 describe('section text', () => {

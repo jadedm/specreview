@@ -1,5 +1,5 @@
-import { STATUS_LABEL, type Status } from '@specreview/shared';
-import type { HubConfig } from './config';
+import { type IssueLink, issueParts, STATUS_LABEL, type Status } from '@specreview/shared';
+import type { HubConfig, Site } from './config';
 import type { Ctx, Deps } from './ctx';
 import type { Env } from './env';
 import type { Purpose } from './github-auth';
@@ -17,7 +17,24 @@ type Issue = { number: number; title: string; state: string; html_url: string; l
 export type Ticket =
   | { number: number; title: string; state: string; url: string; labels: string[]; fetchedAt: string; stale: boolean }
   | { number: number; unavailable: true }
-  | { number: number; notFound: true };
+  | { number: number; notFound: true }
+  // A link to a repo the site no longer lists (#90): nothing is fetched.
+  | { number: number; notLinked: true };
+
+// A page's ticket link as `<org>/<repo>` and number (#90): a bare number is in
+// the site's default ticket repo; null for a repo the site does not list (its
+// config changed after the build was published) or a malformed link.
+export const resolveLink = (site: Site, org: string, link: IssueLink) => {
+  const parts = issueParts(link);
+  const repo = parts && (parts.repo === null ? site.ticketRepo : `${org}/${parts.repo}`);
+  return parts && repo && site.ticketRepos.includes(repo) ? { repo, number: parts.number } : null;
+};
+// The numbers of a page's links that are in one ticket repo.
+const numbersIn = (site: Site, org: string, issues: IssueLink[], repo: string) =>
+  issues.flatMap((link) => {
+    const r = resolveLink(site, org, link);
+    return r && r.repo === repo ? [r.number] : [];
+  });
 
 // Everything that talks to GitHub needs the database, the auth and the config;
 // requests and the cron both have these.
@@ -166,9 +183,21 @@ const fetchTicket = async (hub: Hub, repo: string, n: number, now: number): Prom
 // Only tickets the build linked to this page, in the site's own ticket repo.
 // A reader gets the number, state and our label: titles and links are the
 // team's.
-export const ticketsFor = async (ctx: Ctx, issues: number[], role: Role) => {
+// A site with several ticket repos (#90) names each ticket's repo, bare.
+export const ticketsFor = async (ctx: Ctx, issues: IssueLink[], role: Role) => {
   const now = Date.now();
-  const tickets = await Promise.all(issues.map((n) => fetchTicket(ctx, ctx.site.ticketRepo, n, now)));
+  const several = ctx.site.ticketRepos.length > 1;
+  const tickets = await Promise.all(
+    issues.map(async (link): Promise<Ticket & { repo?: string }> => {
+      const parts = issueParts(link);
+      const r = resolveLink(ctx.site, ctx.config.org, link);
+      const repo = several ? { repo: parts?.repo ?? ctx.site.ticketRepo.split('/')[1] } : {};
+      // A link to an unlisted repo names it on any site, so #4 is never read as the default's.
+      if (!r)
+        return { number: parts?.number ?? 0, notLinked: true, repo: parts?.repo ?? ctx.site.ticketRepo.split('/')[1] };
+      return { ...(await fetchTicket(ctx, r.repo, r.number, now)), ...repo };
+    }),
+  );
   if (isTeam(role)) return tickets;
   return tickets.map((t) => {
     if (!('title' in t)) return t;
@@ -194,7 +223,7 @@ const snapshotsFor = async (
 ): Promise<Snapshots | null> => {
   const snaps: Snapshots = new Map();
   for (const site of hub.config.sites.values()) {
-    if (site.ticketRepo !== repo) continue;
+    if (!site.ticketRepos.includes(repo)) continue;
     const held = known.get(site.key);
     const snap =
       held ??
@@ -210,14 +239,18 @@ const snapshotsFor = async (
   return snaps;
 };
 
-// Statuses for every ticket of one ticket repo, across the given snapshots.
-const wantedStatuses = async (hub: Hub, snaps: Snapshots): Promise<Map<number, Status>> => {
+const siteByKey = (hub: Hub, key: string) => [...hub.config.sites.values()].find((s) => s.key === key) as Site;
+
+// Statuses for every ticket of one ticket repo, across the given snapshots;
+// only the links that resolve to this repo count (#90).
+const wantedStatuses = async (hub: Hub, repo: string, snaps: Snapshots): Promise<Map<number, Status>> => {
   const want = new Map<number, Status>();
   for (const [key, snap] of snaps) {
+    const site = siteByKey(hub, key);
     const byPage = new Map((await readSiteStatuses(hub.env, key)).map((r) => [r.page, r]));
     for (const [page, entry] of Object.entries(snap.manifest.pages)) {
       const status = effectiveStatus(byPage.get(page) ?? null, entry.hash).status;
-      for (const n of entry.issues) {
+      for (const n of numbersIn(site, hub.config.org, entry.issues, repo)) {
         const current = want.get(n);
         if (current === undefined || RANK[status] < RANK[current]) want.set(n, status);
       }
@@ -330,7 +363,7 @@ const syncTickets = async (
   problems: Problems,
 ): Promise<'updated' | 'failed' | 'none'> => {
   if (tickets.length === 0) return 'none';
-  const want = await wantedStatuses(hub, snaps).catch((err: unknown) => {
+  const want = await wantedStatuses(hub, repo, snaps).catch((err: unknown) => {
     problems.push(`reading page statuses failed (${errorText(err)})`);
     return null;
   });
@@ -341,11 +374,20 @@ const syncTickets = async (
   return results.every(Boolean) ? 'updated' : 'failed';
 };
 
+// Each ticket repo the page's links resolve to, on its own (#90).
 const syncPage = async (ctx: Ctx, page: string, problems: Problems) => {
   const own = await ctx.snapshot();
-  const snaps = await snapshotsFor(ctx, ctx.site.ticketRepo, problems, new Map([[ctx.site.key, own]]));
-  if (!snaps) return 'failed';
-  return syncTickets(ctx, ctx.site.ticketRepo, own.manifest.pages[page]?.issues ?? [], snaps, problems);
+  const issues = own.manifest.pages[page]?.issues ?? [];
+  const results = await Promise.all(
+    ctx.site.ticketRepos.map(async (repo) => {
+      const numbers = numbersIn(ctx.site, ctx.config.org, issues, repo);
+      if (numbers.length === 0) return 'none' as const;
+      const snaps = await snapshotsFor(ctx, repo, problems, new Map([[ctx.site.key, own]]));
+      return snaps ? syncTickets(ctx, repo, numbers, snaps, problems) : ('failed' as const);
+    }),
+  );
+  if (results.includes('failed')) return 'failed';
+  return results.includes('updated') ? 'updated' : 'none';
 };
 
 // After a change on one page: its tickets, with statuses from every site that
@@ -359,7 +401,7 @@ export const syncSiteLabels = async (ctx: Ctx, page: string) => {
   });
   if (result === 'failed') {
     console.error(
-      `label sync failed for ${ctx.site.ticketRepo} after a change to ${ctx.site.key} ${page}: ${summary(problems)}`,
+      `label sync failed for ${ctx.site.ticketRepos.join(', ')} after a change to ${ctx.site.key} ${page}: ${summary(problems)}`,
     );
   }
   return result;
@@ -406,8 +448,11 @@ const reconcileRepo = async (hub: Hub, repo: string, problems: Problems): Promis
   // Without every site's links, "no page links this ticket" is unknown.
   if (!snaps) return 'failed';
   const linked = new Set<number>();
-  for (const snap of snaps.values())
-    for (const entry of Object.values(snap.manifest.pages)) for (const n of entry.issues) linked.add(n);
+  for (const [key, snap] of snaps) {
+    const site = siteByKey(hub, key);
+    for (const entry of Object.values(snap.manifest.pages))
+      for (const n of numbersIn(site, hub.config.org, entry.issues, repo)) linked.add(n);
+  }
   const result = await syncTickets(hub, repo, [...linked], snaps, problems);
   const cleared = await clearUnlinked(hub, repo, linked, problems);
   return cleared ? result : 'failed';
@@ -415,7 +460,7 @@ const reconcileRepo = async (hub: Hub, repo: string, problems: Problems): Promis
 
 // Cron: each ticket repo on its own, so one failing repo stops nothing else.
 export const reconcileLabels = async (hub: Hub) => {
-  const repos = [...new Set([...hub.config.sites.values()].map((s) => s.ticketRepo))];
+  const repos = [...new Set([...hub.config.sites.values()].flatMap((s) => s.ticketRepos))];
   const results: Record<string, string> = {};
   for (const repo of repos) {
     const problems: Problems = [];

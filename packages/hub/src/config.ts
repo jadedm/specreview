@@ -12,8 +12,11 @@ export type Site = {
   repo: string;
   // <org>/<repo>: the database key.
   key: string;
-  // <org>/<ticketRepo>: where the site's tickets and labels live on GitHub.
+  // <org>/<name>: where the site's tickets and labels live on GitHub. The
+  // config names one (ticketRepo) or several (ticketRepos, #90); the first is
+  // the default, the repo a bare ticket number in front matter is in.
   ticketRepo: string;
+  ticketRepos: string[];
   teamDomains: string[];
   // People who are team individually, by exact email (#91).
   team: string[];
@@ -158,6 +161,33 @@ const BRAND_KEYS = new Set(['name', 'logo']);
 const LOGO_KEYS = new Set(['key', 'type']);
 const LOGO_TYPE: Record<string, 'image/png' | 'image/webp'> = { png: 'image/png', webp: 'image/webp' };
 export const LOGO_KEY = /^_brand\/logo-[0-9a-f]{64}\.(png|webp)$/;
+// A site's ticket repos (#90): ticketRepo, one name, or ticketRepos, 1 to 10
+// unique names, never both. Valid names only, so the team check below sees
+// only real repos.
+export const MAX_TICKET_REPOS = 10;
+const ticketReposIn = (site: Record<string, unknown>, at: string, problems: string[]): string[] => {
+  const one = site.ticketRepo;
+  const many = site.ticketRepos;
+  if (one !== undefined && many !== undefined) {
+    problems.push(`${at} has both ticketRepo and ticketRepos; keep one`);
+    return [];
+  }
+  if (many === undefined) {
+    if (typeof one === 'string' && isRepoName(one)) return [one];
+    problems.push(`${at}.ticketRepo must be a lowercase repo name of the org`);
+    return [];
+  }
+  const list = strings(many);
+  if (!list || list.length === 0 || list.length > MAX_TICKET_REPOS) {
+    problems.push(`${at}.ticketRepos must be a list of 1 to ${MAX_TICKET_REPOS} repo names`);
+    return [];
+  }
+  const bad = list.findIndex((r) => !isRepoName(r));
+  if (bad >= 0) problems.push(`${at}.ticketRepos[${bad}] must be a lowercase repo name of the org`);
+  if (new Set(list).size !== list.length) problems.push(`${at}.ticketRepos has a duplicate`);
+  return bad >= 0 ? [] : list;
+};
+
 const SITE_KEYS = new Set([
   'repo',
   'teamDomains',
@@ -165,6 +195,7 @@ const SITE_KEYS = new Set([
   'approvers',
   'readers',
   'ticketRepo',
+  'ticketRepos',
   'teamLabel',
   'branch',
   'repositoryId',
@@ -289,10 +320,7 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   if (site.environment !== undefined && (typeof site.environment !== 'string' || !ENVIRONMENT.test(site.environment))) {
     problems.push(`${at}.environment must be a GitHub environment name`);
   }
-  const ticketRepo = site.ticketRepo;
-  if (typeof ticketRepo !== 'string' || !isRepoName(ticketRepo)) {
-    problems.push(`${at}.ticketRepo must be a lowercase repo name of the org`);
-  }
+  const ticketRepos = ticketReposIn(site, at, problems);
   const domains = strings(site.teamDomains);
   if (!domains || domains.length === 0) problems.push(`${at}.teamDomains must be a non-empty list`);
   if (domains && domains.some((d) => !DOMAIN.test(d))) problems.push(`${at}.teamDomains has a malformed domain`);
@@ -308,11 +336,11 @@ const siteProblems = (site: RawSite, at: string, teamsByTicketRepo: Map<string, 
   // Sites sharing a ticket repo share its tickets and labels, so they must
   // have the same team: identical domain lists, aliases included. People
   // named in team or as approvers see only their own site's tickets.
-  if (domains && typeof ticketRepo === 'string') {
-    const team = [...domains].sort().join(',');
+  const team = domains && [...domains].sort().join(',');
+  for (const ticketRepo of team ? ticketRepos : []) {
     const seen = teamsByTicketRepo.get(ticketRepo);
     if (seen !== undefined && seen !== team) problems.push(`${at} shares ${ticketRepo} with a site of another team`);
-    teamsByTicketRepo.set(ticketRepo, team);
+    teamsByTicketRepo.set(ticketRepo, team as string);
   }
   const approvers = strings(site.approvers);
   if (!approvers) problems.push(`${at}.approvers must be a list (it may be empty)`);
@@ -450,7 +478,8 @@ export const configOf = (text: string | undefined): HubConfig => {
       team?: string[];
       approvers: string[];
       readers: string[];
-      ticketRepo: string;
+      ticketRepo?: string;
+      ticketRepos?: string[];
       teamLabel?: string;
       branch: string;
       repositoryId: string;
@@ -481,7 +510,8 @@ export const configOf = (text: string | undefined): HubConfig => {
         {
           repo: s.repo,
           key: `${cfg.org}/${s.repo}`,
-          ticketRepo: `${cfg.org}/${s.ticketRepo}`,
+          ticketRepo: `${cfg.org}/${(s.ticketRepos ?? [s.ticketRepo as string])[0]}`,
+          ticketRepos: (s.ticketRepos ?? [s.ticketRepo as string]).map((r) => `${cfg.org}/${r}`),
           teamDomains: s.teamDomains,
           team: s.team ?? [],
           approvers: s.approvers,

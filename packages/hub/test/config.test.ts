@@ -1,7 +1,7 @@
 // Each config rule on its own: every case breaks exactly one rule and must
 // report exactly that problem, so no rule is hidden behind another.
 import { describe, expect, it, vi } from 'vitest';
-import { problemsIn } from '../src/config';
+import { configOf, problemsIn } from '../src/config';
 import { CONFIG } from './helpers';
 
 type C = typeof CONFIG;
@@ -12,6 +12,49 @@ const site2 = (c: C) => c.sites[2] as Site;
 describe('config rules, one at a time', () => {
   it('the test config is valid', () => {
     expect(problemsIn(valid())).toEqual([]);
+  });
+
+  it('#90 (1, 2): ticketRepos lists several repos, the first the default; ticketRepo stays a one-repo list', () => {
+    const c = valid() as ReturnType<typeof valid> & { sites: Record<string, unknown>[] };
+    delete (c.sites[2] as Record<string, unknown>).ticketRepo;
+    c.sites[2].ticketRepos = ['globex', 'globex-api'];
+    expect(problemsIn(c)).toEqual([]);
+    const site = configOf(JSON.stringify(c)).sites.get(c.sites[2].repo as string)!;
+    expect([site.ticketRepo, site.ticketRepos]).toEqual(['acme/globex', ['acme/globex', 'acme/globex-api']]);
+    const one = configOf(JSON.stringify(valid())).sites.get(valid().sites[2].repo)!;
+    expect(one.ticketRepos).toEqual([one.ticketRepo]);
+  });
+
+  it("#90 (3, 4): ticketRepos is refused when it cannot be a list of the org's repos", () => {
+    const cases: [string, (s: Record<string, unknown>) => void, RegExp][] = [
+      ['both keys', (s) => (s.ticketRepos = ['globex']), /has both ticketRepo and ticketRepos/],
+      ['neither', (s) => delete s.ticketRepo, /ticketRepo must be a lowercase repo name/],
+      ['empty', (s) => (delete s.ticketRepo, (s.ticketRepos = [])), /ticketRepos must be a list of 1 to 10/],
+      ['eleven', (s) => (delete s.ticketRepo, (s.ticketRepos = [...Array(11).keys()].map((i) => `r${i}`))), /1 to 10/],
+      ['not a list', (s) => (delete s.ticketRepo, (s.ticketRepos = 'globex')), /ticketRepos must be a list/],
+      [
+        'duplicate',
+        (s) => (delete s.ticketRepo, (s.ticketRepos = ['globex', 'globex'])),
+        /ticketRepos has a duplicate/,
+      ],
+      [
+        'bad name',
+        (s) => (delete s.ticketRepo, (s.ticketRepos = ['globex', 'Bad'])),
+        /ticketRepos\[1\] must be a lowercase repo name/,
+      ],
+    ];
+    for (const [name, change, why] of cases) {
+      const c = valid() as ReturnType<typeof valid> & { sites: Record<string, unknown>[] };
+      change(c.sites[2]);
+      const problems = problemsIn(c);
+      expect(problems, name).toHaveLength(1);
+      expect(problems[0], name).toMatch(why);
+    }
+    // A repo shared through the lists by sites of two teams.
+    const shared = valid() as ReturnType<typeof valid> & { sites: Record<string, unknown>[] };
+    delete (shared.sites[2] as Record<string, unknown>).ticketRepo;
+    shared.sites[2].ticketRepos = ['globex', 'sidecar'];
+    expect(problemsIn(shared)).toEqual([expect.stringMatching(/shares sidecar with a site of another team/)]);
   });
 
   it('#92 (1): no sites is a hub just installed, and valid', () => {
