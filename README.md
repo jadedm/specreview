@@ -18,6 +18,34 @@ Not built yet:
 
 - A guided setup command (#7). Today an organisation copies `examples/org/` and follows its README.
 
+## See it
+
+A reader selects text on a page and comments on it. They see the team's replies, labelled with the team's name rather than anyone's email, and each linked ticket's status:
+
+![A spec page as a reader sees it: the page status, a linked ticket, and two comment threads on selected text, one with the team's reply](.github/readme/reader.png)
+
+An approver sees the same page with the controls to move it to in review and to mark it ready to build. The status shows on the linked GitHub issues as a label:
+
+![The same page as an approver sees it: buttons to move it to in review and mark it ready to build, the ticket's title and the page's history](.github/readme/approver.png)
+
+The hub's own address lists the sites a person may read:
+
+![The hub's index: one site, its title, page count and last update](.github/readme/index.png)
+
+The admin page, on its own hostname, manages who reads and approves each site, adds sites and sets up the GitHub App:
+
+![The admin page's People tab: a site's approvers, each with a remove button, and the form to add one](.github/readme/admin.png)
+
+To try it on your machine (Node 22.13 or later and pnpm 10), build, publish this repo's test docs to a local hub, and sign in as one of its sample people. The test docs are a set of feature pages rather than the specs above, and there are no comments until you add some:
+
+```
+pnpm install --frozen-lockfile && pnpm build
+OUT=$(packages/site/scripts/smoke-fixture.sh)
+SMOKE_SITE=$OUT node packages/hub/scripts/smoke-server.mjs
+```
+
+Then open `http://127.0.0.1:8796/__smoke/login?email=riya@initech.example` to read as a reader, or `email=pm@acme.dev` as an approver, and `http://admin.localhost:8796/__smoke/login?email=owner@acme.dev` for the admin page. The local hub stands in for Cloudflare Access and GitHub and calls nothing outside your machine.
+
 ## How it fits together
 
 - **One hub per organisation.** A Cloudflare Worker with one D1 database (comments, status, the admin page's records) and one R2 bucket (built sites), behind one Cloudflare Access application on the organisation's own domain. Each repo is a site at `/<repo>/`. Organisations are kept apart by being separate deployments.
