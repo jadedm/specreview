@@ -86,6 +86,57 @@ const page = (
   init: { method?: string; headers?: Record<string, string> } = {},
 ) => call(path, { raw: true, ...(email ? { email } : {}), ...init });
 
+describe('153: a site never published', () => {
+  const unpublishedStore = () => {
+    const files = publishedFiles();
+    files.delete(`${SIDECAR}/current.json`);
+    deps.store = memoryStore(files);
+    return files;
+  };
+
+  it("4: its pages are an HTML page saying so, never cached, in the root page's shell", async () => {
+    unpublishedStore();
+    for (const path of [`/${SIDECAR}/`, `/${SIDECAR}/${PAGE}`, `/${SIDECAR}/deep/er/page`]) {
+      const r = await page(path);
+      expect(r.status, path).toBe(503);
+      expect(r.headers.get('content-type'), path).toBe('text/html; charset=utf-8');
+      expect(r.headers.get('cache-control'), path).toBe('private, no-store');
+      expect(r.headers.get('content-security-policy'), path).toMatch(/^default-src 'none'; style-src 'sha256-/);
+      expect(r.headers.get('x-frame-options'), path).toBe('DENY');
+      const body = String(r.body);
+      expect(body, path).toContain('<h1>Not published yet</h1>');
+      expect(body, path).toContain(`${SIDECAR} has no published docs yet`);
+      expect(body, path).not.toContain('SITE_NOT_PUBLISHED');
+    }
+  });
+
+  it('5: HEAD is the same status with no body', async () => {
+    unpublishedStore();
+    const r = await page(`/${SIDECAR}/`, READER, { method: 'HEAD' });
+    expect([r.status, String(r.body ?? '')]).toEqual([503, '']);
+  });
+
+  it('6: the API and history keep their JSON', async () => {
+    unpublishedStore();
+    const api = await call('/api/pages', { email: READER });
+    expect([api.status, errorCode(api)]).toEqual([503, 'SITE_NOT_PUBLISHED']);
+    const hist = await page(`/${SIDECAR}/_history/${'a'.repeat(40)}/${PAGE}.md`, TEAM);
+    expect(hist.headers.get('content-type')).toContain('application/json');
+  });
+
+  it('8: someone who may not read the site still gets 403', async () => {
+    unpublishedStore();
+    expect((await page(`/${SIDECAR}/`, 'x@stranger.example')).status).toBe(403);
+  });
+
+  it('9: a broken pointer keeps its JSON error', async () => {
+    const files = unpublishedStore();
+    files.set(`${SIDECAR}/current.json`, 'not json');
+    const broken = await page(`/${SIDECAR}/`);
+    expect([broken.status, errorCode(broken)]).toEqual([503, 'SITE_BROKEN']);
+  });
+});
+
 describe('3-5: pages and assets of the current version', () => {
   it('3: the index and a page', async () => {
     const index = await page(`/${SIDECAR}/`);
@@ -381,7 +432,7 @@ describe('12-14, 29-30, 32-35: what is published, and one snapshot of it', () =>
     const pointer = files.get(`${SIDECAR}/current.json`)!;
     files.delete(`${SIDECAR}/current.json`);
     const before = await page(`/${SIDECAR}/${PAGE}`);
-    expect([before.status, errorCode(before)]).toEqual([503, 'SITE_NOT_PUBLISHED']);
+    expect([before.status, String(before.body)]).toEqual([503, expect.stringContaining('Not published yet')]);
     files.set(`${SIDECAR}/current.json`, pointer);
     expect((await page(`/${SIDECAR}/${PAGE}`)).status).toBe(200);
   });

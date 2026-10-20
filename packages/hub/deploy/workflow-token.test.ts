@@ -2,7 +2,7 @@ import { closeSync, existsSync, readFileSync, statSync, symlinkSync, writeFileSy
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseArgs } from './cli';
-import { CloudflareError, cloudflare, permissionFor } from './cloudflare';
+import { type CfError, CloudflareError, cloudflare, permissionFor } from './cloudflare';
 import { loadOrg } from './org';
 import { ACCOUNT, emptyAccount, fakeCloudflare, orgDir, type FakeState, type Request } from './test-helpers';
 import { WORKFLOW_PERMISSIONS, workflowToken } from './workflow-token';
@@ -292,6 +292,38 @@ describe('#66 permission hints on 403', () => {
     expect(permissionFor('POST', `/accounts/${ACCOUNT}/r2/buckets`)).toBe('Workers R2 Storage Write');
     expect(permissionFor('POST', '/user/tokens')).toBe('API Tokens Write');
     expect(permissionFor('GET', `/accounts/${ACCOUNT}/somewhere/else`)).toBeUndefined();
+  });
+
+  it('#153 (1 to 3): code 10042 says R2 is not enabled, on any path, never blaming the token', () => {
+    const noR2 = { code: 10042, message: 'Please enable R2 through the Cloudflare Dashboard.' };
+    const hint = /R2 is not enabled on this account: enable it in the dashboard \(R2 Object Storage\), then run again$/;
+    for (const path of [`/accounts/${ACCOUNT}/r2/buckets`, `/accounts/${ACCOUNT}/d1/database`]) {
+      const message = new CloudflareError(403, [noR2], 'GET', path).message;
+      expect(message, path).toMatch(hint);
+      expect(message, path).not.toContain('may lack');
+    }
+    const several = new CloudflareError(
+      403,
+      [{ code: 10000, message: 'x' }, noR2],
+      'POST',
+      `/accounts/${ACCOUNT}/r2/buckets`,
+    );
+    expect(several.message.match(/R2 is not enabled/g)).toHaveLength(1);
+    const other = new CloudflareError(
+      403,
+      [{ code: 10000, message: 'Authentication error' }],
+      'GET',
+      `/accounts/${ACCOUNT}/r2/buckets`,
+    );
+    expect(other.message).toMatch(/the token may lack Workers R2 Storage Read$/);
+  });
+
+  it('#153 review: a malformed error list still gives a message', () => {
+    for (const errors of [{}, 'x', [null, { code: 10042 }]] as unknown as CfError[][]) {
+      const make = () => new CloudflareError(403, errors, 'GET', `/accounts/${ACCOUNT}/r2/buckets`);
+      expect(make, JSON.stringify(errors)).not.toThrow();
+      expect(make().message, JSON.stringify(errors)).toMatch(/^Cloudflare refused GET/);
+    }
   });
 
   it('12: only a 403 carries the hint', () => {

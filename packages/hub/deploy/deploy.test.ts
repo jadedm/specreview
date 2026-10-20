@@ -601,6 +601,14 @@ describe('#75: the admin hostname in deploy', () => {
     ]);
   });
 
+  it('#153 (10): the install says to enable R2 and that the workflows need Actions minutes', () => {
+    const readme = readFileSync(path.join(EXAMPLE, 'README.md'), 'utf8');
+    expect(readme.split('\n').find((l) => l.startsWith('3. Enable Zero Trust'))).toContain(
+      'R2 (dashboard: R2 Object Storage',
+    );
+    expect(readme).toMatch(/Private repos spend the organisation's GitHub Actions minutes/);
+  });
+
   it("#84 (9): upgrading moves the hub and each product repo's two action pins", () => {
     const readme = readFileSync(path.join(EXAMPLE, 'README.md'), 'utf8');
     const upgrading = readme.split('\n').find((l) => l.startsWith('- Upgrading:')) ?? '';
