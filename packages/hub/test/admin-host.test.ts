@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ADMIN_AUD, ADMIN_HOST, call, CONFIG, HOST, HUB_AUD, installFetch, reset, token } from './helpers';
+import { ADMIN_AUD, ADMIN_HOST, call, CONFIG, errorCode, HOST, HUB_AUD, installFetch, reset, token } from './helpers';
 
 // The admin page on its own hostname (#75): served there and only there,
 // with its own Access audience; the docs hostname points at it.
@@ -36,13 +36,39 @@ describe('#75 the admin hostname', () => {
     expect(String(r.body)).toContain('dev@acme.dev');
   });
 
-  it('4: / goes to the admin page; nothing else of the hub is served there, before any sign-in', async () => {
-    const root = await call('/', { raw: true, host: 'admin' });
-    expect([root.status, root.headers.get('location')]).toEqual([302, '/_admin/']);
-    for (const p of ['/sidecar/', '/sidecar/_api/me', '/_publish/sidecar', '/_admin/nope'])
-      expect((await call(p, { raw: true, host: 'admin' })).status, p).toBe(404);
-    const slash = await call('/_admin', { raw: true, host: 'admin' });
-    expect([slash.status, slash.headers.get('location')]).toEqual([308, '/_admin/']);
+  it('4: / and any other address opened there go to the admin page, before any sign-in (#161)', async () => {
+    const paths = ['/', '/admin', '/sidecar/', '/sidecar/_api/me', '/_publish/sidecar', '/_admin/nope'];
+    for (const method of ['GET', 'HEAD'])
+      for (const p of paths) {
+        const r = await call(p, { raw: true, host: 'admin', method });
+        const got = [r.status, r.headers.get('location'), r.headers.get('cache-control'), r.body];
+        expect(got, `${method} ${p}`).toEqual([302, '/_admin/', 'no-store', '']);
+      }
+    // A sign-in that would be refused is not read either.
+    const bad = await call('/admin', { raw: true, host: 'admin', token: 'not-a-token' });
+    expect([bad.status, bad.headers.get('location')]).toEqual([302, '/_admin/']);
+    for (const method of ['GET', 'POST']) {
+      const slash = await call('/_admin', { raw: true, host: 'admin', method });
+      expect([slash.status, slash.headers.get('location')], method).toEqual([308, '/_admin/']);
+    }
+  });
+
+  it('4b: the redirect target never comes from the request (#161)', async () => {
+    for (const p of ['/x?next=https://evil.example', '//evil.example/', '/%2F%2Fevil.example'])
+      expect((await call(p, { raw: true, host: 'admin' })).headers.get('location'), p).toBe('/_admin/');
+  });
+
+  it('4c: other methods on an unknown address are still not here (#161)', async () => {
+    for (const p of ['/admin', '/_admin/nope', '/']) {
+      const r = await call(p, {
+        raw: true,
+        host: 'admin',
+        email: ADMIN,
+        method: 'POST',
+        headers: { origin: ADMIN_HOST },
+      });
+      expect([r.status, errorCode(r)], p).toEqual([404, 'NOT_FOUND']);
+    }
   });
 
   it('8: a post carrying the docs hostname as its origin is refused', async () => {
