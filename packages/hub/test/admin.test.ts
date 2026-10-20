@@ -79,11 +79,12 @@ describe('1, 2 and 16: who and what reaches the admin page', () => {
     expect((await call('/_admin/', { raw: true, token: 'not-a-jwt' })).status).toBe(401);
   });
 
-  it('16: wrong methods are 405; unknown paths are 404 before any sign-in', async () => {
+  it('16: wrong methods are 405; unknown paths go to the admin page before any sign-in (#161)', async () => {
     expect((await admin('/_admin/', { method: 'POST', headers: { origin: ADMIN_HOST } })).status).toBe(405);
     expect((await admin('/_admin/github/forget')).status).toBe(405);
     for (const path of ['/_admin/x', '/_admin/github/', '/_adminx']) {
-      expect((await call(path, { raw: true })).status).toBe(404);
+      const r = await call(path, { raw: true, host: 'admin' });
+      expect([r.status, r.headers.get('location')], path).toEqual([302, '/_admin/']);
     }
   });
 

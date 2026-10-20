@@ -168,11 +168,14 @@ const handleAdminHost = async (
   deps: Deps,
   admin: { aud: string },
 ): Promise<Response> => {
-  if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) return redirect(302, '/_admin/');
-  // The admin page's address without its slash (#62); nothing else is.
+  // The admin page's address without its slash (#62).
   if (url.pathname === '/_admin') return redirect(308, '/_admin/');
   const route = url.pathname.startsWith('/_admin/') ? adminRoute(url.pathname) : null;
-  // Unknown paths 404 before any identity check.
+  const navigation = request.method === 'GET' || request.method === 'HEAD';
+  // Any other address someone opens here, / or a guess such as /admin, goes to
+  // the admin page before any identity check (#161). The target is fixed, never
+  // built from the request, so no address here redirects anywhere else.
+  if (!route && navigation) return redirect(302, '/_admin/');
   if (!route) throw new AppError(404, 'NOT_FOUND');
   const email = await identify(request, config, admin.aud);
   return serveAdmin(route, { request, url, env, config, email, deps });
