@@ -30,10 +30,13 @@ export type HistoryEntry = {
   // Content hash of the page at this commit; a comment stores the hash it was made on.
   hash: string;
 };
+export type IssueLink = number | string;
 export type ManifestPage = {
   title: string;
   hash: string;
-  issues: number[];
+  // A ticket number in the site's default ticket repo, or `<repo>#<number>`
+  // for another repo the site lists (#90).
+  issues: IssueLink[];
   sections: Section[];
   history: HistoryEntry[];
 };

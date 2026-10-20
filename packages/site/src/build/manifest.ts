@@ -10,6 +10,8 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type HistoryEntry,
+  type IssueLink,
+  issueParts,
   isManifest,
   MAX_MANIFEST_BYTES,
   type Manifest,
@@ -23,16 +25,20 @@ import { readPage, untitledName } from './sidebar.js';
 
 export const TOP_SECTION = '_top';
 
-export type PageMeta = { title: string; issues: number[] };
+export type PageMeta = { title: string; issues: IssueLink[] };
 
-export const parseIssues = (page: string, value: unknown): number[] => {
+// A number is a ticket in the site's default ticket repo, `<repo>#<number>`
+// one in another repo the site lists (#90); the hub checks the repo is listed
+// when the build is published.
+export const parseIssues = (page: string, value: unknown): IssueLink[] => {
   if (value === undefined) return [];
   const valid =
-    Array.isArray(value) &&
-    value.every((n) => Number.isSafeInteger(n) && n > 0) &&
-    new Set(value).size === value.length;
-  if (!valid) throw new Error(`${page}: front matter "issues" must be a list of distinct ticket numbers`);
-  return value as number[];
+    Array.isArray(value) && value.every((n) => issueParts(n) !== null) && new Set(value).size === value.length;
+  if (!valid)
+    throw new Error(
+      `${page}: front matter "issues" must be a list of distinct ticket numbers, or <repo>#<number> for a ticket in another of the site's ticket repos`,
+    );
+  return value as IssueLink[];
 };
 
 // Block elements become a space so text from two list items does not run

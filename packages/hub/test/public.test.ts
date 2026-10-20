@@ -55,6 +55,24 @@ describe('20: visibility in the config', () => {
   });
 });
 
+describe('153: a public site never published, without a sign-in', () => {
+  it('7: GET and HEAD get the not-published page, never cached (not the public minute)', async () => {
+    const files = publishedFiles();
+    files.delete(`${SIDECAR}/current.json`);
+    deps.store = memoryStore(files);
+    const get = await anon(`/${SIDECAR}/${PAGE}`);
+    expect([get.status, get.headers.get('cache-control')]).toEqual([503, 'private, no-store']);
+    expect(String(get.body)).toContain('<h1>Not published yet</h1>');
+    expect(String(get.body)).not.toContain(META);
+    const head = await anon(`/${SIDECAR}/`, { method: 'HEAD' });
+    expect([head.status, head.headers.get('cache-control'), String(head.body ?? '')]).toEqual([
+      503,
+      'private, no-store',
+      '',
+    ]);
+  });
+});
+
 describe('20: a public site without a sign-in', () => {
   it('2: a page is served, cacheable for a minute, marked public in its head', async () => {
     const r = await anon(`/${SIDECAR}/${PAGE}`);

@@ -10,6 +10,7 @@ const site: Site = {
   approvers: ['approver@acme.dev'],
   readers: ['@initech.example', 'pm@partner.example'],
   ticketRepo: 'acme/sidecar',
+  ticketRepos: ['acme/sidecar'],
   teamLabel: 'acme team',
   branch: 'main',
   repositoryId: '1',

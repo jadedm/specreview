@@ -109,7 +109,7 @@ const takeState = async (env: Env, email: string, state: string) =>
 const within = <T>(p: Promise<T>, fallback: T, wait = INSTALLED_WAIT_MS) =>
   Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), wait))]);
 
-const ticketRepos = (config: HubConfig) => [...new Set([...config.sites.values()].map((s) => s.ticketRepo))];
+const ticketRepos = (config: HubConfig) => [...new Set([...config.sites.values()].flatMap((s) => s.ticketRepos))];
 
 const installations = async (a: Admin) => {
   const repos = ticketRepos(a.config);
@@ -164,7 +164,7 @@ const sitesFor = async (a: Admin, found: Found) => {
   const listed = [...a.config.sites.values()]
     .map(
       (s) =>
-        `<li><span class="site"><span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepo)}${s.visibility === 'public' ? ', public' : ''}</span></span></li>`,
+        `<li><span class="site"><span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepos.join(', '))}${s.visibility === 'public' ? ', public' : ''}</span></span></li>`,
     )
     .join('');
   const current = `<p class="note">Each site is a repo's docs, published at <code>/&lt;repo&gt;/</code> on the docs hostname.</p>${listed ? `<ul>${listed}</ul>` : '<p>No sites yet.</p>'}`;
@@ -225,7 +225,13 @@ const siteForm = async (a: Admin, repo: string) => {
   if (!branches) return textForm(a, repo, 'GitHub did not list the branches in time, or could not; type them.');
   // Any repo the app reaches can hold the tickets, sites and the config repo included.
   const ticketRepos = Array.isArray(all)
-    ? [...new Set([repo, ...all, ...[...a.config.sites.values()].map((s) => s.ticketRepo.split('/')[1])])].sort()
+    ? [
+        ...new Set([
+          repo,
+          ...all,
+          ...[...a.config.sites.values()].flatMap((s) => s.ticketRepos.map((r) => r.split('/')[1])),
+        ]),
+      ].sort()
     : null;
   const branch = Array.isArray(branches.names)
     ? select('branch', 'Branch', branches.names, branches.defaultBranch, 'Publishes from this branch')

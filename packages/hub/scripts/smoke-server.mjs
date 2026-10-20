@@ -37,6 +37,7 @@ const ADMIN_HOST = 'admin.localhost';
 const PROTO_AUD = 'aud-smoke-proto';
 const PROTO_HOST = 'proto.localhost';
 const PORT = 8797;
+const TWO_REPOS = process.env.SMOKE_TICKET_REPOS === '1';
 // A 48 px grey square as the organisation's logo (#33), stored under its
 // content key as deploy would store it.
 const LOGO = Buffer.from(
@@ -67,7 +68,8 @@ const config = {
       team: ['lead@contractor.example'],
       approvers: ['pm@acme.dev', 'boss@elsewhere.example'],
       readers: ['@initech.example'],
-      ticketRepo: 'sidecar',
+      // SMOKE_TICKET_REPOS=1 (#90): tickets in sidecar and backend.
+      ...(TWO_REPOS ? { ticketRepos: ['sidecar', 'backend'] } : { ticketRepo: 'sidecar' }),
       branch: 'develop',
       repositoryId: '2001',
       workflow: '.github/workflows/docs.yml',
@@ -97,6 +99,7 @@ const sign = (email, aud = AUD) =>
     .sign(keys.privateKey);
 
 const issues = new Map([[52, { title: 'Company approval', state: 'open', labels: [] }]]);
+const repoIssues = { sidecar: issues, backend: new Map([[4, { title: 'Queue worker', state: 'open', labels: [] }]]) };
 // When set (control /github-hidden), GitHub answers 404 to everything, as it
 // does for a token that cannot see the repo.
 let githubHidden = false;
@@ -269,7 +272,7 @@ const github = async (req, url) => {
   const listing = /^\/repos\/acme\/([^/]+)\/issues$/.exec(url.pathname);
   if (listing && req.method === 'GET') {
     const label = url.searchParams.get('labels');
-    const own = listing[1] === 'sidecar' ? [...issues.entries()] : [];
+    const own = [...(repoIssues[listing[1]]?.entries() ?? [])];
     return Response.json(
       own
         .filter(([, i]) => i.labels.includes(label))
@@ -283,18 +286,18 @@ const github = async (req, url) => {
     );
   }
   if (url.pathname.startsWith('/search/issues')) return Response.json({ total_count: 0, items: [] });
-  const m = /^\/repos\/acme\/sidecar\/issues\/(\d+)(\/labels(?:\/(.+))?)?$/.exec(url.pathname);
-  const issue = m && issues.get(Number(m[1]));
+  const m = /^\/repos\/acme\/(sidecar|backend)\/issues\/(\d+)(\/labels(?:\/(.+))?)?$/.exec(url.pathname);
+  const issue = m && repoIssues[m[1]].get(Number(m[2]));
   if (!issue) return Response.json({ message: 'Not Found' }, { status: 404 });
-  if (req.method === 'PUT' && m[2]) issue.labels = (await req.json()).labels;
-  if (req.method === 'POST' && m[2])
+  if (req.method === 'PUT' && m[3]) issue.labels = (await req.json()).labels;
+  if (req.method === 'POST' && m[3])
     for (const l of (await req.json()).labels) if (!issue.labels.includes(l)) issue.labels.push(l);
-  if (req.method === 'DELETE' && m[3]) issue.labels = issue.labels.filter((l) => l !== decodeURIComponent(m[3]));
+  if (req.method === 'DELETE' && m[4]) issue.labels = issue.labels.filter((l) => l !== decodeURIComponent(m[4]));
   return Response.json({
-    number: Number(m[1]),
+    number: Number(m[2]),
     title: issue.title,
     state: issue.state,
-    html_url: `https://github.com/acme/sidecar/issues/${m[1]}`,
+    html_url: `https://github.com/acme/${m[1]}/issues/${m[2]}`,
     labels: issue.labels.map((name) => ({ name })),
   });
 };
@@ -361,7 +364,7 @@ const manifest = {
     'onboarding/signup': {
       title: 'Company signup',
       hash: 'h-signup',
-      issues: [52],
+      issues: TWO_REPOS ? [52, 'backend#4'] : [52],
       sections: [{ id: 'who', title: 'Who', text: 'Any signed-in admin can create a company.' }],
       history: [
         { commit: OLD, path: 'onboarding/signup.md', hash: createHash('sha256').update(OLD_TEXT).digest('hex') },
@@ -449,7 +452,11 @@ http
       await r2.put('sidecar/current.json', '{"version":"../x","publishedAt":"x"}');
       return send({ ok: true });
     }
-    if (url.pathname === '/labels') return send(issues.get(52).labels);
+    if (url.pathname === '/labels')
+      return send(
+        repoIssues[url.searchParams.get('repo') ?? 'sidecar']?.get(Number(url.searchParams.get('n') ?? 52))?.labels ??
+          null,
+      );
     if (url.pathname === '/app')
       return send({ on: APP, converted: app.converted, lookups: app.lookups, mints: app.mints, refused: app.refused });
     if (url.pathname === '/github-hidden') {

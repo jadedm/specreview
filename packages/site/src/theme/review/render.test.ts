@@ -187,6 +187,28 @@ describe('10, 25: what a reader sees is what the hub sends', () => {
     expect(resolveButtons('b')).not.toContain('Resolve');
   });
 
+  it('#90 (16): a ticket naming its repo reads backend#4; one without reads #52', () => {
+    const box = ticketBox([
+      { number: 52, state: 'open', labels: [], fetchedAt: '2026-10-07T00:00:00Z', stale: false },
+      {
+        repo: 'backend',
+        number: 4,
+        title: 'Queue worker',
+        url: 'https://github.com/acme/backend/issues/4',
+        state: 'open',
+        labels: [],
+        fetchedAt: '2026-10-07T00:00:00Z',
+        stale: false,
+      },
+      { repo: 'web', number: 7, notLinked: true },
+      { repo: HOSTILE, number: 8, notFound: true },
+    ])!;
+    noActiveContent(box);
+    expect(box.textContent).toContain('#52 (open)');
+    expect(box.querySelector('a')?.textContent).toBe('backend#4');
+    expect(box.textContent).toContain('web#7: not in a ticket repo this site lists');
+  });
+
   it("tickets without title or link show the number, state and label; the team's are linked", () => {
     const box = ticketBox([
       { number: 52, state: 'open', labels: ['docs: in review'], fetchedAt: '2026-10-07T00:00:00Z', stale: false },

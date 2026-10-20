@@ -26,12 +26,23 @@ const isHistoryEntry = (h: unknown): h is HistoryEntry =>
   COMMIT.test(String((h as HistoryEntry).commit)) &&
   isString((h as HistoryEntry).path) &&
   isString((h as HistoryEntry).hash);
+// A page's ticket link (#90): a positive number, meaning the site's default
+// ticket repo, or `<repo>#<number>` naming another; the repo name as the
+// config writes it. Which repos a site lists is the hub's to check.
+const ISSUE_REF = /^([a-z0-9._-]{1,100})#([1-9][0-9]*)$/;
+export const issueParts = (link: unknown): { repo: string | null; number: number } | null => {
+  if (typeof link === 'number') return Number.isSafeInteger(link) && link > 0 ? { repo: null, number: link } : null;
+  const m = typeof link === 'string' ? ISSUE_REF.exec(link) : null;
+  const n = m ? Number(m[2]) : 0;
+  return m && Number.isSafeInteger(n) && m[1] !== '.' && m[1] !== '..' ? { repo: m[1], number: n } : null;
+};
+
 const isPage = (p: unknown): p is ManifestPage => {
   if (typeof p !== 'object' || p === null) return false;
   const page = p as ManifestPage;
   const issuesOk =
     Array.isArray(page.issues) &&
-    page.issues.every((n) => Number.isSafeInteger(n) && n > 0) &&
+    page.issues.every((n) => issueParts(n) !== null) &&
     new Set(page.issues).size === page.issues.length;
   return (
     isString(page.title) &&

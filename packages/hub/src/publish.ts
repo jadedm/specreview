@@ -5,6 +5,7 @@
 import { isManifest, MAX_MANIFEST_BYTES, type Manifest } from '@specreview/shared';
 import type { HubConfig, Site } from './config';
 import type { Env } from './env';
+import { resolveLink } from './github';
 import { verifyPublishToken } from './github-oidc';
 import { AppError, json } from './http';
 
@@ -110,8 +111,29 @@ const htmlOf = (page: string) => `${page}.html`;
 // One build, whole: the manifest names this commit, every page has its HTML,
 // and the old versions are exactly the ones the manifest lists, each with
 // the hash it records.
-const checkBundle = async ({ site, history, proto, manifest }: Bundle, sha: string, config: HubConfig) => {
+// Every page's ticket links name a repo this site lists, and no ticket twice
+// (#90): `3` and `<default>#3` are the same ticket.
+const checkIssues = (manifest: Manifest, config: HubConfig, target: Site) => {
+  for (const [page, entry] of Object.entries(manifest.pages)) {
+    const seen = new Set<string>();
+    for (const link of entry.issues) {
+      const r = resolveLink(target, config.org, link);
+      if (!r) throw invalid(`${page}: ticket ${link} is not in a ticket repo this site lists`);
+      const id = `${r.repo}#${r.number}`;
+      if (seen.has(id)) throw invalid(`${page}: ticket ${link} is listed twice`);
+      seen.add(id);
+    }
+  }
+};
+
+const checkBundle = async (
+  { site, history, proto, manifest }: Bundle,
+  sha: string,
+  config: HubConfig,
+  target: Site,
+) => {
   if (manifest.commit !== sha) throw invalid('manifest.json names another commit than this run');
+  checkIssues(manifest, config, target);
   for (const page of Object.keys(manifest.pages)) {
     if (!site.has(htmlOf(page))) throw invalid(`${htmlOf(page)} is missing`);
   }
@@ -206,7 +228,7 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
     throw invalid('the body is not a multipart form');
   });
   const bundle = await readBundle(form);
-  await checkBundle(bundle, claims.sha, config);
+  await checkBundle(bundle, claims.sha, config, site);
 
   const version = `${claims.sha}-${claims.runId}-${claims.runAttempt}-${randomHex()}`;
   const repo = site.repo;
