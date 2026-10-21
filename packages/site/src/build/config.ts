@@ -306,6 +306,9 @@ export const siteConfig = ({
       html: false,
       attrs: { disable: true },
       config: (md) => {
+        // Snippet imports (<<< file) read a file from disk into the page; the
+        // checks refuse them (checks.ts) and the rule is off besides.
+        md.block.ruler.disable('snippet');
         if (home === 'README.md') readmeHome(md);
         excludedLinks(md, exclude, linkKeys, prototypeLink(prototypes), `/${repo}/`);
         noInterpolation(md);

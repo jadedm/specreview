@@ -89,11 +89,11 @@ describe('17: the site 404 page', () => {
     expect(String(r.body)).toContain('<meta name="specreview-visibility" content="public">');
   });
 
-  it('7: someone who may not read the site gets 403 before anything is read', async () => {
+  it('7: someone who may not read the site gets 404 before anything is read', async () => {
     const reads: string[] = [];
     const inner = memoryStore(publishedFiles());
     deps.store = { get: async (k) => (reads.push(k), inner.get(k)) };
-    expect((await get(`/${SIDECAR}/no-such-page`, { email: 'x@stranger.example' })).status).toBe(403);
+    expect((await get(`/${SIDECAR}/no-such-page`, { email: 'x@stranger.example' })).status).toBe(404);
     expect(reads).toEqual([]);
   });
 

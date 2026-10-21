@@ -64,7 +64,9 @@ const manifestAt = (store: SiteStore, repo: string, version: string): Promise<Ma
   if (hit) return hit;
   const loading = readText(store, `${repo}/v/${version}/manifest.json`).then((text) => {
     const parsed = text === null ? undefined : parseJson(text);
-    if (!isManifest(parsed)) throw broken();
+    // A build published before #176 may link more than MAX_PAGE_ISSUES
+    // tickets on a page; it stays readable, and publish refuses new ones.
+    if (!isManifest(parsed, Number.POSITIVE_INFINITY)) throw broken();
     return parsed;
   });
   manifests.set(key, loading);

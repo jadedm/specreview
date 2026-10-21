@@ -29,7 +29,7 @@ specreview has no releases yet. Fixes go to the `develop` branch; a hub runs the
 - Public sites: a private site, or any `_api` or `_history` path, readable without signing in.
 - The site build (`packages/site`): Markdown or other docs content that runs code on the build machine, reads files outside the repo's docs folder, or gets script into the built site past the build's checks.
 - The review UI in the browser (`packages/site/src/theme/review/`): comment text, author labels, ticket data or old page versions from the hub that end up running as script.
-- The publish action (`packages/action`, `build/`, `publish/`): leaking the GitHub Actions OIDC token, or publishing a build other than the one the workflow made.
+- The publish workflow and actions (`.github/workflows/publish-docs.yml`, `packages/action`, `build/`, `publish/`): leaking the GitHub Actions OIDC token, or publishing a build other than the one the workflow made.
 - Setting up and running a hub (`packages/hub/deploy/`, `examples/org/`): setup or deploy opening the hub to people the config does not list, including through the Access policies, apps and paths setup itself writes and keeps in sync; the apply workflow running for anything but `main`, or leaking the Cloudflare token; `workflow-token` printing or leaking the token it creates, or giving it more than its documented permissions.
 - CI and the contribution path: a fork's pull request reaching a secret, writing to the repository, or poisoning what a later run on `develop` or `main` uses.
 

@@ -234,9 +234,15 @@ export const tokenFor = (email: string) => token({ email, aud: HUB_AUD });
 const githubSigning = await generateKeyPair('RS256', { extractable: true });
 const githubJwk = { ...(await exportJWK(githubSigning.publicKey)), kid: 'gh1', alg: 'RS256', use: 'sig' };
 export const PUBLISH_SHA = 'c'.repeat(40);
+// The specreview commit the hub runs (#177): publishes come from its reusable
+// workflow at this commit. PUBLISH_ENV gives the hub that commit.
+export const HUB_COMMIT = 'e'.repeat(40);
+export const PUBLISH_ENV = { SPECREVIEW_COMMIT: HUB_COMMIT };
+export const PUBLISH_WORKFLOW = 'jadedm/specreview/.github/workflows/publish-docs.yml';
 export const githubKeys = { down: false };
-// A valid publish of sidecar from its docs workflow on develop. Pass a claim
-// as undefined to leave it out.
+// A valid publish of sidecar from its docs workflow on develop, through the
+// reusable workflow at the hub's commit. Pass a claim as undefined to leave
+// it out.
 export const oidcClaims = (): Record<string, unknown> => ({
   repository: `${ORG}/${SIDECAR}`,
   repository_id: REPO_IDS.sidecar,
@@ -245,6 +251,8 @@ export const oidcClaims = (): Record<string, unknown> => ({
   workflow_ref: `${ORG}/${SIDECAR}/${WORKFLOW}@refs/heads/develop`,
   ref: 'refs/heads/develop',
   event_name: 'push',
+  job_workflow_ref: `${PUBLISH_WORKFLOW}@${HUB_COMMIT}`,
+  job_workflow_sha: HUB_COMMIT,
   sha: PUBLISH_SHA,
   run_id: '100',
   run_attempt: '1',
@@ -617,6 +625,7 @@ export const reset = async () => {
       'admin_states',
       'pending_removals',
       'label_repos',
+      'ticket_missing',
     ].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   );
 };

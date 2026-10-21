@@ -14,8 +14,13 @@ export type Env = {
   // (the GitHub App created from the admin page, #56). deploy sets it once.
   SPECREVIEW_KEY?: string;
   // The specreview commit this hub runs, from the org's specreview.commit;
-  // deploy sets it. Pull requests that add a site pin the actions to it (#57).
+  // deploy sets it. Pull requests that add a site pin the reusable workflow to
+  // it (#57, #177), and the hub accepts publishes from that workflow at it.
   SPECREVIEW_COMMIT?: string;
+  // The commit the hub ran before an upgrade, from hub.json previousCommit;
+  // deploy sets it. Publishes from the reusable workflow at either commit are
+  // accepted (#177), so product repos keep publishing until their pin moves.
+  SPECREVIEW_PREVIOUS_COMMIT?: string;
   // Personal tokens, for a hub without the app: read is Issues read, write is
   // Issues read and write. Secrets, set by a person.
   GITHUB_READ_TOKEN?: string;

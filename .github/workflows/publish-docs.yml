@@ -1,0 +1,139 @@
+# Builds a product repo's docs folder and publishes it to its specreview hub
+# (#177). A product repo's .github/workflows/docs.yml calls this file pinned to
+# a commit (examples/publish-docs.yml); the hub accepts publishes only from
+# this workflow, at the commit it runs or the one it ran before.
+#
+# Both jobs run the build and publish actions from this workflow's own commit,
+# job.workflow_repository at job.workflow_sha, never from the caller's repo or
+# another ref, so what runs is the commit the caller pinned.
+name: specreview docs
+
+on:
+  workflow_call:
+    inputs:
+      hub:
+        description: The hub's origin, such as https://docs.example.com.
+        type: string
+        required: true
+      repo:
+        description: The repository's lowercase name, the site's path on the hub.
+        type: string
+        required: true
+      docs:
+        description: The docs folder, or . for the whole repo.
+        type: string
+        default: docs
+      exclude:
+        description: Paths in the docs folder to leave out of the site, one per line; * and ** are wildcards.
+        type: string
+        default: ''
+      prototypes:
+        description: Paths in the docs folder to publish untouched as prototypes, one per line; * and ** are wildcards.
+        type: string
+        default: ''
+      runner:
+        description: The machine both jobs run on, as JSON for runs-on, such as '"ubuntu-latest"' or '["self-hosted","linux"]'.
+        type: string
+        default: '"ubuntu-latest"'
+
+# Every run step is bash, whatever the runner's own default shell.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    permissions:
+      contents: read
+    # The publish job downloads this build by its id, so it publishes exactly
+    # what this job built, never another artifact of the same run.
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Check this workflow's own commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ && -n "$WORKFLOW_REPOSITORY" ]] \
+            || { echo "this workflow's own commit is unknown, so nothing is built"; exit 1; }
+      # Node and pnpm's binary need libatomic, which Amazon Linux 2023 and
+      # other dnf machines may lack; elsewhere this does nothing.
+      - name: Install libatomic where dnf has it missing
+        shell: bash
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -q libatomic >/dev/null 2>&1 || sudo -n dnf install -y -q libatomic
+          fi
+      # The product repo and the build tool are checked out side by side, so
+      # nothing in the product repo sits around the tool's own files.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: product
+          fetch-depth: 0 # page history needs every commit
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: specreview-tool
+          persist-credentials: false
+      - uses: ./specreview-tool/build
+        with:
+          path: product
+          repo: ${{ inputs.repo }}
+          docs: ${{ inputs.docs }}
+          exclude: ${{ inputs.exclude }}
+          prototypes: ${{ inputs.prototypes }}
+      # Only a push publishes, so only a push keeps the build, for a day.
+      - if: github.event_name == 'push'
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: specreview-site
+          path: product/.specreview
+          include-hidden-files: true
+          retention-days: 1
+
+  # Pushes to the branch only; pull requests stop after the build.
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check this workflow's own commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+        run: |
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ && -n "$WORKFLOW_REPOSITORY" ]] \
+            || { echo "this workflow's own commit is unknown, so nothing is published"; exit 1; }
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "the build job named no build, so nothing is published"; exit 1; }
+      # Node needs libatomic, which Amazon Linux 2023 and other dnf machines
+      # may lack; elsewhere this does nothing.
+      - name: Install libatomic where dnf has it missing
+        shell: bash
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -q libatomic >/dev/null 2>&1 || sudo -n dnf install -y -q libatomic
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: specreview-tool
+          sparse-checkout: publish
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: .specreview
+      - uses: ./specreview-tool/publish
+        with:
+          hub: ${{ inputs.hub }}
+          repo: ${{ inputs.repo }}

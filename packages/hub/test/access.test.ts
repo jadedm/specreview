@@ -223,13 +223,13 @@ describe('5 to 9: removals count at once', () => {
     const r = await remove('readers', 'ana@partner.example');
     expect(r.status).toBe(200);
     expect(siteIn('sidecar').readers).toEqual(['@initech.example']);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
     expect(await pendingRows()).toEqual([{ site: 'acme/sidecar', list: 'readers', entry: 'ana@partner.example' }]);
   });
 
   it('6: removing a domain refuses everyone there at once; the team is unaffected', async () => {
     await remove('readers', '@initech.example');
-    expect(await status('riya@initech.example')).toBe(403);
+    expect(await status('riya@initech.example')).toBe(404);
     expect(await status('dev@acme.dev')).toBe(200);
   });
 
@@ -247,8 +247,8 @@ describe('5 to 9: removals count at once', () => {
         s.repo === 'sidecar' ? { ...s, readers: ['@initech.example'] } : s,
       ),
     };
-    expect(await status('ana@partner.example', envFor(deployed))).toBe(403);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example', envFor(deployed))).toBe(404);
+    expect(await status('ana@partner.example')).toBe(404);
     expect(await pendingRows()).toHaveLength(1);
   });
 
@@ -293,7 +293,7 @@ describe('10, 11 and 18: removals stand when the commit does not simply go throu
     expect(r.status).toBe(502);
     expect(html(r)).toContain('Removed here, not committed');
     expect(await pendingRows()).toHaveLength(1);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
     if (what === 422) expect(html(r)).toContain('the default branch may be protected');
   });
 
@@ -382,7 +382,7 @@ describe('review fixes: only an admin clears a removal', () => {
     const r = await add('readers', 'ana@partner.example');
     expect(html(r)).toContain('already listed, but a removal still refuses them here');
     expect(await pendingRows()).toHaveLength(1);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
   });
 
   it('a committed removal offers Add back, which commits', async () => {
@@ -418,7 +418,7 @@ describe('review fixes: only an admin clears a removal', () => {
     const r = await remove('readers', 'ana@partner.example');
     expect(html(r)).toContain('already removed in git, not yet deployed');
     expect(puts).toEqual([]);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
   });
 
   it('an unrelated problem in the config file does not block a removal from counting', async () => {
@@ -428,14 +428,14 @@ describe('review fixes: only an admin clears a removal', () => {
     expect(r.status).toBe(502);
     expect(html(r)).toContain('the config file has other problems, so the commit was not made');
     expect(puts).toEqual([]);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
   });
 
-  it('without the database, a site path answers 503 to someone the config lets in, and 403 to a stranger', async () => {
+  it('without the database, a site path answers 503 to someone the config lets in, and 404 to a stranger', async () => {
     await workerEnv.DB.prepare('ALTER TABLE pending_removals RENAME TO pending_removals_away').run();
     try {
       expect(await status('ana@partner.example')).toBe(503);
-      expect(await status('stranger@nowhere.example')).toBe(403);
+      expect(await status('stranger@nowhere.example')).toBe(404);
       // The index fails closed: readers' sites are left out, the team's stay.
       const reader = html(await call('/', { raw: true, email: 'ana@partner.example', envOverride: env }));
       expect(reader).not.toContain('href="/sidecar/"');
@@ -513,7 +513,7 @@ describe('#67: finished removals and the clear races', () => {
     const p = await adminPage();
     expect(p).toMatch(/ana@partner\.example<\/span><span class="meta">refused here by an earlier removal/);
     expect(p).toContain(`<input type="hidden" name="removed_at" value="${await removedAt()}">`);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
   });
 
   it('6: an add does not clear a removal recorded after it began', async () => {
@@ -671,7 +671,7 @@ describe('#67: finished removals and the clear races', () => {
     const r = await restore('ana@partner.example', String(seen));
     expect(html(r)).toContain('changed since the page was loaded; reload the admin page');
     expect(await pendingRows()).toHaveLength(1);
-    expect(await status('ana@partner.example')).toBe(403);
+    expect(await status('ana@partner.example')).toBe(404);
   });
 
   it('a repeat removal moves the time forward even when the clock has not', async () => {
@@ -718,7 +718,7 @@ describe('#91: team members and approvers on the admin page', () => {
     );
     expect(removed.status).toBe(200);
     expect((await call('/api/me', { email: 'manish@ariai.example', envOverride: live, site: 'sidecar' })).status).toBe(
-      403,
+      404,
     );
   });
 

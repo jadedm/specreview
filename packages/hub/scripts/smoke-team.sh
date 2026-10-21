@@ -21,7 +21,7 @@ role() { api "$1" GET me >/dev/null; jq -r '.role // empty' /tmp/claude-smoke-te
 check "team member's role" team "$(role lead@contractor.example)"
 check "outside approver's role" approver "$(role boss@elsewhere.example)"
 check "reader's role" reader "$(role riya@initech.example)"
-check "a stranger" 403 "$(api x@stranger.example GET me)"
+check "a stranger" 404 "$(api x@stranger.example GET me)"
 
 # The reader comments; the team member sees the reader's email, the reader sees the team label for the team member.
 code=$(api riya@initech.example POST comments '{"page":"onboarding/signup","heading":"who","quote":"Any signed-in admin","body":"From a reader"}')

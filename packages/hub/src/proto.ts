@@ -76,13 +76,15 @@ export const handleProtoHost = async (
   const parts = directory ? rest.slice(0, -1) : rest;
   if (!site || parts.length === 0 || !parts.every(plain) || RESERVED.has(parts[0]))
     return notFound(proto.docsHostname, head);
-  if (!reads) throw new AppError(405, 'METHOD_NOT_ALLOWED');
   const path = directory ? `${parts.join('/')}/index.html` : parts.join('/');
   const email = await identify(request, config, proto.aud);
   // Who may read the site may open its prototypes; removals count first (#12).
+  // Anyone else gets the page a name that is not a site gets, whatever the
+  // method (#176).
   const configured = roleOf(email, site);
   const role = configured === 'none' ? configured : roleOf(email, await withPending(env, site));
-  if (!canRead(role)) throw new AppError(403, 'FORBIDDEN');
+  if (!canRead(role)) return notFound(proto.docsHostname, head);
+  if (!reads) throw new AppError(405, 'METHOD_NOT_ALLOWED');
   // The live version only: a version is never chosen by the URL. What is
   // stored there is exactly the manifest's list (publish refuses any other).
   const snapshot = await makeCtx(env, deps, config, site).snapshot();

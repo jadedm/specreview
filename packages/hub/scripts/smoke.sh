@@ -32,10 +32,15 @@ hit GET /sidecar/manifest.json dev@acme.dev 404
 hit POST /sidecar/onboarding/signup riya@initech.example 405
 hit GET /sidecar/onboarding/signup - 401 -H 'if-none-match: *'
 hit GET /sidecar/onboarding/signup otherApp 401
-hit GET /sidecar/onboarding/signup x@stranger.example 403
-hit GET /sidecar/_api/status x@stranger.example 403
-hit GET /globex/ riya@initech.example 403
-hit GET /globex/ dev@acme.dev 403
+# #176: someone who may not read a site gets what a name that is not a site gets.
+hit GET /sidecar/onboarding/signup x@stranger.example 404
+hit GET /sidecar/_api/status x@stranger.example 404
+cp "$here/body" "$here/body-stranger"
+hit GET /nosuch/_api/status x@stranger.example 404
+cmp -s "$here/body" "$here/body-stranger" || { echo "FAIL a stranger's answer differs from a name that is not a site"; fails=$((fails+1)); }
+hit POST /sidecar/_api/comments x@stranger.example 404 -H 'content-type: application/json' -H "origin: $W" --data '{}'
+hit GET /globex/ riya@initech.example 404
+hit GET /globex/ dev@acme.dev 404
 hit GET /nosuch/ - 404
 hit GET /sidecar - 404
 hit GET /sidecar/onboarding%2Fsignup riya@initech.example 404
@@ -80,7 +85,11 @@ hit HEAD /sidecar/demo/index.html proto:riya@initech.example 200 -I
 hit GET /sidecar/demo/index.html - 401
 hit GET /sidecar/demo/index.html riya@initech.example 401
 hit GET /sidecar/demo/index.html admin:dev@acme.dev 401
-hit GET /sidecar/demo/index.html proto:x@stranger.example 403
+hit GET /sidecar/demo/index.html proto:x@stranger.example 404
+cp "$here/body" "$here/body-stranger"
+hit GET /nosuch/demo/index.html proto:x@stranger.example 404
+cmp -s "$here/body" "$here/body-stranger" || { echo "FAIL a stranger's prototype answer differs from a name that is not a site"; fails=$((fails+1)); }
+hit POST /sidecar/demo/index.html proto:x@stranger.example 404
 hit POST /sidecar/demo/index.html proto:riya@initech.example 405
 # #125: the hostname alone leads to the docs; a miss is a page with the way back.
 hit GET / - 302

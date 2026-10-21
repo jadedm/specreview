@@ -2,11 +2,11 @@
 // arrives at once and is checked whole, so a version is never partial and no
 // two runs can interleave writes; the live pointer moves by compare-and-set,
 // so two publishes cannot both win.
-import { isManifest, MAX_MANIFEST_BYTES, type Manifest } from '@specreview/shared';
+import { isManifest, MAX_MANIFEST_BYTES, MAX_PAGE_ISSUES, type Manifest } from '@specreview/shared';
 import type { HubConfig, Site } from './config';
 import type { Env } from './env';
 import { resolveLink } from './github';
-import { verifyPublishToken } from './github-oidc';
+import { publishCommits, verifyPublishToken } from './github-oidc';
 import { AppError, json } from './http';
 
 // The body, its parts and the parsed form are all in memory at once; three
@@ -19,6 +19,18 @@ const POINTER_TRIES = 5;
 
 const plainPath = (path: string) => path.split('/').every((p) => SEGMENT.test(p) && p !== '.' && p !== '..');
 const invalid = (message: string) => new AppError(422, 'INVALID_BUNDLE', message);
+
+// isManifest refuses a page linking more than MAX_PAGE_ISSUES tickets (#176);
+// this finds which page, so the refusal can name it.
+const pageWithTooManyIssues = (manifest: unknown): string | null => {
+  const pages = (manifest as { pages?: unknown } | null)?.pages;
+  if (typeof pages !== 'object' || pages === null) return null;
+  const found = Object.entries(pages).find(([, entry]) => {
+    const issues = (entry as { issues?: unknown } | null)?.issues;
+    return Array.isArray(issues) && issues.length > MAX_PAGE_ISSUES;
+  });
+  return found ? found[0] : null;
+};
 const storage = (err: unknown) => {
   console.error('publish storage failed', err instanceof Error ? err.message : String(err));
   return new AppError(503, 'STORAGE_UNAVAILABLE', 'Storage is unavailable; try again shortly.');
@@ -102,6 +114,8 @@ const readBundle = async (form: FormData): Promise<Bundle> => {
       return undefined;
     }
   })();
+  const crowded = pageWithTooManyIssues(manifest);
+  if (crowded !== null) throw invalid(`${crowded.slice(0, 200)}: links more than ${MAX_PAGE_ISSUES} tickets`);
   if (!isManifest(manifest)) throw invalid('manifest.json is not a valid manifest');
   return { site, history, proto, manifest };
 };
@@ -200,7 +214,7 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
   if (request.method !== 'POST') throw new AppError(405, 'METHOD_NOT_ALLOWED');
   const bucket = env.SITES;
   if (!bucket) throw new AppError(500, 'STORE_NOT_CONFIGURED');
-  const claims = await verifyPublishToken(request, config, site, new URL(request.url).origin);
+  const claims = await verifyPublishToken(request, config, site, new URL(request.url).origin, publishCommits(env));
   const type = request.headers.get('content-type') ?? '';
   if (!type.startsWith('multipart/form-data')) throw new AppError(415, 'UNSUPPORTED_MEDIA_TYPE');
 

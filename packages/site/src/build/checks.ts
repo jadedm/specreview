@@ -16,6 +16,9 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isExcludePattern } from '@specreview/shared';
+import matter from 'gray-matter';
+import MarkdownIt, { type StateBlock } from 'markdown-it';
+import container from 'markdown-it-container';
 import { git } from './manifest.js';
 
 export class BuildError extends Error {}
@@ -93,6 +96,12 @@ export const checkGit = (docs: string) => {
   if (!inRepo) throw new BuildError('the docs folder is not in a git repository');
   if (git(docs, ['rev-parse', '--is-shallow-repository']).trim() === 'true') {
     throw new BuildError('the build needs full git history; fetch with depth 0');
+  }
+  // History reads only 40-hex commit ids (manifest.ts), and the hub takes no other.
+  if (git(docs, ['rev-parse', '--show-object-format']).trim() !== 'sha1') {
+    throw new BuildError(
+      'the repository does not use SHA-1 object names (or git is older than 2.29 and cannot say); the hub takes SHA-1 (40-hex) commits',
+    );
   }
 };
 
@@ -299,44 +308,64 @@ export const checkPaths = (files: string[]) => {
 
 // Includes are expanded on the raw page before Markdown, even inside code, and
 // an included file could change without changing the page's hash. Snippet
-// imports, script and style blocks are refused outside code. Vue interpolation
-// is not checked here: the renderer escapes braces (config.ts).
+// imports are refused anywhere VitePress would read one (config.ts also turns
+// its snippet rule off), script and style blocks outside code. Vue
+// interpolation is not checked here: the renderer escapes braces (config.ts).
 const INCLUDE = /<!--\s*@include/;
 const OUTSIDE_CODE: [RegExp, string][] = [
-  [/^\s*<<<\s/, 'snippet imports (<<<)'],
   [/<script\b/i, 'script blocks'],
   [/<style\b/i, 'style blocks'],
 ];
-const FENCE = /^\s*(`{3,}|~{3,})/;
 // A code block's first word, as markdown-it splits it (on whitespace): the
 // language and VitePress's options ({1,3}, :line-numbers=5). VitePress prints
 // an unknown language in the build's log word for word, after decoding
-// entities, where GitHub would read ##[...] as a workflow command (#79). Any
-// line that opens a fence is checked, in a list or a quote too.
+// entities, where GitHub would read ##[...] as a workflow command (#79).
 const LANGUAGE = /^[A-Za-z0-9_+.#{},:=-]*$/;
-const ANY_FENCE = /^(?:\s*(?:[-*+]|\d+[.)]|>))*\s*(?:`{3,}|~{3,})(.*)$/;
+
+// Pages are parsed as VitePress parses them, so code is what markdown-it
+// calls code: fences and indented blocks at any nesting, a fence ending with
+// the container it is in. The containers are VitePress's own
+// (containerPlugin); raw HTML is off, as in the build.
+const CONTAINERS = ['tip', 'info', 'warning', 'danger', 'details', 'v-pre', 'raw', 'code-group'];
+type ParseEnv = { snippet?: boolean };
+// VitePress's snippet rule (snippetPlugin) starts at a block whose first
+// three characters are <<<, indented less than four columns. A line indented
+// four or more never reaches this rule: markdown-it's code rule runs first,
+// and a paragraph, list or quote skips such a line. The same test runs where
+// a paragraph, list or quote goes on, so a line read as a block start in
+// some layout this parse does not share is found too.
+const snippetStart = (state: StateBlock, line: number, _end: number, _silent: boolean) => {
+  if (state.src.startsWith('<<<', state.bMarks[line] + state.tShift[line])) (state.env as ParseEnv).snippet = true;
+  return false;
+};
+const pageParser = new MarkdownIt({ html: false });
+// Typed against markdown-it 14 (@types), as markdown-it-emoji is in sidebar.ts.
+for (const name of CONTAINERS) pageParser.use(container as unknown as Parameters<typeof pageParser.use>[0], name);
+pageParser.block.ruler.before('fence', 'specreview-snippet', snippetStart, {
+  alt: ['paragraph', 'reference', 'blockquote', 'list'],
+});
 
 export const forbiddenIn = (markdown: string): string | null => {
   if (/^\uFEFF?---[^\S\r\n]*\S/.test(markdown))
     return 'front matter in a language other than YAML (---js and the like)';
   if (INCLUDE.test(markdown)) return 'includes (<!--@include)';
-  // An open fence closes with the same character, at least as long.
-  let fence: string | null = null;
-  for (const line of markdown.split('\n')) {
-    const opener = ANY_FENCE.exec(line)?.[1];
-    if (opener !== undefined && !LANGUAGE.test(opener.trim().split(/\s+/)[0]))
+  // VitePress parses what follows the front matter, as gray-matter splits it.
+  const { content, matter: front } = matter(markdown);
+  const env: ParseEnv = {};
+  const tokens = pageParser.parse(content, env);
+  if (env.snippet) return 'snippet imports (<<<)';
+  const code = new Set<number>();
+  for (const token of tokens) {
+    if (token.type !== 'fence' && token.type !== 'code_block') continue;
+    if (token.type === 'fence' && !LANGUAGE.test(token.info.trim().split(/\s+/)[0]))
       return 'code block languages other than letters, digits and _+.#{},:=-';
-    const marker = FENCE.exec(line)?.[1];
-    const closes = marker !== undefined && fence !== null && marker[0] === fence[0] && marker.length >= fence.length;
-    if (marker !== undefined && fence === null) {
-      fence = marker;
-      continue;
-    }
-    if (closes) {
-      fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
+    const [from, to] = token.map ?? [0, 0];
+    for (let line = from; line < to; line++) code.add(line);
+  }
+  // Lines as markdown-it numbers them: \r\n and a lone \r each end one.
+  const lines = (text: string) => text.split(/\r\n?|\n/);
+  const outside = [...lines(front), ...lines(content).filter((_, line) => !code.has(line))];
+  for (const line of outside) {
     const hit = OUTSIDE_CODE.find(([re]) => re.test(line.replace(/`[^`]*`/g, '')));
     if (hit) return hit[1];
   }
@@ -345,7 +374,14 @@ export const forbiddenIn = (markdown: string): string | null => {
 
 export const checkMarkdown = (docs: string, files: string[]) => {
   for (const file of files.filter((f) => f.endsWith('.md'))) {
-    const found = forbiddenIn(readFileSync(path.join(docs, file), 'utf8'));
+    // Invalid YAML front matter throws from gray-matter; the error names the page.
+    const found = (() => {
+      try {
+        return forbiddenIn(readFileSync(path.join(docs, file), 'utf8'));
+      } catch (err) {
+        throw new BuildError(`${file}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+      }
+    })();
     if (found) throw new BuildError(`${file}: ${found} are not allowed in reviewed pages`);
   }
 };

@@ -45,7 +45,7 @@ describe('#91: who is team and who approves', () => {
     expect(await me(MEMBER)).toBe('team');
     expect(await me(OUTSIDE)).toBe('approver');
     expect(await me(LEAD)).toBe('approver');
-    expect(await me('someone@elsewhere.example')).toBe(403);
+    expect(await me('someone@elsewhere.example')).toBe(404);
     expect(await me(READER)).toBe('reader');
   });
 
@@ -71,24 +71,24 @@ describe('#91: who is team and who approves', () => {
   });
 
   it('an approver @domain matches that domain exactly, not a subdomain; its removal refuses everyone it covered', async () => {
-    expect(await me('kim@sub.leads.example')).toBe(403);
+    expect(await me('kim@sub.leads.example')).toBe(404);
     await addPending(env, 'acme/sidecar', 'approvers', '@leads.example', 'owner@acme.dev');
     // Still a reader through readers' own @leads.example entry, no longer an approver.
     expect(await me(LEAD)).toBe('reader');
     await addPending(env, 'acme/sidecar', 'readers', '@leads.example', 'owner@acme.dev');
-    expect(await me(LEAD)).toBe(403);
+    expect(await me(LEAD)).toBe(404);
   });
 
   it('shared ticket repo: an approver of one site is nobody on the other', async () => {
-    expect(await me(OUTSIDE, 'web')).toBe(403);
-    expect(await me(MEMBER, 'web')).toBe(403);
+    expect(await me(OUTSIDE, 'web')).toBe(404);
+    expect(await me(MEMBER, 'web')).toBe(404);
   });
 
   it('8: a removal recorded for a named team member or an outside approver takes their access at once', async () => {
     await addPending(env, 'acme/sidecar', 'team', MEMBER, 'owner@acme.dev');
     await addPending(env, 'acme/sidecar', 'approvers', OUTSIDE, 'owner@acme.dev');
-    expect(await me(MEMBER)).toBe(403);
-    expect(await me(OUTSIDE)).toBe(403);
+    expect(await me(MEMBER)).toBe(404);
+    expect(await me(OUTSIDE)).toBe(404);
     // Someone the removal does not name keeps their role.
     expect(await me(LEAD)).toBe('approver');
   });

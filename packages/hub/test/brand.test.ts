@@ -85,14 +85,14 @@ describe('33: the brand routes', () => {
     }
   });
 
-  it('7: no sign-in is 401; someone who may not read the site is 403, before any store read', async () => {
+  it('7: no sign-in is 401; someone who may not read the site is 404, before any store read', async () => {
     const reads: string[] = [];
     const inner = memoryStore(new Map([[KEY, 'png-bytes']]));
     deps.store = { get: async (k) => (reads.push(k), inner.get(k)) } satisfies SiteStore;
     const brand = { name: 'Acme', logo: { key: KEY, type: 'image/png' } };
     expect((await call('/api/brand', env(brand))).status).toBe(401);
-    expect((await call('/api/brand/logo', { email: STRANGER, ...env(brand) })).status).toBe(403);
-    expect((await call('/api/brand', { email: STRANGER, ...env(brand) })).status).toBe(403);
+    expect((await call('/api/brand/logo', { email: STRANGER, ...env(brand) })).status).toBe(404);
+    expect((await call('/api/brand', { email: STRANGER, ...env(brand) })).status).toBe(404);
     expect(reads).toEqual([]);
   });
 
