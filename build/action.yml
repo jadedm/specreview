@@ -1,6 +1,9 @@
 name: specreview build
 description: Build a repository's docs folder, as committed, into a site for a specreview hub. Builds only; it never publishes and needs no token.
 inputs:
+  path:
+    description: The product repo's folder in the workspace, where the build runs.
+    default: .
   repo:
     description: The repository's lowercase name, the site's path on the hub.
     required: true
@@ -35,6 +38,7 @@ runs:
       run: pnpm install --frozen-lockfile --filter . --filter "@specreview/site..." && pnpm --filter "@specreview/site..." build
     - name: Build the site
       shell: bash
+      working-directory: ${{ inputs.path }}
       env:
         INPUT_REPO: ${{ inputs.repo }}
         INPUT_DOCS: ${{ inputs.docs }}

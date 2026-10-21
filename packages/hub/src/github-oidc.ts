@@ -56,12 +56,48 @@ const allowed = (p: JWTPayload, config: HubConfig, site: Site) => {
   return checks.every(Boolean);
 };
 
+// The one workflow that publishes (#177): product repos call it, pinned to a
+// commit, and the job holding the token is defined there. GitHub names the
+// called file in job_workflow_ref, with the ref the caller pinned, and its
+// commit in job_workflow_sha. The pin must be that commit itself, and the
+// commit one the hub accepts: the one it runs or the one it ran before, so
+// repos keep publishing through an upgrade until their pin moves.
+export const PUBLISH_WORKFLOW_REPO = 'jadedm/specreview';
+export const PUBLISH_WORKFLOW_PATH = '.github/workflows/publish-docs.yml';
+const COMMIT = /^[0-9a-f]{40}$/;
+const fromPublishWorkflow = (p: JWTPayload, commits: string[]) => {
+  const sha = str(p.job_workflow_sha);
+  return (
+    COMMIT.test(sha) &&
+    commits.includes(sha) &&
+    workflowMatches(str(p.job_workflow_ref), PUBLISH_WORKFLOW_REPO, `${PUBLISH_WORKFLOW_PATH}@${sha}`)
+  );
+};
+
+// The commits a hub accepts publishes from: SPECREVIEW_COMMIT, then
+// SPECREVIEW_PREVIOUS_COMMIT, each only when it is a full commit. Empty when
+// the hub does not know its own commit.
+export const publishCommits = (env: { SPECREVIEW_COMMIT?: string; SPECREVIEW_PREVIOUS_COMMIT?: string }) => {
+  const current = env.SPECREVIEW_COMMIT ?? '';
+  if (!COMMIT.test(current)) return [];
+  const previous = env.SPECREVIEW_PREVIOUS_COMMIT ?? '';
+  return COMMIT.test(previous) ? [current, previous] : [current];
+};
+
 export const verifyPublishToken = async (
   request: Request,
   config: HubConfig,
   site: Site,
   audience: string,
+  commits: string[],
 ): Promise<PublishClaims> => {
+  // A hub without its own commit cannot tell which workflow may publish.
+  if (commits.length === 0)
+    throw new AppError(
+      409,
+      'COMMIT_NOT_CONFIGURED',
+      'The hub does not know its specreview commit; set specreview.commit and deploy.',
+    );
   const auth = request.headers.get('authorization') ?? '';
   const token = /^Bearer ([A-Za-z0-9._-]+)$/.exec(auth)?.[1];
   if (!token) throw unauthorized();
@@ -80,6 +116,12 @@ export const verifyPublishToken = async (
   if (!('payload' in result)) throw unauthorized();
   const payload = result.payload;
   if (!allowed(payload, config, site)) throw forbidden();
+  if (!fromPublishWorkflow(payload, commits))
+    throw new AppError(
+      403,
+      'WRONG_WORKFLOW',
+      `Publish through ${PUBLISH_WORKFLOW_REPO}/${PUBLISH_WORKFLOW_PATH} pinned to the hub's specreview commit (${commits.map((c) => c.slice(0, 7)).join(' or ')}).`,
+    );
   const claims = {
     sha: str(payload.sha),
     runId: str(payload.run_id),

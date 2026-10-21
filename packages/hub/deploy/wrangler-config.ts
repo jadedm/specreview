@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Logo } from './brand';
-import { deployable, hubConfig, type Org } from './org';
+import { deployable, hubConfig, type Org, previousCommitOf } from './org';
 
 export const HUB_DIR = path.resolve(import.meta.dirname, '..');
 
@@ -85,6 +85,13 @@ export const wranglerConfig = (org: Org, hubDir = HUB_DIR, logo?: Logo | null) =
     ],
     r2_buckets: [{ binding: 'SITES', bucket_name: hub.bucket.name }],
     triggers,
-    vars: { SPECREVIEW_CONFIG: hubConfig(org, logo), ...(org.commit ? { SPECREVIEW_COMMIT: org.commit } : {}) },
+    vars: { SPECREVIEW_CONFIG: hubConfig(org, logo), ...commitVars(org) },
   };
+};
+
+// The commit the hub runs and, through an upgrade, the one before (#177).
+const commitVars = (org: Org) => {
+  if (!org.commit) return {};
+  const previous = previousCommitOf(org);
+  return { SPECREVIEW_COMMIT: org.commit, ...(previous ? { SPECREVIEW_PREVIOUS_COMMIT: previous } : {}) };
 };

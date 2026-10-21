@@ -190,14 +190,18 @@ delete orgFile.accessAdminAud;
 // Nor the prototype hostname's (#116: deploy sets them from hub.json).
 delete orgFile.protoHostname;
 delete orgFile.accessProtoAud;
-// sidecar's docs workflow on develop, pinned to an older commit than the
-// hub's, for moving it from the Sites tab (#148).
+// sidecar's docs workflow on develop: the two jobs of its own the admin page
+// wrote before #177, pinned to an older commit than the hub's, for moving it
+// to the reusable workflow from the Sites tab; SMOKE_CALLER=1 makes it the
+// caller at that older commit instead, for moving its pin (#148).
 const OLD_PIN = 'a'.repeat(40);
+const TWO_JOBS = `name: docs\non:\n  push:\n    branches: ["develop"]\n  pull_request:\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: jadedm/specreview/build@${OLD_PIN}\n        with:\n          repo: "sidecar"\n          docs: "docs"\n          exclude: |\n            drafts/\n  publish:\n    if: github.event_name == 'push'\n    needs: build\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - uses: jadedm/specreview/publish@${OLD_PIN}\n        with:\n          hub: https://docs.localhost\n          repo: "sidecar"\n`;
+const CALLER = `name: docs\non: push\njobs:\n  docs:\n    uses: jadedm/specreview/.github/workflows/publish-docs.yml@${OLD_PIN}\n    with:\n      repo: sidecar\n`;
 const repoState = {
   sidecar: repoWith(
     2001,
     {
-      '.github/workflows/docs.yml': `name: docs\non: push\njobs:\n  build:\n    steps:\n      - run: echo ours\n      - uses: jadedm/specreview/build@${OLD_PIN}\n  publish:\n    steps:\n      - uses: jadedm/specreview/publish@${OLD_PIN}\n`,
+      '.github/workflows/docs.yml': process.env.SMOKE_CALLER === '1' ? CALLER : TWO_JOBS,
     },
     'develop',
   ),
@@ -331,6 +335,8 @@ const mf = new Miniflare({
         SPECREVIEW_CONFIG: JSON.stringify(config),
         SPECREVIEW_KEY: randomBytes(32).toString('base64'),
         SPECREVIEW_COMMIT: 'c'.repeat(40),
+        // The commit before an upgrade (#177): publishes from either are accepted.
+        SPECREVIEW_PREVIOUS_COMMIT: 'b'.repeat(40),
         ...(APP
           ? { GITHUB_APP_ID: APP_ID, GITHUB_APP_PRIVATE_KEY: appKeys.privateKey }
           : { GITHUB_READ_TOKEN: 'smoke-read', GITHUB_WRITE_TOKEN: 'smoke-write' }),
@@ -536,8 +542,10 @@ http
 
 // A stand-in for the GitHub Actions token endpoint, for the publish smoke:
 // GET /token?...&audience=<origin> with "Authorization: bearer smoke" answers
-// a token for sidecar's docs workflow on develop, as a push. The commit comes
-// from the file in SMOKE_SHA_FILE, read on every request; run ids count up.
+// a token for sidecar's docs workflow on develop, as a push, from a job in
+// specreview's reusable workflow (#177) at the hub's commit; `job_sha` and
+// `job_ref` in the query change those two claims. The commit comes from the
+// file in SMOKE_SHA_FILE, read on every request; run ids count up.
 let runId = 500;
 http
   .createServer(async (req, res) => {
@@ -547,6 +555,8 @@ http
       return res.end();
     }
     const sha = readFileSync(process.env.SMOKE_SHA_FILE ?? '/dev/null', 'utf8').trim();
+    const jobSha = url.searchParams.get('job_sha') ?? 'c'.repeat(40);
+    const jobRef = url.searchParams.get('job_ref') ?? `jadedm/specreview/.github/workflows/publish-docs.yml@${jobSha}`;
     const value = await new SignJWT({
       repository: 'acme/sidecar',
       repository_id: '2001',
@@ -554,6 +564,8 @@ http
       workflow_ref: 'acme/sidecar/.github/workflows/docs.yml@refs/heads/develop',
       ref: 'refs/heads/develop',
       event_name: 'push',
+      job_workflow_ref: jobRef,
+      job_workflow_sha: jobSha,
       sha,
       run_id: String(++runId),
       run_attempt: '1',

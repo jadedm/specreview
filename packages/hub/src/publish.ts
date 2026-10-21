@@ -6,7 +6,7 @@ import { isManifest, MAX_MANIFEST_BYTES, MAX_PAGE_ISSUES, type Manifest } from '
 import type { HubConfig, Site } from './config';
 import type { Env } from './env';
 import { resolveLink } from './github';
-import { verifyPublishToken } from './github-oidc';
+import { publishCommits, verifyPublishToken } from './github-oidc';
 import { AppError, json } from './http';
 
 // The body, its parts and the parsed form are all in memory at once; three
@@ -214,7 +214,7 @@ export const publish = async (request: Request, env: Env, config: HubConfig, sit
   if (request.method !== 'POST') throw new AppError(405, 'METHOD_NOT_ALLOWED');
   const bucket = env.SITES;
   if (!bucket) throw new AppError(500, 'STORE_NOT_CONFIGURED');
-  const claims = await verifyPublishToken(request, config, site, new URL(request.url).origin);
+  const claims = await verifyPublishToken(request, config, site, new URL(request.url).origin, publishCommits(env));
   const type = request.headers.get('content-type') ?? '';
   if (!type.startsWith('multipart/form-data')) throw new AppError(415, 'UNSUPPORTED_MEDIA_TYPE');
 

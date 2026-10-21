@@ -39,6 +39,11 @@ export type HubJson = {
   // Written by deploy: the logo key the live Worker uses, and every logo key
   // uploaded and not yet deleted, so no stored logo is ever lost track of.
   brand?: { logoKey?: string; keys?: string[] };
+  // Written by deploy (#177): the specreview commit the live Worker runs, and
+  // the one it ran before an upgrade, which the hub keeps accepting publishes
+  // from so product repos keep publishing until their pin moves.
+  deployedCommit?: string;
+  previousCommit?: string;
 };
 
 export type Org = {
@@ -51,11 +56,22 @@ export type Org = {
   commit: string | null;
 };
 
+const COMMIT = /^[0-9a-f]{40}$/;
 const commitOf = (dir: string) => {
   const file = path.join(dir, 'specreview.commit');
   if (!existsSync(file)) return null;
   const commit = readFileSync(file, 'utf8').trim();
-  return /^[0-9a-f]{40}$/.test(commit) && !/^0+$/.test(commit) ? commit : null;
+  return COMMIT.test(commit) && !/^0+$/.test(commit) ? commit : null;
+};
+
+// The commit the hub keeps accepting publishes from besides its own (#177):
+// the one deployed before when this deploy changes it, else the one already
+// kept. Null without a commit to run, or when the kept one is this one.
+export const previousCommitOf = (org: Org) => {
+  if (!org.commit) return null;
+  const { deployedCommit, previousCommit } = org.hub;
+  if (deployedCommit && deployedCommit !== org.commit) return deployedCommit;
+  return previousCommit && previousCommit !== org.commit ? previousCommit : null;
 };
 
 export class DeployError extends Error {}
@@ -78,6 +94,8 @@ const HUB_KEYS = new Set([
   'bucket',
   'access',
   'brand',
+  'deployedCommit',
+  'previousCommit',
 ]);
 const ACCESS_KEYS = new Set([
   'teamDomain',
@@ -144,6 +162,9 @@ export const hubProblems = (raw: unknown): string[] => {
   if (raw.access !== undefined && !isObject(raw.access)) problems.push('hub.json access must be an object');
   if (!brandRecordOk(raw.brand))
     problems.push('hub.json brand is written by deploy and may only hold logoKey and keys');
+  for (const key of ['deployedCommit', 'previousCommit'])
+    if (raw[key] !== undefined && (typeof raw[key] !== 'string' || !COMMIT.test(raw[key])))
+      problems.push(`hub.json ${key} is written by deploy and must be a full commit`);
   if (isObject(raw.access)) {
     for (const [key, v] of Object.entries(raw.access)) {
       if (!ACCESS_KEYS.has(key)) problems.push(`hub.json access has unknown key ${key}`);

@@ -609,10 +609,16 @@ describe('#75: the admin hostname in deploy', () => {
     expect(readme).toMatch(/Private repos spend the organisation's GitHub Actions minutes/);
   });
 
-  it("#84 (9): upgrading moves the hub and each product repo's two action pins", () => {
+  it("#84 (9), #177: upgrading moves the hub and each product repo's pin, and moves two-job workflows", () => {
     const readme = readFileSync(path.join(EXAMPLE, 'README.md'), 'utf8');
     const upgrading = readme.split('\n').find((l) => l.startsWith('- Upgrading:')) ?? '';
-    for (const part of ['specreview.commit', '.github/workflows/docs.yml', 'jadedm/specreview/build@', 'publish@'])
+    for (const part of [
+      'specreview.commit',
+      '.github/workflows/docs.yml',
+      'jadedm/specreview/.github/workflows/publish-docs.yml@',
+      'previousCommit',
+      'Move to the reusable workflow',
+    ])
       expect(upgrading, part).toContain(part);
   });
 
@@ -740,5 +746,108 @@ describe('#93: first impressions', () => {
       .find((l) => l.startsWith('3. Enable Zero Trust'));
     expect(step).toContain('The sign-in page shows the organisation name');
     expect(step).toContain('Custom pages, Access login page');
+  });
+});
+
+// #177: the hub accepts publishes from the reusable workflow at its own
+// commit and, through an upgrade, the one it ran before. deploy records both
+// in hub.json and sets the previous one as a Worker var. Cases are the
+// ticket's D rows.
+describe('177: the commit before an upgrade', () => {
+  const C1 = '1'.repeat(40);
+  const C2 = '2'.repeat(40);
+  const C3 = '3'.repeat(40);
+  const at = (commit: string | null, recorded: Record<string, string> = {}) => {
+    const { dir, tokenFile } = orgDir({ ...exampleHub(), ...recorded });
+    if (commit) writeFileSync(path.join(dir, 'specreview.commit'), `${commit}\n`);
+    return { dir, tokenFile };
+  };
+  const hubJson = (dir: string) =>
+    JSON.parse(readFileSync(path.join(dir, 'hub.json'), 'utf8')) as Record<string, unknown>;
+  // The vars of the config wrangler deployed, and hub.json after.
+  const deployed = async (dir: string, tokenFile: string, codes: number[] = []) => {
+    const { run, calls } = recorder(codes);
+    const done = await deploy({
+      org: loadOrg(dir),
+      tokenFile,
+      cf: cfFor(tokenFile),
+      run,
+      log: () => {},
+      dryRun: false,
+      wait: noWait,
+    }).then(
+      () => true,
+      () => false,
+    );
+    const config = calls.find((c) => c.args[0] === 'deploy')?.config;
+    const vars = config ? (JSON.parse(config) as { vars: Record<string, string> }).vars : null;
+    return { done, vars, hub: hubJson(dir) };
+  };
+
+  it('D1: a first deploy sets the commit, no previous one, and records the commit', async () => {
+    const { dir, tokenFile } = at(C1);
+    const r = await deployed(dir, tokenFile);
+    expect(r.done).toBe(true);
+    expect([r.vars?.SPECREVIEW_COMMIT, r.vars?.SPECREVIEW_PREVIOUS_COMMIT]).toEqual([C1, undefined]);
+    expect([r.hub.deployedCommit, r.hub.previousCommit]).toEqual([C1, undefined]);
+  });
+
+  it('D2, D3, D8: an upgrade keeps the commit before it, a redeploy keeps it too, the next upgrade moves it on', async () => {
+    const { dir, tokenFile } = at(C2, { deployedCommit: C1 });
+    let r = await deployed(dir, tokenFile);
+    expect([r.vars?.SPECREVIEW_COMMIT, r.vars?.SPECREVIEW_PREVIOUS_COMMIT]).toEqual([C2, C1]);
+    expect([r.hub.deployedCommit, r.hub.previousCommit]).toEqual([C2, C1]);
+    r = await deployed(dir, tokenFile);
+    expect(r.vars?.SPECREVIEW_PREVIOUS_COMMIT).toBe(C1);
+    expect([r.hub.deployedCommit, r.hub.previousCommit]).toEqual([C2, C1]);
+    writeFileSync(path.join(dir, 'specreview.commit'), `${C3}\n`);
+    r = await deployed(dir, tokenFile);
+    expect([r.vars?.SPECREVIEW_COMMIT, r.vars?.SPECREVIEW_PREVIOUS_COMMIT]).toEqual([C3, C2]);
+    expect([r.hub.deployedCommit, r.hub.previousCommit]).toEqual([C3, C2]);
+  });
+
+  it('D3: a rollback to the previous commit keeps the newer one as previous', async () => {
+    const { dir, tokenFile } = at(C1, { deployedCommit: C2, previousCommit: C1 });
+    const r = await deployed(dir, tokenFile);
+    expect([r.vars?.SPECREVIEW_COMMIT, r.vars?.SPECREVIEW_PREVIOUS_COMMIT]).toEqual([C1, C2]);
+    expect([r.hub.deployedCommit, r.hub.previousCommit]).toEqual([C1, C2]);
+  });
+
+  it('D4: a failed wrangler deploy records nothing, so the next try sets the same previous commit', async () => {
+    const { dir, tokenFile } = at(C2, { deployedCommit: C1 });
+    const failed = await deployed(dir, tokenFile, [0, 1]);
+    expect(failed.done).toBe(false);
+    expect([failed.hub.deployedCommit, failed.hub.previousCommit]).toEqual([C1, undefined]);
+    const again = await deployed(dir, tokenFile);
+    expect(again.vars?.SPECREVIEW_PREVIOUS_COMMIT).toBe(C1);
+  });
+
+  it('D5: hub.json refuses a malformed recorded commit', () => {
+    for (const change of [
+      { deployedCommit: 'abc' },
+      { previousCommit: C1.toUpperCase().replace(/1/g, 'A') },
+      { deployedCommit: 1 },
+    ])
+      expect(hubProblems({ ...exampleHub(), ...change }).join('\n'), JSON.stringify(change)).toMatch(
+        /is written by deploy and must be a full commit/,
+      );
+    expect(hubProblems({ ...exampleHub(), deployedCommit: C2, previousCommit: C1 })).toEqual([]);
+  });
+
+  it('D6: without a real commit, neither var is set and nothing is recorded', async () => {
+    for (const commit of [null, '0'.repeat(40)]) {
+      const { dir, tokenFile } = at(commit, { deployedCommit: C1, previousCommit: C2 });
+      const r = await deployed(dir, tokenFile);
+      expect(r.done).toBe(true);
+      expect([r.vars?.SPECREVIEW_COMMIT, r.vars?.SPECREVIEW_PREVIOUS_COMMIT]).toEqual([undefined, undefined]);
+      expect([r.hub.deployedCommit, r.hub.previousCommit]).toEqual([C1, C2]);
+    }
+  });
+
+  it('D7: a dry run records nothing', async () => {
+    const { dir, tokenFile } = at(C2, { deployedCommit: C1 });
+    const { run } = recorder();
+    await deploy({ org: loadOrg(dir), tokenFile, run, log: () => {}, dryRun: true, wait: noWait });
+    expect([hubJson(dir).deployedCommit, hubJson(dir).previousCommit]).toEqual([C1, undefined]);
   });
 });

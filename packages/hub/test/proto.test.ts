@@ -15,6 +15,7 @@ import {
   HUB_AUD,
   installFetch,
   oidcToken,
+  PUBLISH_ENV,
   PROTO_AUD,
   PROTO_HOST,
   PUBLISH_SHA,
@@ -79,7 +80,7 @@ const fetchHub = async (url: string, init: RequestInit = {}, override = {}) => {
   const ctx = createExecutionContext();
   const res = await worker.fetch(
     new Request(url, init) as Request<unknown, IncomingRequestCfProperties>,
-    testEnv(override),
+    testEnv({ ...PUBLISH_ENV, ...override }),
     ctx,
   );
   await waitOnExecutionContext(ctx);
