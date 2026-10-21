@@ -99,7 +99,9 @@ export const checkGit = (docs: string) => {
   }
   // History reads only 40-hex commit ids (manifest.ts), and the hub takes no other.
   if (git(docs, ['rev-parse', '--show-object-format']).trim() !== 'sha1') {
-    throw new BuildError('the repository uses SHA-256 object names; the hub takes SHA-1 (40-hex) commits');
+    throw new BuildError(
+      'the repository does not use SHA-1 object names (or git is older than 2.29 and cannot say); the hub takes SHA-1 (40-hex) commits',
+    );
   }
 };
 
@@ -360,7 +362,9 @@ export const forbiddenIn = (markdown: string): string | null => {
     const [from, to] = token.map ?? [0, 0];
     for (let line = from; line < to; line++) code.add(line);
   }
-  const outside = [...front.split('\n'), ...content.split('\n').filter((_, line) => !code.has(line))];
+  // Lines as markdown-it numbers them: \r\n and a lone \r each end one.
+  const lines = (text: string) => text.split(/\r\n?|\n/);
+  const outside = [...lines(front), ...lines(content).filter((_, line) => !code.has(line))];
   for (const line of outside) {
     const hit = OUTSIDE_CODE.find(([re]) => re.test(line.replace(/`[^`]*`/g, '')));
     if (hit) return hit[1];
@@ -370,7 +374,14 @@ export const forbiddenIn = (markdown: string): string | null => {
 
 export const checkMarkdown = (docs: string, files: string[]) => {
   for (const file of files.filter((f) => f.endsWith('.md'))) {
-    const found = forbiddenIn(readFileSync(path.join(docs, file), 'utf8'));
+    // Invalid YAML front matter throws from gray-matter; the error names the page.
+    const found = (() => {
+      try {
+        return forbiddenIn(readFileSync(path.join(docs, file), 'utf8'));
+      } catch (err) {
+        throw new BuildError(`${file}: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
+      }
+    })();
     if (found) throw new BuildError(`${file}: ${found} are not allowed in reviewed pages`);
   }
 };

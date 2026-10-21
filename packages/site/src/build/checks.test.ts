@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkArguments, checkPaths, forbiddenIn, OUTPUT_MARK } from './checks.js';
+import { checkArguments, checkMarkdown, checkPaths, forbiddenIn, OUTPUT_MARK } from './checks.js';
 import { docsAsPagesOrAssets } from './config.js';
 
 describe('20: Markdown features that pull in files or run code', () => {
@@ -100,6 +100,21 @@ describe('20: Markdown features that pull in files or run code', () => {
     // Read as Markdown, the block scalar's line would open a fence running to the end.
     expect(forbiddenIn('---\ntitle: |\n  ```\n---\n\n# Page\n\n<<< /etc/hosts\n')).toBe('snippet imports (<<<)');
     expect(forbiddenIn('---\ntitle: <script>\n---\n\n# Page\n')).toBe('script blocks');
+  });
+
+  it('lines end as markdown-it ends them: a lone \\r too', () => {
+    expect(forbiddenIn('# Page\r\r```\rx\r```\r<script setup>\r')).toBe('script blocks');
+    expect(forbiddenIn('# Page\r\n\r\n```\r\n<script setup>\r\n```\r\n')).toBeNull();
+  });
+
+  it('front matter that is not valid YAML stops the build, naming the page', () => {
+    const docs = mkdtempSync(path.join(tmpdir(), 'checks-yaml-'));
+    try {
+      writeFileSync(path.join(docs, 'bad.md'), '---\ntitle: [unclosed\n---\n\n# Page\n');
+      expect(() => checkMarkdown(docs, ['bad.md'])).toThrow(/^bad\.md: /);
+    } finally {
+      rmSync(docs, { recursive: true, force: true });
+    }
   });
 
   it('<<< in code is fine: indented four columns (a tab is four), fenced, or inline', () => {

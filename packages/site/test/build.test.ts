@@ -712,7 +712,10 @@ describe('15, 18: where the docs are, and git states', () => {
     git(repo, 'init', '-q', '-b', 'main', '--object-format=sha256');
     write(repo, 'docs/index.md', page('Home', 'x'));
     commit(repo, 'home');
-    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('SHA-256 object names') });
+    expect(build(repo)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('does not use SHA-1 object names'),
+    });
     expect(existsSync(path.join(repo, '.specreview', 'site'))).toBe(false);
   });
 
