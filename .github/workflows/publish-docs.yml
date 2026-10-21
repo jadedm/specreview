@@ -31,10 +31,19 @@ on:
         description: Paths in the docs folder to publish untouched as prototypes, one per line; * and ** are wildcards.
         type: string
         default: ''
+      runner:
+        description: The machine both jobs run on, as JSON for runs-on, such as '"ubuntu-latest"' or '["self-hosted","linux"]'.
+        type: string
+        default: '"ubuntu-latest"'
+
+# Every run step is bash, whatever the runner's own default shell.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     permissions:
       contents: read
     # The publish job downloads this build by its id, so it publishes exactly
@@ -49,6 +58,14 @@ jobs:
         run: |
           [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ && -n "$WORKFLOW_REPOSITORY" ]] \
             || { echo "this workflow's own commit is unknown, so nothing is built"; exit 1; }
+      # Node and pnpm's binary need libatomic, which Amazon Linux 2023 and
+      # other dnf machines may lack; elsewhere this does nothing.
+      - name: Install libatomic where dnf has it missing
+        shell: bash
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -q libatomic >/dev/null 2>&1 || sudo -n dnf install -y -q libatomic
+          fi
       # The product repo and the build tool are checked out side by side, so
       # nothing in the product repo sits around the tool's own files.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,7 +100,7 @@ jobs:
   publish:
     if: github.event_name == 'push'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     permissions:
       contents: read
       id-token: write
@@ -97,6 +114,14 @@ jobs:
           [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ && -n "$WORKFLOW_REPOSITORY" ]] \
             || { echo "this workflow's own commit is unknown, so nothing is published"; exit 1; }
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "the build job named no build, so nothing is published"; exit 1; }
+      # Node needs libatomic, which Amazon Linux 2023 and other dnf machines
+      # may lack; elsewhere this does nothing.
+      - name: Install libatomic where dnf has it missing
+        shell: bash
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -q libatomic >/dev/null 2>&1 || sudo -n dnf install -y -q libatomic
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}

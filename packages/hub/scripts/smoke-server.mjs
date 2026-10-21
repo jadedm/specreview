@@ -197,11 +197,21 @@ delete orgFile.accessProtoAud;
 const OLD_PIN = 'a'.repeat(40);
 const TWO_JOBS = `name: docs\non:\n  push:\n    branches: ["develop"]\n  pull_request:\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: jadedm/specreview/build@${OLD_PIN}\n        with:\n          repo: "sidecar"\n          docs: "docs"\n          exclude: |\n            drafts/\n  publish:\n    if: github.event_name == 'push'\n    needs: build\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - uses: jadedm/specreview/publish@${OLD_PIN}\n        with:\n          hub: https://docs.localhost\n          repo: "sidecar"\n`;
 const CALLER = `name: docs\non: push\njobs:\n  docs:\n    uses: jadedm/specreview/.github/workflows/publish-docs.yml@${OLD_PIN}\n    with:\n      repo: sidecar\n`;
+// SMOKE_RUNNER=1 (#185): both jobs on self-hosted labels, the build job
+// installing libatomic first, as a team building on its own machines wrote them.
+const SELF_HOSTED = TWO_JOBS.replaceAll(
+  '    runs-on: ubuntu-latest\n    steps:\n',
+  '    runs-on: [self-hosted, aws, spot]\n    steps:\n      - run: sudo dnf install -y libatomic\n',
+).replace(
+  '    runs-on: ubuntu-latest\n    permissions:\n',
+  '    runs-on: [self-hosted, aws, spot]\n    permissions:\n',
+);
 const repoState = {
   sidecar: repoWith(
     2001,
     {
-      '.github/workflows/docs.yml': process.env.SMOKE_CALLER === '1' ? CALLER : TWO_JOBS,
+      '.github/workflows/docs.yml':
+        process.env.SMOKE_CALLER === '1' ? CALLER : process.env.SMOKE_RUNNER === '1' ? SELF_HOSTED : TWO_JOBS,
     },
     'develop',
   ),
