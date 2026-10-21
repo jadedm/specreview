@@ -327,13 +327,13 @@ const LANGUAGE = /^[A-Za-z0-9_+.#{},:=-]*$/;
 const CONTAINERS = ['tip', 'info', 'warning', 'danger', 'details', 'v-pre', 'raw', 'code-group'];
 type ParseEnv = { snippet?: boolean };
 // VitePress's snippet rule (snippetPlugin) starts at a block whose first
-// three characters are <<<, indented less than four columns. The same test
-// runs where a paragraph, list or quote goes on, so a line read as a block
-// start in some layout this parse does not share is found too.
+// three characters are <<<, indented less than four columns. A line indented
+// four or more never reaches this rule: markdown-it's code rule runs first,
+// and a paragraph, list or quote skips such a line. The same test runs where
+// a paragraph, list or quote goes on, so a line read as a block start in
+// some layout this parse does not share is found too.
 const snippetStart = (state: StateBlock, line: number, _end: number, _silent: boolean) => {
-  const at = state.bMarks[line] + state.tShift[line];
-  if (state.sCount[line] - state.blkIndent < 4 && state.src.startsWith('<<<', at))
-    (state.env as ParseEnv).snippet = true;
+  if (state.src.startsWith('<<<', state.bMarks[line] + state.tShift[line])) (state.env as ParseEnv).snippet = true;
   return false;
 };
 const pageParser = new MarkdownIt({ html: false });

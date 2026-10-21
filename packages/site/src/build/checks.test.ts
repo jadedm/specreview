@@ -97,7 +97,8 @@ describe('20: Markdown features that pull in files or run code', () => {
   });
 
   it('a fence marker in front matter hides nothing in the page', () => {
-    expect(forbiddenIn('---\ntitle: "```"\n---\n\n# Page\n\n<<< /etc/hosts\n')).toBe('snippet imports (<<<)');
+    // Read as Markdown, the block scalar's line would open a fence running to the end.
+    expect(forbiddenIn('---\ntitle: |\n  ```\n---\n\n# Page\n\n<<< /etc/hosts\n')).toBe('snippet imports (<<<)');
     expect(forbiddenIn('---\ntitle: <script>\n---\n\n# Page\n')).toBe('script blocks');
   });
 
