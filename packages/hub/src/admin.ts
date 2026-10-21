@@ -4,6 +4,7 @@ import {
   addSite,
   inputProblem,
   listBranches,
+  moveToReusable,
   pinnedOf,
   shortCommit,
   upgradeSite,
@@ -171,28 +172,37 @@ const INTRO =
 // commit the hub runs (for the workflow's pins). The form offers lists from
 // GitHub (#63) in two steps, since the page runs no script: the repo, then a
 // form with its branches. The lists only help; the post is checked as before.
-// Where a site's docs workflow pins the specreview actions (#148), against
-// the commit the hub runs.
+// Where a site's docs workflow pins specreview (#148), against the commit the
+// hub runs; a workflow still on the two specreview actions says the hub takes
+// publishes only from the reusable workflow (#177).
+const commitsText = (commits: string[]) =>
+  commits.map((c) => `<code>${escapeHtml(shortCommit(c))}</code>`).join(' and ');
 const pinText = (p: Pinned, commit: string, site: Site) => {
   const hub = `<code>${escapeHtml(shortCommit(commit))}</code>`;
   const byKind: Record<Pinned['kind'], () => string> = {
     current: () => `docs workflow on the hub's commit, ${hub}`,
-    other: () =>
-      `docs workflow on ${(p as { commits: string[] }).commits.map((c) => `<code>${escapeHtml(shortCommit(c))}</code>`).join(' and ')}; the hub runs ${hub}`,
+    other: () => `docs workflow on ${commitsText((p as { commits: string[] }).commits)}; the hub runs ${hub}`,
+    actions: () =>
+      `docs workflow uses the two specreview actions (${commitsText((p as { commits: string[] }).commits)}); the hub publishes only from the reusable workflow`,
     missing: () => `no ${escapeHtml(site.workflow)} on ${escapeHtml(site.branch)}`,
-    unpinned: () => `${escapeHtml(site.workflow)} does not pin both specreview actions to a commit`,
+    unpinned: () => `${escapeHtml(site.workflow)} does not pin specreview's reusable workflow to a commit`,
     unreadable: () => 'docs workflow could not be read',
   };
   return byKind[p.kind]();
 };
-const upgradeForm = (site: Site) =>
-  `<form class="inline" method="post" action="/_admin/sites/upgrade"><input type="hidden" name="repo" value="${escapeHtml(site.repo)}"><button class="quiet" type="submit">Move to the hub's commit</button></form>`;
+const moveForm = (site: Site, action: string, label: string) =>
+  `<form class="inline" method="post" action="${action}"><input type="hidden" name="repo" value="${escapeHtml(site.repo)}"><button class="quiet" type="submit">${label}</button></form>`;
+const formFor: Partial<Record<Pinned['kind'], (site: Site) => string>> = {
+  other: (site) => moveForm(site, '/_admin/sites/upgrade', "Move to the hub's commit"),
+  actions: (site) => moveForm(site, '/_admin/sites/reusable', 'Move to the reusable workflow'),
+};
 
-// A site whose pins can move gets the button beside it, as the People tab's rows do.
+// A site whose workflow can move gets the button beside it, as the People tab's rows do.
 const siteRow = (s: Site, pin: { pinned: Pinned; commit: string } | null) => {
   const text = `<span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepos.join(', '))}${s.visibility === 'public' ? ', public' : ''}</span>${pin ? `<span class="meta">${pinText(pin.pinned, pin.commit, s)}</span>` : ''}`;
-  if (pin?.pinned.kind !== 'other') return `<li><span class="site">${text}</span></li>`;
-  return `<li><span class="row"><span>${text}</span><span>${upgradeForm(s)}</span></span></li>`;
+  const form = pin && formFor[pin.pinned.kind];
+  if (!form) return `<li><span class="site">${text}</span></li>`;
+  return `<li><span class="row"><span>${text}</span><span>${form(s)}</span></span></li>`;
 };
 
 // Each site's pins, all at once, each within the wait; nothing without the
@@ -555,19 +565,25 @@ const madeList = (made: Made[], again: string) =>
     ? `<p>Made before it stopped:</p><ul>${made.map((m) => `<li><span class="site"><span class="title">${escapeHtml(m.what)}</span>${m.url ? `<span class="meta"><a href="${escapeHtml(m.url)}">${escapeHtml(m.url)}</a></span>` : ''}</span></li>`).join('')}</ul><p class="note">${again}</p>`
     : '';
 
-// Moving a site's workflow pins to the hub's commit (#148).
-const upgradePost = async (a: Admin) => {
+// Moving a site's workflow pin to the hub's commit (#148), or a two-job
+// workflow to the reusable one (#177): the form names only the repo.
+const movePost = (move: typeof moveToReusable) => async (a: Admin) => {
   if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
   const form = await formOf(a.request);
   const repo = (form.get('repo') ?? '').trim().toLowerCase();
   const site = isRepoName(repo) ? a.config.sites.get(repo) : undefined;
   if (!site) return say(a, 400, 'Check the form', '<p>repo: one of the sites.</p>');
-  const done = await upgradeSite(site, { config: a.config, env: a.env, auth: a.deps.github, email: a.email }).catch(
-    (err: unknown) => {
-      if (err instanceof AddSiteError) return err;
-      throw err;
-    },
-  );
+  const ctx = {
+    config: a.config,
+    env: a.env,
+    auth: a.deps.github,
+    email: a.email,
+    origin: `https://${docsHostnameOf(a)}`,
+  };
+  const done = await move(site, ctx).catch((err: unknown) => {
+    if (err instanceof AddSiteError) return err;
+    throw err;
+  });
   if (done instanceof AddSiteError)
     return say(
       a,
@@ -709,7 +725,8 @@ const forget = async (a: Admin) => {
 const ROUTES: Record<string, Route> = {
   '/_admin/': { GET: (a) => people(a) },
   '/_admin/sites': { GET: sitesPage, POST: addSitePost },
-  '/_admin/sites/upgrade': { POST: upgradePost },
+  '/_admin/sites/upgrade': { POST: movePost(upgradeSite) },
+  '/_admin/sites/reusable': { POST: movePost(moveToReusable) },
   '/_admin/github': { GET: githubPage },
   '/_admin/github/created': { GET: created },
   '/_admin/github/forget': { POST: forget },

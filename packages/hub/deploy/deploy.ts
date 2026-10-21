@@ -11,7 +11,7 @@ import type { Cloudflare } from './cloudflare';
 import { readToken } from './cloudflare';
 import { authoritativeAddresses, probeAddress, type Dns, type Probe, systemDns } from './direct-dns';
 import { type Logo, logoOf } from './brand';
-import { DeployError, deployable, type Org, saveHub } from './org';
+import { DeployError, deployable, type Org, previousCommitOf, saveHub } from './org';
 import { HUB_DIR, wranglerConfig } from './wrangler-config';
 
 export type Run = (args: string[], opts: { env: NodeJS.ProcessEnv; input?: string }) => Promise<number>;
@@ -209,9 +209,12 @@ export const deploy = async ({
         env,
         'applying D1 migrations',
       );
+      // Worked out before the deploy, as the Worker's vars were.
+      const previous = previousCommitOf(org);
       await step(run, ['deploy', '--config', configPath], env, 'wrangler deploy');
       // The new Worker is live from here, whatever the wait says next.
       recordBrand(org, { logoKey: logo?.key ?? null });
+      recordCommits(org, previous);
       if (!cf) throw new DeployError('deploy needs the Cloudflare API to check the hub key');
       await setHubKey(org, cf, run, configPath, env, log);
     },
@@ -264,6 +267,16 @@ const setHubKey = async (
     randomBytes(32).toString('base64'),
   );
   log('hub key set');
+};
+
+// hub.json's record of the commits the live Worker accepts (#177), written
+// once the Worker is deployed: the next deploy reads them to keep accepting
+// the commit before an upgrade. Nothing changes without a commit to run.
+const recordCommits = (org: Org, previous: string | null) => {
+  if (!org.commit) return;
+  const { deployedCommit: _d, previousCommit: _p, ...rest } = org.hub;
+  org.hub = { ...rest, deployedCommit: org.commit, ...(previous ? { previousCommit: previous } : {}) };
+  saveHub(org);
 };
 
 // hub.json's record of stored logos: `keys` gains what is given, `logoKey`

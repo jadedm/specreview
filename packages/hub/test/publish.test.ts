@@ -14,8 +14,11 @@ import {
   HOST,
   installFetch,
   ORG,
+  HUB_COMMIT,
   oidcToken,
+  PUBLISH_ENV,
   PUBLISH_SHA,
+  PUBLISH_WORKFLOW,
   reset,
   SIDECAR,
   testEnv,
@@ -85,7 +88,7 @@ const send = async (path: string, init: RequestInit, override = {}) => {
   const ctx = createExecutionContext();
   const res = await worker.fetch(
     new Request(`${HOST}${path}`, init) as Request<unknown, IncomingRequestCfProperties>,
-    testEnv(override),
+    testEnv({ ...PUBLISH_ENV, ...override }),
     ctx,
   );
   await waitOnExecutionContext(ctx);
@@ -593,6 +596,104 @@ describe('12: config', () => {
     ]) {
       const r = await publishWith(await oidcToken(), undefined, SIDECAR, over);
       expect(code(r)).toBe('CONFIG_INVALID');
+    }
+  });
+});
+
+// #177: the hub accepts publishes only from specreview's reusable workflow,
+// pinned to the commit the hub runs or the one it ran before. Case numbers
+// are the ticket's test plan.
+describe('177: the reusable workflow at the hub commit', () => {
+  const PREVIOUS = 'd'.repeat(40);
+  const OTHER = 'f'.repeat(40);
+  const at = (commit: string, ref = `${PUBLISH_WORKFLOW}@${commit}`) => ({
+    job_workflow_ref: ref,
+    job_workflow_sha: commit,
+  });
+  const withPrevious = { SPECREVIEW_PREVIOUS_COMMIT: PREVIOUS };
+
+  it("H1, H2: the hub's commit and, with it set, the previous one publish", async () => {
+    expect((await publishWith(await oidcToken({ run_id: '100', ...at(HUB_COMMIT) }))).status).toBe(200);
+    const r = await publishWith(await oidcToken({ run_id: '101', ...at(PREVIOUS) }), undefined, SIDECAR, withPrevious);
+    expect(r.status).toBe(200);
+    expect(await pointer()).toMatchObject({ runId: '101' });
+  });
+
+  it('H3, H4, H5, H10: any other commit, ref or workflow is WRONG_WORKFLOW, nothing written', async () => {
+    const wrong: Record<string, unknown>[] = [
+      at(OTHER),
+      { job_workflow_ref: undefined },
+      { job_workflow_sha: undefined },
+      { job_workflow_ref: undefined, job_workflow_sha: undefined },
+      { job_workflow_sha: HUB_COMMIT.slice(0, 7), job_workflow_ref: `${PUBLISH_WORKFLOW}@${HUB_COMMIT.slice(0, 7)}` },
+      at(HUB_COMMIT, `someone/specreview/.github/workflows/publish-docs.yml@${HUB_COMMIT}`),
+      at(HUB_COMMIT, `jadedm/other/.github/workflows/publish-docs.yml@${HUB_COMMIT}`),
+      at(HUB_COMMIT, `jadedm/specreview/.github/workflows/publish-docs.yaml@${HUB_COMMIT}`),
+      at(HUB_COMMIT, `jadedm/specreview/.github/workflows/ci.yml@${HUB_COMMIT}`),
+      at(HUB_COMMIT, `xjadedm/specreview/.github/workflows/publish-docs.yml@${HUB_COMMIT}`),
+      at(HUB_COMMIT, `${PUBLISH_WORKFLOW}@refs/tags/v0.5.0`),
+      at(HUB_COMMIT, `${PUBLISH_WORKFLOW}@refs/heads/main`),
+      at(HUB_COMMIT, `${PUBLISH_WORKFLOW}@${OTHER}`),
+      at(HUB_COMMIT, `${PUBLISH_WORKFLOW}@${HUB_COMMIT}x`),
+      // The caller's own file is not the reusable workflow.
+      at(HUB_COMMIT, `${ORG}/${SIDECAR}/${WORKFLOW}@refs/heads/develop`),
+    ];
+    for (const over of wrong) {
+      const r = await publishWith(await oidcToken(over), undefined, SIDECAR, withPrevious);
+      expect([r.status, code(r)], JSON.stringify(over)).toEqual([403, 'WRONG_WORKFLOW']);
+    }
+    expect(await pointer()).toBeNull();
+    expect((await env.SITES!.list({ prefix: `${SIDECAR}/` })).objects).toEqual([]);
+    const spent = await env.DB.prepare('SELECT COUNT(*) AS n FROM publish_tokens').first<{ n: number }>();
+    expect(spent?.n).toBe(0);
+  });
+
+  it('H6: owner and repo ignore case; the path does not', async () => {
+    const cased = at(HUB_COMMIT, `JadedM/SpecReview/.github/workflows/publish-docs.yml@${HUB_COMMIT}`);
+    expect((await publishWith(await oidcToken(cased))).status).toBe(200);
+    const path = at(HUB_COMMIT, `jadedm/specreview/.github/workflows/Publish-Docs.yml@${HUB_COMMIT}`);
+    expect(code(await publishWith(await oidcToken(path)))).toBe('WRONG_WORKFLOW');
+    const upper = at(HUB_COMMIT.toUpperCase());
+    expect(code(await publishWith(await oidcToken(upper)))).toBe('WRONG_WORKFLOW');
+  });
+
+  it('H7: without a previous commit, or a malformed one, only the hub commit publishes', async () => {
+    for (const over of [{}, { SPECREVIEW_PREVIOUS_COMMIT: 'not-a-commit' }, { SPECREVIEW_PREVIOUS_COMMIT: '' }]) {
+      const r = await publishWith(await oidcToken(at(PREVIOUS)), undefined, SIDECAR, over);
+      expect([r.status, code(r)], JSON.stringify(over)).toEqual([403, 'WRONG_WORKFLOW']);
+    }
+    // The previous commit set to the hub's own changes nothing.
+    const same = { SPECREVIEW_PREVIOUS_COMMIT: HUB_COMMIT };
+    expect((await publishWith(await oidcToken(at(HUB_COMMIT)), undefined, SIDECAR, same)).status).toBe(200);
+  });
+
+  it('H8: a hub without its commit is COMMIT_NOT_CONFIGURED before the token is read or spent', async () => {
+    const t = await oidcToken();
+    for (const over of [
+      { SPECREVIEW_COMMIT: undefined },
+      { SPECREVIEW_COMMIT: '' },
+      { SPECREVIEW_COMMIT: 'abc' },
+      { SPECREVIEW_COMMIT: undefined, ...withPrevious },
+    ]) {
+      const r = await publishWith(t, undefined, SIDECAR, over);
+      expect([r.status, code(r)], JSON.stringify(over)).toEqual([409, 'COMMIT_NOT_CONFIGURED']);
+    }
+    // Not even a missing token is looked at.
+    expect(code(await publishWith(null, undefined, SIDECAR, { SPECREVIEW_COMMIT: undefined }))).toBe(
+      'COMMIT_NOT_CONFIGURED',
+    );
+    expect((await publishWith(t)).status).toBe(200);
+  });
+
+  it("H9: the caller's checks still hold with the reusable workflow's claims", async () => {
+    for (const over of [
+      { repository_id: '9999' },
+      { workflow_ref: `${ORG}/${SIDECAR}/.github/workflows/other.yml@refs/heads/develop` },
+      { event_name: 'pull_request' },
+      { ref: 'refs/heads/main' },
+    ]) {
+      const r = await publishWith(await oidcToken(over));
+      expect([r.status, code(r)], JSON.stringify(over)).toEqual([403, 'FORBIDDEN']);
     }
   });
 });

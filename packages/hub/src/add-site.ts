@@ -4,6 +4,7 @@ import type { Env } from './env';
 import { LIST_PAGES } from './github-app';
 import type { GitHubAuth, Purpose } from './github-auth';
 import { API, githubFetch, redirectOf } from './github-fetch';
+import { PUBLISH_WORKFLOW_PATH, PUBLISH_WORKFLOW_REPO } from './github-oidc';
 
 // Adding a site from the admin page (#57): the organisation's GitHub App opens
 // two pull requests, one on the repo holding the hub's config that adds the
@@ -75,23 +76,27 @@ export const unb64 = (text: string) =>
 
 // Patterns are checked (isExcludePattern) before they get here: no quote,
 // colon or line break can reach the YAML.
-const excludeBlock = (exclude: string[] = []) =>
-  exclude.length === 0 ? '' : `\n          exclude: |\n${exclude.map((p) => `            ${p}`).join('\n')}`;
+const block = (key: string, patterns: string[] = []) =>
+  patterns.length === 0 ? '' : `\n      ${key}: |\n${patterns.map((p) => `        ${p}`).join('\n')}`;
 
-export const workflowFor = (input: SiteInput, branch: string, origin: string, commit: string) =>
-  `# Builds this repo's docs folder and publishes it to the specreview hub.
-# Added from the hub's admin page; the actions are pinned to the commit the
-# hub runs. When the hub upgrades to a new specreview release, the admin
-# page's Sites tab opens a pull request moving both pins to its commit.
+// What a product repo's caller passes to the reusable workflow.
+export type CallerInputs = { repo: string; docs: string; exclude?: string[]; prototypes?: string[] };
+
+// A product repo's docs workflow (#177): one job calling specreview's
+// reusable workflow pinned to the commit the hub runs. The hub accepts
+// publishes only from that workflow.
+export const workflowFor = (input: CallerInputs, branch: string, origin: string, commit: string) =>
+  `# Builds this repo's docs folder and publishes it to the specreview hub,
+# through specreview's reusable workflow pinned to the commit the hub runs.
+# Added from the hub's admin page. When the hub upgrades to a new specreview
+# release, the admin page's Sites tab opens a pull request moving the pin.
 name: docs
 
 on:
   push:
     branches: [${JSON.stringify(branch)}]
+  # Pull requests build the docs and stop; only a push publishes.
   pull_request:
-
-permissions:
-  contents: read
 
 # One publish at a time, in order; a newer run never races an older one.
 concurrency:
@@ -99,42 +104,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # page history needs every commit
-          persist-credentials: false
-      - uses: jadedm/specreview/build@${commit}
-        with:
-          repo: ${JSON.stringify(input.repo)}
-          docs: ${JSON.stringify(input.docs)}${excludeBlock(input.exclude)}
-      # Only a push publishes, so only a push keeps the build, for a day.
-      - if: github.event_name == 'push'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: docs-site
-          path: .specreview
-          include-hidden-files: true
-          retention-days: 1
-
-  # Pushes to the branch only; pull requests stop after the build.
-  publish:
-    if: github.event_name == 'push'
-    needs: build
-    runs-on: ubuntu-latest
+  docs:
+    # The called workflow's build job reads the repo; its publish job asks
+    # GitHub for the token the hub checks.
     permissions:
+      contents: read
       id-token: write
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: docs-site
-          path: .specreview
-      - uses: jadedm/specreview/publish@${commit}
-        with:
-          hub: ${origin}
-          repo: ${JSON.stringify(input.repo)}
+    uses: ${PUBLISH_WORKFLOW_REPO}/${PUBLISH_WORKFLOW_PATH}@${commit}
+    with:
+      hub: ${origin}
+      repo: ${JSON.stringify(input.repo)}
+      docs: ${JSON.stringify(input.docs)}${block('exclude', input.exclude)}${block('prototypes', input.prototypes)}
 `;
 
 const STARTER = (repo: string) =>
@@ -435,21 +415,29 @@ export const listBranches = async (auth: GitHubAuth, repo: string): Promise<Bran
   return { defaultBranch, names: 'too-many' };
 };
 
-// A site's docs workflow pins the build and publish actions to a commit
-// (#148). When the hub moves to a new release, the Sites tab shows which sites
-// still pin another commit and opens a pull request moving them.
-// Only a step's `uses:` key at the start of its line counts (after the
-// indent and a list dash): not a comment, a `run:` line or another owner's
-// action whose name ends the same way.
-const USES = /(?<=^[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?)(jadedm\/specreview\/(build|publish)@)([^\s"'#]*)/gm;
+// A site's docs workflow pins specreview to a commit (#148): since #177 one
+// `uses:` of the reusable workflow, before it the build and publish actions
+// in two jobs of its own. When the hub moves to a new release, the Sites tab
+// shows which sites pin another commit and opens a pull request moving them;
+// a site still on the two jobs gets a pull request replacing its workflow
+// with the caller, since the hub takes publishes only from the reusable one.
+// Only a `uses:` key at the start of its line counts (after the indent and a
+// list dash): not a comment, a `run:` line or another owner's action or
+// workflow whose name ends the same way.
+const USES =
+  /(?<=^[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?)(jadedm\/specreview\/(build|publish|\.github\/workflows\/publish-docs\.yml)@)([^\s"'#]*)/gm;
 const COMMIT = /^[0-9a-f]{40}$/;
-// The commits both actions are pinned to; empty unless build and publish both
-// appear and every use of either is a commit.
-export const pinsOf = (text: string) => {
+export type Pins = { style: 'reusable' | 'actions'; commits: string[] };
+// The commits the file pins, with its style: the reusable workflow alone, or
+// both actions; null for anything else, or any use that is not a commit.
+export const pinsOf = (text: string): Pins | null => {
   const uses = [...text.matchAll(USES)];
+  if (uses.length === 0 || uses.some((m) => !COMMIT.test(m[3]))) return null;
   const names = new Set(uses.map((m) => m[2]));
-  if (!names.has('build') || !names.has('publish') || uses.some((m) => !COMMIT.test(m[3]))) return [];
-  return [...new Set(uses.map((m) => m[3]))];
+  const commits = [...new Set(uses.map((m) => m[3]))];
+  if (names.size === 1 && names.has(PUBLISH_WORKFLOW_PATH)) return { style: 'reusable', commits };
+  if (names.size === 2 && names.has('build') && names.has('publish')) return { style: 'actions', commits };
+  return null;
 };
 const withPins = (text: string, commit: string) => text.replace(USES, `$1${commit}`);
 const unpinned = (text: string) => text.replace(USES, '$1');
@@ -469,6 +457,7 @@ export const shortCommit = (commit: string) => commit.slice(0, 7);
 export type Pinned =
   | { kind: 'current' }
   | { kind: 'other'; commits: string[] }
+  | { kind: 'actions'; commits: string[] }
   | { kind: 'missing' }
   | { kind: 'unpinned' }
   | { kind: 'unreadable' };
@@ -492,35 +481,47 @@ export const pinnedOf = async (auth: GitHubAuth, repo: string, site: Site, commi
   if (res?.status === 404) return { kind: 'missing' };
   const file = res?.ok ? ((await res.json().catch(() => null)) as { content?: unknown } | null) : null;
   if (typeof file?.content !== 'string') return { kind: 'unreadable' };
-  const commits = pinsOf(exactText(file.content) ?? '');
-  if (commits.length === 0) return { kind: 'unpinned' };
-  return commits.every((c) => c === commit) ? { kind: 'current' } : { kind: 'other', commits };
+  const pins = pinsOf(exactText(file.content) ?? '');
+  if (!pins) return { kind: 'unpinned' };
+  if (pins.style === 'actions') return { kind: 'actions', commits: pins.commits };
+  return pins.commits.every((c) => c === commit) ? { kind: 'current' } : { kind: 'other', commits: pins.commits };
 };
 
-// Opens a pull request on the site's repo moving the pins to the hub's commit,
-// changing nothing else in the file, so a team's own edits to it stay.
-export const upgradeSite = async (
-  site: Site,
-  ctx: { config: HubConfig; env: Env; auth: GitHubAuth; email: string },
-): Promise<{ pull: string; made: Made[] }> => {
-  const { config, env, auth } = ctx;
-  const commit = env.SPECREVIEW_COMMIT;
+type Ctx = { config: HubConfig; env: Env; auth: GitHubAuth; email: string };
+
+// What both moves check before reading the file: the hub's commit, the app,
+// and that it may write the workflow.
+const ready = async (site: Site, ctx: Ctx) => {
+  const commit = ctx.env.SPECREVIEW_COMMIT;
   if (!commit) throw new AddSiteError(409, 'the hub does not know its specreview commit');
-  if (!(await auth.hasApp?.())) throw new AddSiteError(409, 'the hub has no GitHub App');
-  const product = `${config.org}/${site.repo}`;
-  const purpose = 'setup-product';
-  await canWrite(auth, product, purpose);
+  if (!(await ctx.auth.hasApp?.())) throw new AddSiteError(409, 'the hub has no GitHub App');
+  const product = `${ctx.config.org}/${site.repo}`;
+  const purpose: Purpose = 'setup-product';
+  await canWrite(ctx.auth, product, purpose);
   const made: Made[] = [];
-  const gh = steps(caller(auth), made);
+  const gh = steps(caller(ctx.auth), made);
   const head = await gh.headOf(product, purpose, site.branch);
   const file = await gh.fileAt(product, purpose, site.workflow, site.branch);
   if (!file) throw gh.stop(409, `${product} has no ${site.workflow} on ${site.branch}`);
   const current = exactText(file.content);
   if (current === null) throw gh.stop(409, `${site.workflow} on ${site.branch} is not UTF-8 text`);
-  const commits = pinsOf(current);
-  if (commits.length === 0)
-    throw gh.stop(409, `${site.workflow} on ${site.branch} does not pin both specreview actions to a commit`);
-  if (commits.every((c) => c === commit)) throw gh.stop(409, `${site.repo} is already on the hub's commit`);
+  return { commit, product, purpose, made, gh, head, current };
+};
+
+// Opens a pull request on the site's repo moving the reusable workflow's pin
+// to the hub's commit, changing nothing else in the file, so a team's own
+// edits to it stay.
+export const upgradeSite = async (site: Site, ctx: Ctx): Promise<{ pull: string; made: Made[] }> => {
+  const { commit, product, purpose, made, gh, head, current } = await ready(site, ctx);
+  const pins = pinsOf(current);
+  if (pins?.style === 'actions')
+    throw gh.stop(
+      409,
+      `${site.workflow} on ${site.branch} uses the two specreview actions; move it to the reusable workflow`,
+    );
+  if (!pins)
+    throw gh.stop(409, `${site.workflow} on ${site.branch} does not pin specreview's reusable workflow to a commit`);
+  if (pins.commits.every((c) => c === commit)) throw gh.stop(409, `${site.repo} is already on the hub's commit`);
   const short = shortCommit(commit);
   // One branch per target commit: a branch left from an earlier upgrade,
   // squash-merged, would conflict with the base it was merged into.
@@ -542,7 +543,158 @@ export const upgradeSite = async (
     work,
     site.branch,
     `Move specreview to ${short}`,
-    `Moves the specreview build and publish actions in \`${site.workflow}\` to ${commit}, the commit the docs hub runs, requested on the admin page by ${ctx.email}. Nothing else in the file changes.\n\nMerging publishes the docs with the hub's version.`,
+    `Moves specreview's reusable workflow in \`${site.workflow}\` to ${commit}, the commit the docs hub runs, requested on the admin page by ${ctx.email}. Nothing else in the file changes.\n\nMerging publishes the docs with the hub's version.`,
+  );
+  return { pull, made };
+};
+
+// Reading the two-job workflow's inputs (#177), so the caller that replaces
+// it keeps them. Only the shapes specreview's template and the admin page
+// wrote: one step per action, its `with:` keys plain or quoted scalars, or
+// `|` blocks holding one path a line. Anything else is refused, naming it.
+type Value = string | string[];
+const indentOf = (line: string) => line.length - line.trimStart().length;
+const skipped = (line: string) => !line.trim() || line.trim().startsWith('#');
+
+const scalarOf = (rest: string): string | null => {
+  const double = /^"((?:[^"\\]|\\.)*)"[ \t]*(?:#.*)?$/.exec(rest);
+  if (double) {
+    try {
+      return JSON.parse(`"${double[1]}"`) as string;
+    } catch {
+      return null;
+    }
+  }
+  const single = /^'((?:[^']|'')*)'[ \t]*(?:#.*)?$/.exec(rest);
+  if (single) return single[1].replace(/''/g, "'");
+  const plain = rest.replace(/[ \t]+#.*$/, '').trim();
+  // Anchors, aliases, tags, flow collections, folded blocks and the like.
+  return /^[^&*!|>%@`{["'#]/.test(plain) ? plain : null;
+};
+
+const stepInputs = (lines: string[], name: 'build' | 'publish'): Map<string, Value> | string => {
+  const usesLine = new RegExp(`^[ \\t]*(?:-[ \\t]+)?uses:[ \\t]*["']?jadedm\\/specreview\\/${name}@`);
+  const at = lines.flatMap((l, i) => (usesLine.test(l) ? [i] : []));
+  if (at.length !== 1) return `it uses jadedm/specreview/${name} in ${at.length} steps`;
+  const dash = /^[ \t]*-[ \t]+/.exec(lines[at[0]]);
+  const keyIndent = dash ? dash[0].length : indentOf(lines[at[0]]);
+  // The step's keys after its uses line, until a line further out.
+  let i = at[0] + 1;
+  for (; i < lines.length; i++) {
+    if (skipped(lines[i])) continue;
+    if (indentOf(lines[i]) < keyIndent) break;
+    if (indentOf(lines[i]) === keyIndent && /^with:[ \t]*(?:#.*)?$/.test(lines[i].trim())) break;
+  }
+  if (i >= lines.length || indentOf(lines[i]) < keyIndent) return `the ${name} step has no with: after its uses: line`;
+  const values = new Map<string, Value>();
+  let valueIndent = -1;
+  for (i += 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (skipped(line)) continue;
+    if (indentOf(line) <= keyIndent) break;
+    if (valueIndent === -1) valueIndent = indentOf(line);
+    const pair = /^([A-Za-z_-]+):[ \t]*(.*)$/.exec(line.trim());
+    if (indentOf(line) !== valueIndent || !pair) return `the ${name} step's inputs cannot be read`;
+    const [, key, rest] = pair;
+    if (values.has(key)) return `the ${name} step sets ${key} twice`;
+    if (!/^\|[-+]?[ \t]*(?:#.*)?$/.test(rest)) {
+      const value = scalarOf(rest);
+      if (value === null) return `the ${name} step's ${key} cannot be read`;
+      values.set(key, value);
+      continue;
+    }
+    const block: string[] = [];
+    while (i + 1 < lines.length && (!lines[i + 1].trim() || indentOf(lines[i + 1]) > valueIndent)) {
+      i += 1;
+      if (lines[i].trim()) block.push(lines[i].trim());
+    }
+    values.set(key, block);
+  }
+  return values;
+};
+
+const MAX_PATHS = 20;
+const pathsOf = (v: Value | undefined) => (v === undefined ? [] : typeof v === 'string' ? [v] : v).filter(Boolean);
+const BUILD_KEYS = ['repo', 'docs', 'exclude', 'prototypes'];
+const PUBLISH_KEYS = ['repo', 'hub'];
+
+// The old file's inputs, or why they cannot be kept.
+export const twoJobInputs = (text: string, site: Site): CallerInputs | string => {
+  const lines = text.replace(/^\ufeff/, '').split(/\r?\n/);
+  if (lines.some((l) => !skipped(l) && /^[ \t]*environment:/.test(l)))
+    return 'it names an environment, which the reusable workflow does not set';
+  const build = stepInputs(lines, 'build');
+  if (typeof build === 'string') return build;
+  const publish = stepInputs(lines, 'publish');
+  if (typeof publish === 'string') return publish;
+  const extra = [
+    ...[...build.keys()].filter((k) => !BUILD_KEYS.includes(k)).map((k) => `build ${k}`),
+    ...[...publish.keys()].filter((k) => !PUBLISH_KEYS.includes(k)).map((k) => `publish ${k}`),
+  ];
+  if (extra.length > 0) return `it sets ${extra.join(', ')}, which the reusable workflow does not take`;
+  const repo = build.get('repo');
+  if (typeof repo !== 'string') return 'the build step names no repo';
+  const published = publish.get('repo') ?? repo;
+  if (repo !== site.repo || published !== repo) return `it does not build and publish ${site.repo}`;
+  const docs = build.get('docs') ?? 'docs';
+  if (typeof docs !== 'string' || docs.length > 100 || (docs !== '.' && !FOLDER.test(docs)))
+    return 'its docs folder cannot be read';
+  const exclude = pathsOf(build.get('exclude'));
+  const prototypes = pathsOf(build.get('prototypes'));
+  for (const [key, list] of [
+    ['exclude', exclude],
+    ['prototypes', prototypes],
+  ] as const) {
+    if (list.length > MAX_PATHS || list.some((p) => !isExcludePattern(p)))
+      return `its ${key} paths are not paths the site build takes`;
+  }
+  return { repo, docs, exclude, prototypes };
+};
+
+// Opens a pull request replacing a two-job workflow with the caller of the
+// reusable workflow at the hub's commit, keeping its repo, docs folder and
+// paths. A branch from an earlier run is reused when its workflow is still
+// the site's or already the caller.
+export const moveToReusable = async (
+  site: Site,
+  ctx: Ctx & { origin: string },
+): Promise<{ pull: string; made: Made[] }> => {
+  if (site.environment !== null)
+    throw new AddSiteError(
+      409,
+      `${site.repo} publishes from the environment ${site.environment}, which the reusable workflow does not set`,
+    );
+  const { commit, product, purpose, made, gh, head, current } = await ready(site, ctx);
+  if (pinsOf(current)?.style !== 'actions')
+    throw gh.stop(409, `${site.workflow} on ${site.branch} does not use the two specreview actions pinned to a commit`);
+  const inputs = twoJobInputs(current, site);
+  if (typeof inputs === 'string') throw gh.stop(409, `${site.workflow} on ${site.branch} cannot be moved: ${inputs}`);
+  const next = workflowFor(inputs, site.branch, ctx.origin, commit);
+  const short = shortCommit(commit);
+  const work = `specreview/reusable-${site.repo}-${short}`;
+  await gh.branchAt(product, purpose, work, site.branch, head, [site.workflow]);
+  const there = await gh.fileAt(product, purpose, site.workflow, work);
+  const onBranch = there && exactText(there.content);
+  if (onBranch !== current && onBranch !== next)
+    throw gh.stop(
+      409,
+      `${product} already has a branch ${work} with other changes to ${site.workflow}; delete it and try again`,
+    );
+  await gh.write(
+    product,
+    purpose,
+    site.workflow,
+    work,
+    next,
+    `ci: publish docs through specreview's reusable workflow`,
+  );
+  const pull = await gh.pull(
+    product,
+    purpose,
+    work,
+    site.branch,
+    "Publish docs through specreview's reusable workflow",
+    `Replaces \`${site.workflow}\` with one job calling specreview's reusable workflow at ${commit}, the commit the docs hub runs, keeping the repo, the docs folder and any left-out or prototype paths. Requested on the admin page by ${ctx.email}.\n\nThe hub takes publishes only from that workflow, so the docs publish again once this is merged.`,
   );
   return { pull, made };
 };
