@@ -302,3 +302,15 @@
 #rv-mount-top.rv-unreserved {
   min-height: 0;
 }
+
+/* #38: a thread's passage in the page, and the one last shown or clicked. */
+::highlight(rv-quote) {
+  background-color: #e8e8e8;
+}
+::highlight(rv-quote-active) {
+  background-color: #cfcfcf;
+  text-decoration: underline;
+}
+.rv-thread[data-active] {
+  border-color: #1f1f1f;
+}

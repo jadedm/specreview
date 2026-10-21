@@ -11,6 +11,39 @@ export const quoteIn = (quote: string, sectionText: string): boolean => {
   return q.length > 0 && normalise(sectionText).includes(q);
 };
 
+// A thread's context (#38): up to this many characters of the section's text
+// either side of the quote, so a quote that appears more than once can be
+// told apart, and found again after its heading is renamed.
+export const CONTEXT = 32;
+
+// Where a quote with its context sits in a text: the start of each occurrence
+// (in the normalised text) whose text before ends with the prefix and text
+// after starts with the suffix. An empty side matches anything. Whitespace is
+// collapsed, never removed, so "foo bar" is not found in "foobar".
+export const placesIn = (quote: string, prefix: string, suffix: string, text: string): number[] => {
+  const q = normalise(quote);
+  if (q.length === 0) return [];
+  const t = normalise(text);
+  const p = normalise(prefix);
+  const s = normalise(suffix);
+  const found: number[] = [];
+  // Only the few characters either side are compared: at most one space sits
+  // between, since the text is collapsed.
+  for (let at = t.indexOf(q); at >= 0; at = t.indexOf(q, at + 1)) {
+    const before = t.slice(Math.max(0, at - p.length - 1), at).trimEnd();
+    const end = at + q.length;
+    const after = t.slice(end, end + s.length + 1).trimStart();
+    if (before.endsWith(p) && after.startsWith(s)) found.push(at);
+  }
+  return found;
+};
+
+// The context of a quote at [start, end) in a normalised text.
+export const contextAt = (text: string, start: number, end: number) => ({
+  prefix: text.slice(0, start).trimEnd().slice(-CONTEXT).trimStart(),
+  suffix: text.slice(end).trimStart().slice(0, CONTEXT).trimEnd(),
+});
+
 export const STATUSES = ['pending', 'in_review', 'ready'] as const;
 export type Status = (typeof STATUSES)[number];
 

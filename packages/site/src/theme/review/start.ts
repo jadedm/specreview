@@ -4,6 +4,7 @@ import { type Api, apiFor, ApiError, type Me, NETWORK, type PageData, type Pages
 import { el } from './dom';
 import { allPages, commentForm, commentsBlock, statusBar, ticketBox } from './render';
 import { diffView, historyList, oldVersionView } from './render-history';
+import { clearHighlights, onPassageClick, showHighlights } from './highlights';
 import { sectionOfSelection } from './selection';
 import { announceLoading, bottomSkeleton, topSkeleton } from './skeleton';
 
@@ -344,6 +345,7 @@ export const createReview = (api: Api, base: string) => {
     // The index also lists every page's status, above its own comments.
     if (page === 'index') place('rv-board', allPages(statuses, base), 'bottom');
     place(BOTTOM_ID, bottom, 'bottom');
+    showHighlights(threads);
     watchSelection(page);
   };
 
@@ -351,6 +353,7 @@ export const createReview = (api: Api, base: string) => {
   let selectionHandler: ((e: MouseEvent) => void) | null = null;
   // On every page change: no button or handler from the last page survives.
   function forgetSelection() {
+    clearHighlights();
     document.querySelector('.rv-pop')?.remove();
     if (selectionHandler) document.removeEventListener('mouseup', selectionHandler);
     selectionHandler = null;
@@ -376,7 +379,16 @@ export const createReview = (api: Api, base: string) => {
             const form = commentForm(
               picked.quote,
               (body, button) =>
-                act(button, () => api.comment({ page, heading: picked.section, quote: picked.quote, body })),
+                act(button, () =>
+                  api.comment({
+                    page,
+                    heading: picked.section,
+                    quote: picked.quote,
+                    prefix: picked.prefix,
+                    suffix: picked.suffix,
+                    body,
+                  }),
+                ),
               () => form.remove(),
             );
             place('rv-form', form, 'bottom');
@@ -406,5 +418,6 @@ export const pathOf = (to: string, origin: string) => new URL(to, origin).pathna
 // onAfterPageLoad also fires for the first page, so it is the only trigger.
 export const startReview = (router: Router, base: string) => {
   const review = createReview(apiFor(base), base);
+  document.addEventListener('click', onPassageClick);
   router.onAfterPageLoad = (to: string) => review.render(pageKeyOf(pathOf(to, location.origin), base));
 };

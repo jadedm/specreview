@@ -1,4 +1,4 @@
-import { quoteIn } from '@specreview/shared';
+import { placesIn, quoteIn, type Section } from '@specreview/shared';
 import {
   BODY,
   demoteIfReady,
@@ -22,6 +22,20 @@ import { isTeam, type Role } from './roles';
 import { parseBody } from './validate';
 
 const db = (ctx: Ctx) => ctx.env.DB;
+
+const contextFor = (t: ThreadRow, text: string, team: boolean) =>
+  team || placesIn(t.quote, t.prefix, t.suffix, text).length > 0
+    ? { prefix: t.prefix, suffix: t.suffix }
+    : { prefix: '', suffix: '' };
+
+// The section a thread whose heading is gone sits in now (#38): its quote with
+// its context in exactly one place on the live page. A thread with no context
+// (posted before #38) is never placed on its quote alone.
+const movedTo = (t: ThreadRow, sections: Section[]): string | null => {
+  if (!t.prefix && !t.suffix) return null;
+  const hits = sections.flatMap((s) => placesIn(t.quote, t.prefix, t.suffix, s.text).map(() => s.id));
+  return hits.length === 1 ? hits[0] : null;
+};
 
 // Outdated threads quote text the page no longer has. Readers do not get that
 // text, for the same reason old versions are team-only: it may have been
@@ -56,19 +70,26 @@ export const listComments = async (ctx: Ctx, page: string, caller: Caller) => {
     .bind(site, page, site, page, RESOLVED_LISTED)
     .all<ReplyRow>();
   const byThread = Map.groupBy(replies.results, (r) => r.thread_id);
-  // Outdated: the quoted text is no longer in its section on the live page.
+  // Outdated: the quoted text is no longer in its section on the live page,
+  // unless that section is gone and the quote with its context is in exactly
+  // one place elsewhere (#38), where the thread is then listed.
   const sectionText = new Map(current.sections.map((s) => [s.id, s.text]));
   return listed.map((t) => {
-    const outdated = !quoteIn(t.quote, sectionText.get(t.heading) ?? '');
+    const moved = sectionText.has(t.heading) ? null : movedTo(t, current.sections);
+    const heading = moved ?? t.heading;
+    const outdated = !quoteIn(t.quote, sectionText.get(heading) ?? '');
     const hide = outdated && !isTeam(role);
     return {
       id: t.id,
       // A deleted section's id is a slug of its removed heading text.
-      heading: hide && !sectionText.has(t.heading) ? '' : t.heading,
+      heading: hide && !sectionText.has(heading) ? '' : heading,
+      // The section it was posted under, for the team, when it moved.
+      movedFrom: moved && isTeam(role) ? t.heading : null,
       quote: hide ? '' : t.quote,
       quoteHidden: hide,
-      prefix: hide ? '' : t.prefix,
-      suffix: hide ? '' : t.suffix,
+      // Context is the page's text as it was; a reader gets it only while it
+      // still surrounds the quote on the live page, like the quote itself.
+      ...contextFor(t, sectionText.get(heading) ?? '', isTeam(role)),
       pageHash: t.page_hash,
       author: show(t.author),
       mine: t.author === caller.email,
@@ -105,6 +126,11 @@ export const createComment = async (ctx: Ctx, email: string, raw: unknown) => {
   const section = page.sections.find((s) => s.id === input.heading);
   if (!section) throw new AppError(400, 'UNKNOWN_HEADING');
   if (!quoteIn(input.quote, section.text)) throw new AppError(400, 'QUOTE_NOT_IN_SECTION');
+  // Context that surrounds no occurrence of the quote is not kept (#38): it
+  // could later place the thread somewhere it was never posted.
+  const fits = placesIn(input.quote, input.prefix ?? '', input.suffix ?? '', section.text).length > 0;
+  const prefix = fits ? (input.prefix ?? '') : '';
+  const suffix = fits ? (input.suffix ?? '') : '';
   const now = Date.now();
   await recordWrite(ctx, email, now);
   const id = crypto.randomUUID();
@@ -121,8 +147,8 @@ export const createComment = async (ctx: Ctx, email: string, raw: unknown) => {
       input.page,
       input.heading,
       input.quote,
-      input.prefix ?? '',
-      input.suffix ?? '',
+      prefix,
+      suffix,
       page.hash,
       email,
       input.body,

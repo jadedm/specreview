@@ -52,3 +52,33 @@ describe('#88: exclude patterns', () => {
     expect(isExcludePattern('a'.repeat(101), 100)).toBe(false);
   });
 });
+
+describe('#38: a quote with its context', () => {
+  it('3: one place, two told apart by context, two alike, none', async () => {
+    const { placesIn } = await import('./text');
+    expect(placesIn('queue', '', '', 'the queue holds jobs')).toEqual([4]);
+    const twice = 'the first queue holds jobs. the second queue holds mail.';
+    expect(placesIn('queue', 'the second', 'holds mail', twice)).toEqual([twice.lastIndexOf('queue')]);
+    expect(placesIn('queue', '', 'holds', twice)).toHaveLength(2);
+    expect(placesIn('queue', 'the third', '', twice)).toEqual([]);
+    expect(placesIn('   ', '', '', twice)).toEqual([]);
+  });
+
+  it('3: whitespace differing in kind or length still matches; whitespace never vanishes', async () => {
+    const { placesIn } = await import('./text');
+    expect(placesIn('holds\njobs', 'the  queue', '', 'the queue holds   jobs')).toHaveLength(1);
+    // 3b: "foo bar" is not in "foobar", but is across two list items.
+    expect(placesIn('foo bar', '', '', 'foobar')).toEqual([]);
+    expect(placesIn('foo bar', '', '', 'foo bar')).toEqual([0]);
+  });
+
+  it('1, 2: the context either side, cut to 32 characters, empty at an edge', async () => {
+    const { contextAt, CONTEXT } = await import('./text');
+    const text = `${'a'.repeat(40)} quote ${'b'.repeat(40)}`;
+    const at = text.indexOf('quote');
+    const c = contextAt(text, at, at + 'quote'.length);
+    expect(c.prefix).toBe('a'.repeat(CONTEXT));
+    expect(c.suffix).toBe('b'.repeat(CONTEXT));
+    expect(contextAt('quote here', 0, 5)).toEqual({ prefix: '', suffix: 'here' });
+  });
+});

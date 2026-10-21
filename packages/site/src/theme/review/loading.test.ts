@@ -450,7 +450,15 @@ describe('31: the comment form', () => {
     expect(post.textContent).toBe('Posting');
     expect(post.disabled).toBe(true);
     expect(comment).toHaveBeenCalledTimes(1);
-    expect(comment).toHaveBeenCalledWith({ page: 'a', heading: 'limits', quote: 'Some page', body: 'a new comment' });
+    // #38 cases 1 and 2: the context either side, empty at the section's start.
+    expect(comment).toHaveBeenCalledWith({
+      page: 'a',
+      heading: 'limits',
+      quote: 'Some page',
+      prefix: '',
+      suffix: 'text here',
+      body: 'a new comment',
+    });
     posted.resolve({ id: 'n' });
     await settle();
     expect(document.querySelector('.rv-form')).toBeNull();
