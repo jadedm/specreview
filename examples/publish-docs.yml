@@ -1,7 +1,7 @@
 # .github/workflows/docs.yml in a product repo. The hub's config names this
 # file (site.workflow), the branch, and the repo's numeric id; replace
 # <specreview-commit> with the full commit SHA a specreview release tag points
-# to (gh api repos/jadedm/specreview/commits/v0.3.0 --jq .sha), the same commit
+# to (gh api repos/jadedm/specreview/commits/v0.4.0 --jq .sha), the same commit
 # as the hub's specreview.commit.
 name: docs
 
