@@ -8,10 +8,13 @@ import { snapshotOf, type Snapshot } from './manifest';
 import { isTeam, type Role } from './roles';
 import { effectiveStatus, readSiteStatuses } from './status-read';
 import { API, githubFetch, redirectOf } from './github-fetch';
+import { eachLimited } from './limited';
 
 const ownedLabels: string[] = Object.values(STATUS_LABEL);
 
 export const TICKET_TTL_MS = 5 * 60_000;
+// GitHub calls one page or one sync makes at once, one per ticket (#176).
+export const TICKET_CALLS_AT_ONCE = 5;
 
 type Issue = { number: number; title: string; state: string; html_url: string; labels: { name: string }[] };
 export type Ticket =
@@ -162,16 +165,30 @@ const fetchTicket = async (hub: Hub, repo: string, n: number, now: number): Prom
   if (cached && now - cached.fetched_at < TICKET_TTL_MS) {
     return fromIssue(JSON.parse(cached.data) as Issue, cached.fetched_at, false);
   }
+  // A "not found" is kept as long as a found ticket (#176).
+  const missing = await hub.env.DB.prepare('SELECT fetched_at FROM ticket_missing WHERE repo = ? AND number = ?')
+    .bind(repo, n)
+    .first<{ fetched_at: number }>();
+  if (missing && now - missing.fetched_at < TICKET_TTL_MS) return { number: n, notFound: true };
   const res = await call(hub, repo, 'read', `/issues/${n}`).catch(() => null);
-  if (res?.status === 404) return { number: n, notFound: true };
+  if (res?.status === 404) {
+    await hub.env.DB.prepare(
+      `INSERT INTO ticket_missing (repo, number, fetched_at) VALUES (?, ?, ?)
+       ON CONFLICT (repo, number) DO UPDATE SET fetched_at = excluded.fetched_at`,
+    )
+      .bind(repo, n, now)
+      .run();
+    return { number: n, notFound: true };
+  }
   const issue = res?.ok ? ((await res.json().catch(() => null)) as Issue | null) : null;
   if (issue?.labels) {
-    await hub.env.DB.prepare(
-      `INSERT INTO ticket_cache (repo, number, data, fetched_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT (repo, number) DO UPDATE SET data = excluded.data, fetched_at = excluded.fetched_at`,
-    )
-      .bind(repo, n, JSON.stringify(slim(issue)), now)
-      .run();
+    await hub.env.DB.batch([
+      hub.env.DB.prepare(
+        `INSERT INTO ticket_cache (repo, number, data, fetched_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (repo, number) DO UPDATE SET data = excluded.data, fetched_at = excluded.fetched_at`,
+      ).bind(repo, n, JSON.stringify(slim(issue)), now),
+      hub.env.DB.prepare('DELETE FROM ticket_missing WHERE repo = ? AND number = ?').bind(repo, n),
+    ]);
     return fromIssue(issue, now, false);
   }
   // GitHub is down, refused, or there is no token: say so, with the last copy
@@ -187,17 +204,15 @@ const fetchTicket = async (hub: Hub, repo: string, n: number, now: number): Prom
 export const ticketsFor = async (ctx: Ctx, issues: IssueLink[], role: Role) => {
   const now = Date.now();
   const several = ctx.site.ticketRepos.length > 1;
-  const tickets = await Promise.all(
-    issues.map(async (link): Promise<Ticket & { repo?: string }> => {
-      const parts = issueParts(link);
-      const r = resolveLink(ctx.site, ctx.config.org, link);
-      const repo = several ? { repo: parts?.repo ?? ctx.site.ticketRepo.split('/')[1] } : {};
-      // A link to an unlisted repo names it on any site, so #4 is never read as the default's.
-      if (!r)
-        return { number: parts?.number ?? 0, notLinked: true, repo: parts?.repo ?? ctx.site.ticketRepo.split('/')[1] };
-      return { ...(await fetchTicket(ctx, r.repo, r.number, now)), ...repo };
-    }),
-  );
+  const tickets = await eachLimited(issues, TICKET_CALLS_AT_ONCE, async (link): Promise<Ticket & { repo?: string }> => {
+    const parts = issueParts(link);
+    const r = resolveLink(ctx.site, ctx.config.org, link);
+    const repo = several ? { repo: parts?.repo ?? ctx.site.ticketRepo.split('/')[1] } : {};
+    // A link to an unlisted repo names it on any site, so #4 is never read as the default's.
+    if (!r)
+      return { number: parts?.number ?? 0, notLinked: true, repo: parts?.repo ?? ctx.site.ticketRepo.split('/')[1] };
+    return { ...(await fetchTicket(ctx, r.repo, r.number, now)), ...repo };
+  });
   if (isTeam(role)) return tickets;
   return tickets.map((t) => {
     if (!('title' in t)) return t;
@@ -388,8 +403,8 @@ const syncTickets = async (
     return null;
   });
   if (!want || !(await recordRepo(hub, repo, problems)) || !(await ensureLabels(hub, repo, problems))) return 'failed';
-  const results = await Promise.all(
-    tickets.map((n) => syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'], problems)),
+  const results = await eachLimited(tickets, TICKET_CALLS_AT_ONCE, (n) =>
+    syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'], problems),
   );
   const recorded = await recordRepo(hub, repo, problems);
   return recorded && results.every(Boolean) ? 'updated' : 'failed';
@@ -451,17 +466,17 @@ const allCarrying = async (hub: Hub, repo: string, label: string, problems: Prob
 };
 
 // Tickets in this repo carrying one of our labels but linked from no page of
-// any site lose the label.
+// any site lose the label: every removal, across the three labels, through
+// one limiter (#176).
 const clearUnlinked = async (hub: Hub, repo: string, linked: Set<number>, problems: Problems): Promise<boolean> => {
-  const results = await Promise.all(
-    ownedLabels.map(async (label) => {
-      const carrying = await allCarrying(hub, repo, label, problems);
-      if (!carrying) return false;
-      const removals = carrying.filter((n) => !linked.has(n)).map((n) => removeLabel(hub, repo, n, label, problems));
-      return (await Promise.all(removals)).every(Boolean);
-    }),
+  const carrying = await Promise.all(ownedLabels.map((label) => allCarrying(hub, repo, label, problems)));
+  const removals = ownedLabels.flatMap((label, i) =>
+    (carrying[i] ?? []).filter((n) => !linked.has(n)).map((n) => ({ label, n })),
   );
-  return results.every(Boolean);
+  const removed = await eachLimited(removals, TICKET_CALLS_AT_ONCE, ({ label, n }) =>
+    removeLabel(hub, repo, n, label, problems),
+  );
+  return carrying.every((c) => c !== null) && removed.every(Boolean);
 };
 
 const reconcileRepo = async (hub: Hub, repo: string, problems: Problems): Promise<'updated' | 'failed' | 'none'> => {

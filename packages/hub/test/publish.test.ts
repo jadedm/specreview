@@ -437,6 +437,27 @@ describe("90: ticket links are checked against the site's ticket repos", () => {
     expect([r.status, message(r)]).toEqual([422, 'onboarding/signup: ticket sidecar#52 is listed twice']);
   });
 
+  it('#176 4: a page linking more than 20 tickets is 422 naming the page; nothing written', async () => {
+    const links = Array.from({ length: 21 }, (_, i) => i + 1);
+    const r = await publishWith(await oidcToken(), await withIssues(links));
+    expect([r.status, code(r), message(r)]).toEqual([
+      422,
+      'INVALID_BUNDLE',
+      'onboarding/signup: links more than 20 tickets',
+    ]);
+    expect(await pointer()).toBeNull();
+    const twenty = await publishWith(await oidcToken(), await withIssues(links.slice(0, 20)));
+    expect(twenty.status).toBe(200);
+  });
+
+  it('#176 4: the refusal names at most 200 characters of the page', async () => {
+    const m = await manifestFor();
+    const long = 'p'.repeat(1000);
+    m.pages[long] = { ...m.pages['onboarding/signup'], issues: Array.from({ length: 21 }, (_, i) => i + 1) };
+    const r = await publishWith(await oidcToken(), await bundleParts(m));
+    expect([r.status, message(r)]).toEqual([422, `${'p'.repeat(200)}: links more than 20 tickets`]);
+  });
+
   it('a site listing backend publishes backend#4', async () => {
     const r = await publishWith(await oidcToken(), await withIssues([52, 'backend#4']), SIDECAR, twoRepos());
     expect(r.status).toBe(200);

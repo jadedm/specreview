@@ -43,6 +43,12 @@ describe('front matter tickets', () => {
       expect(() => parseIssues('a.md', bad), JSON.stringify(bad)).toThrow('<repo>#<number>');
     }
   });
+
+  it('#176: at most 20 tickets', () => {
+    const links = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+    expect(parseIssues('a.md', links(20))).toHaveLength(20);
+    expect(() => parseIssues('a.md', links(21))).toThrow('a.md: front matter "issues" may list at most 20 tickets');
+  });
 });
 
 describe('section text', () => {
