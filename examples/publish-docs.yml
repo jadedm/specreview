@@ -31,6 +31,7 @@ jobs:
       hub: https://docs.example.com
       repo: sidecar
       docs: docs
+      # runner: '["self-hosted","linux"]'   # the runner both jobs use, as JSON for runs-on; ubuntu-latest when left out
       # exclude: |   # paths in the docs folder not to publish, one per line
       #   drafts/
       # prototypes: |   # paths in the docs folder published untouched as prototypes

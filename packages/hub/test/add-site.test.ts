@@ -437,6 +437,30 @@ describe('the review fixes', () => {
     expect(wf).toContain('      docs: "docs"\n      prototypes: |\n        product/prototypes\n');
   });
 
+  it('185 C1: a new site stays on the default runner, with no runner line', () => {
+    expect(workflowFor(NEW, 'main', HOST, COMMIT)).not.toContain('runner');
+  });
+
+  it.each([
+    [['self-hosted', 'aws', 'spot'], `      runner: '["self-hosted","aws","spot"]'`],
+    [['self-hosted'], `      runner: '"self-hosted"'`],
+  ])('185 C4, C5: runner %j is written after docs as JSON in single quotes', (labels, line) => {
+    const wf = workflowFor({ ...NEW, runner: labels, exclude: ['drafts/'] }, 'main', HOST, COMMIT);
+    expect(wf).toContain(`      docs: "docs"\n${line}\n      exclude: |\n`);
+    // What YAML hands GitHub is the text between the quotes, which is JSON.
+    expect(JSON.parse(line.split("'")[1])).toEqual(labels.length === 1 ? labels[0] : labels);
+  });
+
+  it('185 C6: ubuntu-latest, case aside, is the default and writes nothing', () => {
+    for (const label of ['ubuntu-latest', 'Ubuntu-Latest'])
+      expect(workflowFor({ ...NEW, runner: [label] }, 'main', HOST, COMMIT)).not.toContain('runner');
+  });
+
+  it('185: labels outside the rules never reach the YAML', () => {
+    for (const runner of [[], ["it's"], ['a b'], ['x:y'], Array.from({ length: 11 }, (_, i) => `l${i}`)])
+      expect(() => workflowFor({ ...NEW, runner }, 'main', HOST, COMMIT), JSON.stringify(runner)).toThrow();
+  });
+
   it('edits to an existing first page on a pre-made branch are refused, since that page is not written', async () => {
     const r = repoWith(3001, { 'docs/index.md': '# Ours\n' });
     r.refs.set(work, 'theirs');
@@ -1053,7 +1077,121 @@ describe('148: moving a site to the hub commit', () => {
       expect(writes()).toEqual(['POST /git/refs@acme/sidecar']);
     });
 
+    // The two jobs on other machines: each job's runs-on line replaced.
+    const runsOn = (built: string, published = built, file = twoJobs(OLD)) => {
+      const [before, after] = file.split('\n  publish:\n');
+      return `${before.replace('    runs-on: ubuntu-latest\n', built)}\n  publish:\n${after.replace('    runs-on: ubuntu-latest\n', published)}`;
+    };
+    const AWS = '    runs-on: [self-hosted, aws, spot]\n';
+
+    it('185 M2: jobs on self-hosted labels give a caller passing them as runner', async () => {
+      sidecarWith({ [WF]: runsOn(AWS) });
+      expect((await move({ repo: 'sidecar' })).status).toBe(200);
+      const got = text(fileOn('acme/sidecar', moved, WF)!);
+      expect(got).toBe(
+        caller({ repo: 'sidecar', docs: 'docs', exclude: [], prototypes: [], runner: ['self-hosted', 'aws', 'spot'] }),
+      );
+      expect(got).toContain(`      docs: "docs"\n      runner: '["self-hosted","aws","spot"]'\n`);
+    });
+
+    it.each([
+      ['a plain label', '    runs-on: self-hosted\n', `runner: '"self-hosted"'`],
+      [
+        'quoted labels with a comment',
+        `    runs-on: ["self-hosted", 'aws'] # ours\n`,
+        `runner: '["self-hosted","aws"]'`,
+      ],
+      ['a quoted plain label', `    runs-on: 'linux-arm'\n`, `runner: '"linux-arm"'`],
+    ])('185 M3: %s is read', async (_name, line, written) => {
+      sidecarWith({ [WF]: runsOn(line) });
+      expect((await move({ repo: 'sidecar' })).status).toBe(200);
+      expect(text(fileOn('acme/sidecar', moved, WF)!)).toContain(`      ${written}\n`);
+    });
+
+    it('185 M1, M4: ubuntu-latest, plain, as a one-label list or case aside, gives no runner input', async () => {
+      for (const line of [
+        '    runs-on: ubuntu-latest\n',
+        '    runs-on: [ubuntu-latest]\n',
+        '    runs-on: Ubuntu-Latest\n',
+      ]) {
+        sidecarWith({ [WF]: runsOn(line) });
+        expect((await move({ repo: 'sidecar' })).status, line).toBe(200);
+        expect(text(fileOn('acme/sidecar', moved, WF)!), line).toBe(caller({ repo: 'sidecar', docs: 'docs' }));
+      }
+    });
+
+    it("185 M7: another job's runs-on in the file is not read", async () => {
+      const file = runsOn(AWS).replace(
+        'jobs:\n',
+        'jobs:\n  lint:\n    runs-on: macos-latest\n    steps:\n      - run: echo lint\n',
+      );
+      sidecarWith({ [WF]: file });
+      expect((await move({ repo: 'sidecar' })).status).toBe(200);
+      expect(text(fileOn('acme/sidecar', moved, WF)!)).toContain(`runner: '["self-hosted","aws","spot"]'`);
+    });
+
+    it('185 M7: job names are not read; runs-on after steps counts, a nested runs-on does not', async () => {
+      const file = runsOn(
+        '',
+        '    strategy:\n      matrix:\n        runs-on: [macos-latest]\n    runs-on: [self-hosted, aws, spot]\n',
+      )
+        .replace('  build:\n    steps:\n', `  make:\n    steps:\n`)
+        .replace('    needs: build\n', '    needs: make\n')
+        .replace('  publish:\n', '  ship:\n')
+        .replace(
+          `          name: docs-site\n          path: .specreview\n\n`,
+          `          name: docs-site\n          path: .specreview\n    runs-on: [self-hosted, aws, spot]\n\n`,
+        );
+      expect(file).toContain('  make:\n    steps:\n');
+      expect(file).toContain('  ship:\n    if:');
+      expect(file).toContain('    needs: make\n    strategy:\n');
+      expect(file).toContain('path: .specreview\n    runs-on: [self-hosted, aws, spot]\n\n  ship:');
+      sidecarWith({ [WF]: file });
+      expect((await move({ repo: 'sidecar' })).status).toBe(200);
+      expect(text(fileOn('acme/sidecar', moved, WF)!)).toContain(`runner: '["self-hosted","aws","spot"]'`);
+    });
+
+    it('185 M5: the same labels in another order or case agree; the build job is written', async () => {
+      sidecarWith({ [WF]: runsOn(AWS, '    runs-on: [Spot, self-hosted, AWS, aws]\n') });
+      expect((await move({ repo: 'sidecar' })).status).toBe(200);
+      expect(text(fileOn('acme/sidecar', moved, WF)!)).toContain(`runner: '["self-hosted","aws","spot"]'`);
+    });
+
     const build = (lines: string) => twoJobs(OLD, lines);
+    it.each([
+      [
+        'jobs on different runners',
+        runsOn(AWS, '    runs-on: ubuntu-latest\n'),
+        'its build and publish jobs name different runners',
+      ],
+      ['jobs on different labels', runsOn(AWS, '    runs-on: [self-hosted, aws]\n'), 'name different runners'],
+      ['a job with no runs-on', runsOn(AWS, ''), 'the publish job sets runs-on nowhere'],
+      ['runs-on set twice', runsOn(`${AWS}${AWS}`, AWS), 'the build job sets runs-on twice'],
+      [
+        'a block list',
+        runsOn('    runs-on:\n      - self-hosted\n'),
+        'the build job&#39;s runs-on is not a runner label',
+      ],
+      ['a runner group', runsOn('    runs-on: { group: docs }\n'), 'the build job&#39;s runs-on is not'],
+      ['an expression', runsOn('    runs-on: ${{ matrix.os }}\n'), 'the build job&#39;s runs-on is not'],
+      ['an empty list', runsOn('    runs-on: []\n'), 'the build job&#39;s runs-on is not'],
+      ['a label with a space', runsOn(`    runs-on: ["self hosted"]\n`), 'the build job&#39;s runs-on is not'],
+      ['a label with a quote', runsOn(`    runs-on: ["it's"]\n`), 'the build job&#39;s runs-on is not'],
+      ['a label with a colon', runsOn(`    runs-on: "a:b"\n`), 'the build job&#39;s runs-on is not'],
+      [
+        'eleven labels',
+        runsOn(`    runs-on: [${Array.from({ length: 11 }, (_, i) => `l${i}`).join(', ')}]\n`),
+        'the build job&#39;s runs-on is not',
+      ],
+    ])('185 M5, M6: %s is refused, naming it, nothing written', async (_name, file, message) => {
+      sidecarWith({ [WF]: file });
+      const r = await move({ repo: 'sidecar' });
+      expect(r.status).toBe(409);
+      expect(html(r)).toContain('cannot be moved: ');
+      expect(html(r)).toContain(message);
+      expect(writes()).toEqual([]);
+    });
+
     it.each([
       ['no repo', build('          docs: "docs"\n'), 'the build step names no repo'],
       [

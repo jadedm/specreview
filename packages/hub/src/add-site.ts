@@ -79,8 +79,30 @@ export const unb64 = (text: string) =>
 const block = (key: string, patterns: string[] = []) =>
   patterns.length === 0 ? '' : `\n      ${key}: |\n${patterns.map((p) => `        ${p}`).join('\n')}`;
 
-// What a product repo's caller passes to the reusable workflow.
-export type CallerInputs = { repo: string; docs: string; exclude?: string[]; prototypes?: string[] };
+// What a product repo's caller passes to the reusable workflow. `runner` is
+// the runs-on labels both of its jobs use (#185); none means ubuntu-latest.
+export type CallerInputs = { repo: string; docs: string; exclude?: string[]; prototypes?: string[]; runner?: string[] };
+
+// Runner labels as the caller may hold them: these characters only, so their
+// JSON holds no quote that the single-quoted YAML around it would need
+// doubled, and nothing else YAML or GitHub's expressions read.
+const LABEL = /^[A-Za-z0-9._-]{1,100}$/;
+export const MAX_LABELS = 10;
+export const isRunner = (labels: string[]) =>
+  labels.length >= 1 && labels.length <= MAX_LABELS && labels.every((l) => LABEL.test(l));
+// GitHub matches runner labels case aside, and a runner must carry every
+// label listed, so order and repeats do not matter.
+const sameLabel = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const labelSet = (labels: string[]) => [...new Set(labels.map((l) => l.toLowerCase()))].sort().join(' ');
+const sameRunner = (a: string[], b: string[]) => labelSet(a) === labelSet(b);
+const DEFAULT_RUNNER = 'ubuntu-latest';
+
+// The caller's `runner` line, or nothing for the reusable workflow's default.
+const runnerLine = (labels: string[] = [DEFAULT_RUNNER]) => {
+  if (labels.length === 1 && sameLabel(labels[0], DEFAULT_RUNNER)) return '';
+  if (!isRunner(labels)) throw new Error('runner labels outside the rules reached the workflow');
+  return `\n      runner: '${JSON.stringify(labels.length === 1 ? labels[0] : labels)}'`;
+};
 
 // A product repo's docs workflow (#177): one job calling specreview's
 // reusable workflow pinned to the commit the hub runs. The hub accepts
@@ -114,7 +136,7 @@ jobs:
     with:
       hub: ${origin}
       repo: ${JSON.stringify(input.repo)}
-      docs: ${JSON.stringify(input.docs)}${block('exclude', input.exclude)}${block('prototypes', input.prototypes)}
+      docs: ${JSON.stringify(input.docs)}${runnerLine(input.runner)}${block('exclude', input.exclude)}${block('prototypes', input.prototypes)}
 `;
 
 const STARTER = (repo: string) =>
@@ -572,9 +594,13 @@ const scalarOf = (rest: string): string | null => {
   return /^[^&*!|>%@`{["'#]/.test(plain) ? plain : null;
 };
 
-const stepInputs = (lines: string[], name: 'build' | 'publish'): Map<string, Value> | string => {
+const usesOf = (lines: string[], name: 'build' | 'publish') => {
   const usesLine = new RegExp(`^[ \\t]*(?:-[ \\t]+)?uses:[ \\t]*["']?jadedm\\/specreview\\/${name}@`);
-  const at = lines.flatMap((l, i) => (usesLine.test(l) ? [i] : []));
+  return lines.flatMap((l, i) => (usesLine.test(l) ? [i] : []));
+};
+
+const stepInputs = (lines: string[], name: 'build' | 'publish'): Map<string, Value> | string => {
+  const at = usesOf(lines, name);
   if (at.length !== 1) return `it uses jadedm/specreview/${name} in ${at.length} steps`;
   const dash = /^[ \t]*-[ \t]+/.exec(lines[at[0]]);
   const keyIndent = dash ? dash[0].length : indentOf(lines[at[0]]);
@@ -613,6 +639,41 @@ const stepInputs = (lines: string[], name: 'build' | 'publish'): Map<string, Val
   return values;
 };
 
+// The labels of `runs-on: <label>` or `runs-on: [a, b]`, each plain or
+// quoted; null for anything else (a block list, a mapping, an expression).
+const labelsOf = (rest: string): string[] | null => {
+  const flow = /^\[([^\]]*)\][ \t]*(?:#.*)?$/.exec(rest);
+  const items = flow ? flow[1].split(',').map((item) => scalarOf(item.trim())) : [scalarOf(rest)];
+  if (items.some((l) => l === null)) return null;
+  const labels = items as string[];
+  return isRunner(labels) ? labels : null;
+};
+
+// The runs-on of the job holding line `at`: that job's keys are the lines at
+// one indent below its name, itself one indent below `jobs:`.
+const runsOnOf = (lines: string[], at: number, name: 'build' | 'publish'): string[] | string => {
+  const jobs = lines.findIndex((l) => /^jobs:[ \t]*(?:#.*)?$/.test(l));
+  const first = lines.findIndex((l, i) => i > jobs && !skipped(l));
+  if (jobs === -1 || first === -1 || first > at) return `the ${name} step is not in a job`;
+  const jobIndent = indentOf(lines[first]);
+  let header = at;
+  while (header > first && (skipped(lines[header]) || indentOf(lines[header]) !== jobIndent)) header -= 1;
+  const keys: string[] = [];
+  let keyIndent = -1;
+  for (let i = header + 1; i < lines.length; i++) {
+    if (skipped(lines[i])) continue;
+    if (indentOf(lines[i]) <= jobIndent) break;
+    if (keyIndent === -1) keyIndent = indentOf(lines[i]);
+    if (indentOf(lines[i]) === keyIndent) keys.push(lines[i].trim());
+  }
+  const runsOn = keys.flatMap((k) => /^runs-on:[ \t]*(.*)$/.exec(k)?.[1] ?? []);
+  if (runsOn.length !== 1) return `the ${name} job sets runs-on ${runsOn.length === 0 ? 'nowhere' : 'twice'}`;
+  return (
+    labelsOf(runsOn[0]) ??
+    `the ${name} job's runs-on is not a runner label or a [list] of them (letters, digits, . _ -, at most ${MAX_LABELS})`
+  );
+};
+
 const MAX_PATHS = 20;
 const pathsOf = (v: Value | undefined) => (v === undefined ? [] : typeof v === 'string' ? [v] : v).filter(Boolean);
 const BUILD_KEYS = ['repo', 'docs', 'exclude', 'prototypes'];
@@ -648,7 +709,13 @@ export const twoJobInputs = (text: string, site: Site): CallerInputs | string =>
     if (list.length > MAX_PATHS || list.some((p) => !isExcludePattern(p)))
       return `its ${key} paths are not paths the site build takes`;
   }
-  return { repo, docs, exclude, prototypes };
+  // Each step was found exactly once above.
+  const builtOn = runsOnOf(lines, usesOf(lines, 'build')[0], 'build');
+  if (typeof builtOn === 'string') return builtOn;
+  const publishedOn = runsOnOf(lines, usesOf(lines, 'publish')[0], 'publish');
+  if (typeof publishedOn === 'string') return publishedOn;
+  if (!sameRunner(builtOn, publishedOn)) return 'its build and publish jobs name different runners (runs-on)';
+  return { repo, docs, exclude, prototypes, runner: builtOn };
 };
 
 // Opens a pull request replacing a two-job workflow with the caller of the
