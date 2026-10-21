@@ -494,6 +494,22 @@ http
     }
     if (url.pathname === '/rows')
       return send((await db.prepare('SELECT site, page, status, version FROM page_status').all()).results);
+    // Ticket repos the hub has labelled (#155); `/record-repo?repo=acme/x`
+    // records one as a sync would, for a repo this config does not list.
+    if (url.pathname === '/label-repos')
+      return send((await db.prepare('SELECT repo, failing_since FROM label_repos ORDER BY repo').all()).results);
+    if (url.pathname === '/record-repo') {
+      await db
+        .prepare('INSERT INTO label_repos (repo, labelled_at) VALUES (?, ?) ON CONFLICT (repo) DO NOTHING')
+        .bind(url.searchParams.get('repo'), Date.now() - 1000)
+        .run();
+      return send({ ok: true });
+    }
+    if (url.pathname === '/set-label') {
+      const issue = repoIssues[url.searchParams.get('repo')]?.get(Number(url.searchParams.get('n')));
+      if (issue) issue.labels.push(url.searchParams.get('label'));
+      return send(issue?.labels ?? null);
+    }
     // Removals recorded on the admin page (#12, #67), shown or not.
     if (url.pathname === '/pending')
       return send(
