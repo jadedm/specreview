@@ -168,12 +168,13 @@ const grants = (issued, p, method) =>
 // Two repos for adding a site (#57): newdocs, and docs-hub holding the config.
 let shaSeq = 0;
 const sha = () => `smokesha${++shaSeq}`;
-const repoWith = (id, files) => ({
+const repoWith = (id, files, branch = 'main') => ({
   id,
-  refs: new Map([['main', sha()]]),
+  default: branch,
+  refs: new Map([[branch, sha()]]),
   files: new Map([
     [
-      'main',
+      branch,
       new Map(Object.entries(files).map(([k, t]) => [k, { sha: sha(), content: Buffer.from(t).toString('base64') }])),
     ],
   ]),
@@ -189,18 +190,29 @@ delete orgFile.accessAdminAud;
 // Nor the prototype hostname's (#116: deploy sets them from hub.json).
 delete orgFile.protoHostname;
 delete orgFile.accessProtoAud;
+// sidecar's docs workflow on develop, pinned to an older commit than the
+// hub's, for moving it from the Sites tab (#148).
+const OLD_PIN = 'a'.repeat(40);
 const repoState = {
+  sidecar: repoWith(
+    2001,
+    {
+      '.github/workflows/docs.yml': `name: docs\non: push\njobs:\n  build:\n    steps:\n      - run: echo ours\n      - uses: jadedm/specreview/build@${OLD_PIN}\n  publish:\n    steps:\n      - uses: jadedm/specreview/publish@${OLD_PIN}\n`,
+    },
+    'develop',
+  ),
   newdocs: repoWith(3001, { 'README.md': '# newdocs\n' }),
   'docs-hub': repoWith(4001, {
     'specreview.config.json': `${JSON.stringify({ ...orgFile, brand: { name: 'Acme', logo: 'logo.png' } }, null, 2)}\n`,
   }),
 };
 const repoApi = async (req, url) => {
-  const m = /^\/repos\/acme\/(newdocs|docs-hub)(\/.*)?$/.exec(url.pathname);
-  if (!m) return null;
+  const m = /^\/repos\/acme\/(sidecar|newdocs|docs-hub)(\/.*)?$/.exec(url.pathname);
+  // sidecar's tickets and labels are the issue stand-in's below.
+  if (!m || (m[1] === 'sidecar' && /^\/(issues|labels)/.test(m[2] ?? ''))) return null;
   const r = repoState[m[1]];
   const rest = m[2] ?? '';
-  if (rest === '' && req.method === 'GET') return Response.json({ id: r.id, default_branch: 'main' });
+  if (rest === '' && req.method === 'GET') return Response.json({ id: r.id, default_branch: r.default });
   const ref = /^\/git\/ref\/heads\/(.+)$/.exec(rest);
   if (ref)
     return r.refs.has(ref[1])
@@ -210,13 +222,14 @@ const repoApi = async (req, url) => {
     const { ref: name, sha: at } = await req.json();
     const b = name.replace('refs/heads/', '');
     if (r.refs.has(b)) return Response.json({ message: 'Reference already exists' }, { status: 422 });
+    const from = [...r.refs.entries()].find(([, s]) => s === at)?.[0] ?? r.default;
     r.refs.set(b, at);
-    r.files.set(b, new Map(r.files.get('main')));
+    r.files.set(b, new Map(r.files.get(from)));
     return Response.json({ ref: name }, { status: 201 });
   }
   const c = /^\/contents\/(.+)$/.exec(rest);
   if (c && req.method === 'GET') {
-    const f = r.files.get(url.searchParams.get('ref') ?? 'main')?.get(c[1]);
+    const f = r.files.get(url.searchParams.get('ref') ?? r.default)?.get(c[1]);
     return f ? Response.json(f) : Response.json({}, { status: 404 });
   }
   if (c && req.method === 'PUT') {
@@ -481,6 +494,7 @@ http
           {
             branches: [...r.refs.keys()],
             work: [...(r.files.get('specreview/add-newdocs')?.keys() ?? [])],
+            branchesWithFiles: [...r.files.keys()],
             pulls: r.pulls.map((p) => `${p.head} -> ${p.base}: ${p.title}`),
           },
         ]),

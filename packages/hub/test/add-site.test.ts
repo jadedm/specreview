@@ -619,7 +619,8 @@ describe('#63: the form offers lists from GitHub', () => {
 
   it('8: when GitHub cannot list, the form is typed, with a note', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    github.app!.failLookups = [500, 500, 500];
+    // The sites' pin reads (#148) ask GitHub too, and fail with it.
+    github.app!.failLookups = Array(9).fill(500);
     const p = await page();
     expect(p).toContain('GitHub did not list the repos in time, or could not; type the names.');
     expect(p).toContain('<input name="repo"');
@@ -737,5 +738,212 @@ describe('#88: leaving paths out from the add-site form', () => {
     expect(r.status).toBe(400);
     expect(html(r)).toContain('leave out:');
     expect(calls).toEqual([]);
+  });
+});
+
+// #148: the Sites tab shows where each site's docs workflow pins the
+// specreview actions and opens a pull request moving them to the hub's
+// commit. Case numbers are the ticket's.
+describe('148: moving a site to the hub commit', () => {
+  const OLD = 'a'.repeat(40);
+  const OTHER = 'b'.repeat(40);
+  const WF = '.github/workflows/docs.yml';
+  // A team's own workflow: a comment, a custom step, a version note.
+  const workflow = (build: string, publish: string) =>
+    `name: docs\n# our own note\non: push\njobs:\n  build:\n    steps:\n      - run: echo custom\n      - uses: jadedm/specreview/build@${build}\n  publish:\n    steps:\n      - uses: jadedm/specreview/publish@${publish} # pinned\n`;
+  // sidecar publishes from develop.
+  const sidecarWith = (files: Record<string, string>) => {
+    const repo = repoWith(5001, files);
+    repo.default = 'develop';
+    repo.refs = new Map([['develop', sha()]]);
+    repo.files = new Map([['develop', repo.files.get('main')!]]);
+    repos.set('acme/sidecar', repo);
+  };
+  const sitesPage = (e: Record<string, string | undefined> = env) =>
+    call('/_admin/sites', { raw: true, email: ADMIN, envOverride: e }).then(html);
+  const rowOf = (p: string, repo: string) => {
+    const at = p.indexOf(`<span class="title">${repo}</span>`);
+    return p.slice(at, p.indexOf('</li>', at));
+  };
+  const upgrade = (fields: Record<string, string>, opts: { email?: string; origin?: string } = {}) =>
+    call('/_admin/sites/upgrade', {
+      raw: true,
+      method: 'POST',
+      email: opts.email ?? ADMIN,
+      envOverride: env,
+      rawBody: form(fields),
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: opts.origin ?? ADMIN_HOST },
+    });
+  const work = 'specreview/upgrade-sidecar-ccccccc';
+  const writes = () => calls.filter((c) => !c.startsWith('GET '));
+
+  beforeEach(() => {
+    sidecarWith({ [WF]: workflow(OLD, OLD) });
+    github.app!.installations.set('acme/sidecar', 7);
+  });
+
+  it("1: a site on the hub's commit says so and has no button", async () => {
+    sidecarWith({ [WF]: workflow(COMMIT, COMMIT) });
+    const row = rowOf(await sitesPage(), 'sidecar');
+    expect(row).toContain("docs workflow on the hub's commit, <code>ccccccc</code>");
+    expect(row).not.toContain('/_admin/sites/upgrade');
+  });
+
+  it('2, 16: an older commit is named, with a button posting only the repo', async () => {
+    const row = rowOf(await sitesPage(), 'sidecar');
+    expect(row).toContain('docs workflow on <code>aaaaaaa</code>; the hub runs <code>ccccccc</code>');
+    expect(row).toContain(
+      '<form class="inline" method="post" action="/_admin/sites/upgrade"><input type="hidden" name="repo" value="sidecar"><button',
+    );
+    expect(row.match(/<input/g)).toHaveLength(1);
+  });
+
+  it('3: build and publish on different commits are both named', async () => {
+    sidecarWith({ [WF]: workflow(OLD, OTHER) });
+    expect(rowOf(await sitesPage(), 'sidecar')).toContain('on <code>aaaaaaa</code> and <code>bbbbbbb</code>;');
+  });
+
+  it('5: a commented-out tag pin beside commit pins does not stop the button', async () => {
+    sidecarWith({ [WF]: `${workflow(OLD, OLD)}      # - uses: jadedm/specreview/build@v0.2.0\n` });
+    expect(rowOf(await sitesPage(), 'sidecar')).toContain('/_admin/sites/upgrade');
+  });
+
+  it('4, 5: a missing workflow, or one pinned to a tag, says why and has no button', async () => {
+    sidecarWith({ 'README.md': '# x\n' });
+    let row = rowOf(await sitesPage(), 'sidecar');
+    expect(row).toContain('no .github/workflows/docs.yml on develop');
+    expect(row).not.toContain('/_admin/sites/upgrade');
+    sidecarWith({ [WF]: workflow('v0.3.0', 'v0.3.0') });
+    row = rowOf(await sitesPage(), 'sidecar');
+    expect(row).toContain('does not pin both specreview actions to a commit');
+    expect(row).not.toContain('/_admin/sites/upgrade');
+    // Half pinned: build on the hub's commit, publish on a tag.
+    sidecarWith({ [WF]: workflow(COMMIT, 'v0.3.0') });
+    row = rowOf(await sitesPage(), 'sidecar');
+    expect(row).toContain('does not pin both specreview actions to a commit');
+    expect(row).not.toContain("on the hub's commit");
+  });
+
+  it('5: a half-pinned workflow is refused by the post, nothing written', async () => {
+    sidecarWith({ [WF]: workflow(OLD, 'v0.3.0') });
+    const r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(409);
+    expect(writes()).toEqual([]);
+  });
+
+  it('8: only `uses:` lines move; comments, run lines and other owners stay; a byte-order mark stays', async () => {
+    const extra = `\ufeff${workflow(OLD, OLD)}      # was jadedm/specreview/build@${OLD}\n      # - uses: jadedm/specreview/build@${OLD}\n      - run: echo "uses: jadedm/specreview/publish@${OLD}"\n      - uses: evil-jadedm/specreview/build@${OLD}\n`;
+    sidecarWith({ [WF]: extra });
+    expect((await upgrade({ repo: 'sidecar' })).status).toBe(200);
+    const want = `\ufeff${workflow(COMMIT, COMMIT)}      # was jadedm/specreview/build@${OLD}\n      # - uses: jadedm/specreview/build@${OLD}\n      - run: echo "uses: jadedm/specreview/publish@${OLD}"\n      - uses: evil-jadedm/specreview/build@${OLD}\n`;
+    // Byte for byte: the mark is EF BB BF at the start, as TextEncoder writes it.
+    expect(fileOn('acme/sidecar', work, WF)!.content).toBe(b64(want));
+  });
+
+  it('9: a branch left from an upgrade to an older hub commit is not reused', async () => {
+    const repo = repos.get('acme/sidecar')!;
+    repo.refs.set('specreview/upgrade-sidecar-bbbbbbb', sha());
+    repo.files.set(
+      'specreview/upgrade-sidecar-bbbbbbb',
+      new Map([[WF, { sha: sha(), content: b64(workflow(OTHER, OTHER)) }]]),
+    );
+    expect((await upgrade({ repo: 'sidecar' })).status).toBe(200);
+    expect(repo.pulls.map((p) => p.head)).toEqual([work]);
+  });
+
+  it('step 2 of adding a site reads no pins', async () => {
+    calls.length = 0;
+    await call('/_admin/sites?repo=newdocs', { raw: true, email: ADMIN, envOverride: env });
+    expect(calls.some((c) => c.includes('docs.yml@acme/sidecar'))).toBe(false);
+  });
+
+  it('6: a repo the app is not installed on cannot be read; the other rows still show', async () => {
+    const p = await sitesPage();
+    expect(rowOf(p, 'web')).toContain('docs workflow could not be read');
+    expect(rowOf(p, 'sidecar')).toContain('<code>aaaaaaa</code>');
+  });
+
+  it('7: without the hub commit or the app, no pins are shown', async () => {
+    expect(await sitesPage({ ...env, SPECREVIEW_COMMIT: undefined })).not.toContain('docs workflow');
+    expect(await sitesPage({ ...env, GITHUB_APP_ID: undefined, GITHUB_APP_PRIVATE_KEY: undefined })).not.toContain(
+      'docs workflow',
+    );
+  });
+
+  it('8: the post opens a pull request changing only the pins', async () => {
+    const r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(200);
+    expect(html(r)).toContain('https://github.com/acme/sidecar/pull/1');
+    expect(text(fileOn('acme/sidecar', work, WF)!)).toBe(workflow(COMMIT, COMMIT));
+    expect(text(fileOn('acme/sidecar', 'develop', WF)!)).toBe(workflow(OLD, OLD));
+    expect(repos.get('acme/sidecar')!.pulls).toMatchObject([
+      { head: work, base: 'develop', title: 'Move specreview to ccccccc' },
+    ]);
+  });
+
+  it('9: run twice, the branch and the pull request are reused', async () => {
+    await upgrade({ repo: 'sidecar' });
+    const again = await upgrade({ repo: 'sidecar' });
+    expect(again.status).toBe(200);
+    expect(repos.get('acme/sidecar')!.pulls).toHaveLength(1);
+  });
+
+  it('10, 10b: an existing branch with other changes, in another file or the workflow, is refused', async () => {
+    await upgrade({ repo: 'sidecar' });
+    const branch = repos.get('acme/sidecar')!.files.get(work)!;
+    branch.set('extra.md', { sha: sha(), content: b64('x') });
+    let r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(409);
+    expect(html(r)).toContain('delete it');
+    branch.delete('extra.md');
+    branch.set(WF, { sha: sha(), content: b64(workflow(COMMIT, COMMIT).replace('echo custom', 'echo theirs')) });
+    calls.length = 0;
+    r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(409);
+    expect(html(r)).toContain(`already has a branch ${work} with other changes to ${WF}`);
+    // The branch create is tried first and refused as existing; nothing else is written.
+    expect(writes()).toEqual(['POST /git/refs@acme/sidecar']);
+    expect(text(branch.get(WF)!)).toContain('echo theirs');
+  });
+
+  it("11: a site already on the hub's commit is refused, nothing written", async () => {
+    sidecarWith({ [WF]: workflow(COMMIT, COMMIT) });
+    const r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(409);
+    expect(html(r)).toContain('already on the hub&#39;s commit');
+    expect(writes()).toEqual([]);
+  });
+
+  it.each([[{ repo: 'newdocs' }], [{ repo: '' }], [{ repo: 'Bad Name' }], [{}]])(
+    '12: %j is not a site: 400, nothing asked of GitHub',
+    async (fields) => {
+      const r = await upgrade(fields as Record<string, string>);
+      expect(r.status).toBe(400);
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it('13: another origin or a non-admin is refused', async () => {
+    expect((await upgrade({ repo: 'sidecar' }, { origin: 'https://evil.example' })).status).toBe(403);
+    expect((await upgrade({ repo: 'sidecar' }, { email: 'dev@acme.dev' })).status).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  it('14: an app without Workflows write is told so, nothing written', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    github.app!.granted = { issues: 'write', metadata: 'read', contents: 'write', pull_requests: 'write' };
+    const r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(409);
+    expect(html(r)).toContain('lacks Contents, Pull requests or Workflows write');
+    expect(writes()).toEqual([]);
+  });
+
+  it('15: GitHub failing part way names the step and what was made', async () => {
+    fail = 'POST /pulls@acme/sidecar';
+    const r = await upgrade({ repo: 'sidecar' });
+    expect(r.status).toBe(502);
+    expect(html(r)).toContain('opening the pull request on acme/sidecar');
+    expect(html(r)).toContain(`branch ${work} on acme/sidecar`);
+    expect(html(r)).toContain(`${WF} on acme/sidecar (${work})`);
   });
 });

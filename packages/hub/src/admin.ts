@@ -1,7 +1,18 @@
 import { changeAccess, listsIn, readConfig, type AccessChange, type Outcome } from './access-edit';
-import { AddSiteError, addSite, inputProblem, listBranches, type SiteInput } from './add-site';
+import {
+  AddSiteError,
+  addSite,
+  inputProblem,
+  listBranches,
+  pinnedOf,
+  shortCommit,
+  upgradeSite,
+  type Made,
+  type Pinned,
+  type SiteInput,
+} from './add-site';
 import { pendingFor, type List } from './pending';
-import { isRepoName, type HubConfig } from './config';
+import { isRepoName, type HubConfig, type Site } from './config';
 import type { Deps } from './ctx';
 import type { Env } from './env';
 import { forgetStoredAuth } from './github-auth';
@@ -160,13 +171,50 @@ const INTRO =
 // commit the hub runs (for the workflow's pins). The form offers lists from
 // GitHub (#63) in two steps, since the page runs no script: the repo, then a
 // form with its branches. The lists only help; the post is checked as before.
+// Where a site's docs workflow pins the specreview actions (#148), against
+// the commit the hub runs.
+const pinText = (p: Pinned, commit: string, site: Site) => {
+  const hub = `<code>${escapeHtml(shortCommit(commit))}</code>`;
+  const byKind: Record<Pinned['kind'], () => string> = {
+    current: () => `docs workflow on the hub's commit, ${hub}`,
+    other: () =>
+      `docs workflow on ${(p as { commits: string[] }).commits.map((c) => `<code>${escapeHtml(shortCommit(c))}</code>`).join(' and ')}; the hub runs ${hub}`,
+    missing: () => `no ${escapeHtml(site.workflow)} on ${escapeHtml(site.branch)}`,
+    unpinned: () => `${escapeHtml(site.workflow)} does not pin both specreview actions to a commit`,
+    unreadable: () => 'docs workflow could not be read',
+  };
+  return byKind[p.kind]();
+};
+const upgradeForm = (site: Site) =>
+  `<form class="inline" method="post" action="/_admin/sites/upgrade"><input type="hidden" name="repo" value="${escapeHtml(site.repo)}"><button class="quiet" type="submit">Move to the hub's commit</button></form>`;
+
+// A site whose pins can move gets the button beside it, as the People tab's rows do.
+const siteRow = (s: Site, pin: { pinned: Pinned; commit: string } | null) => {
+  const text = `<span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepos.join(', '))}${s.visibility === 'public' ? ', public' : ''}</span>${pin ? `<span class="meta">${pinText(pin.pinned, pin.commit, s)}</span>` : ''}`;
+  if (pin?.pinned.kind !== 'other') return `<li><span class="site">${text}</span></li>`;
+  return `<li><span class="row"><span>${text}</span><span>${upgradeForm(s)}</span></span></li>`;
+};
+
+// Each site's pins, all at once, each within the wait; nothing without the
+// app or the hub's commit.
+const pinsFor = async (a: Admin, found: Found, sites: Site[]) => {
+  const commit = a.env.SPECREVIEW_COMMIT;
+  // Step 2 of adding a site asks GitHub for its own lists; no pins there.
+  if (!commit || !usable(a, found) || a.url.searchParams.has('repo')) return sites.map(() => null);
+  return Promise.all(
+    sites.map(async (s) => ({
+      commit,
+      pinned: await within(pinnedOf(a.deps.github, `${a.config.org}/${s.repo}`, s, commit), {
+        kind: 'unreadable' as const,
+      }),
+    })),
+  );
+};
+
 const sitesFor = async (a: Admin, found: Found) => {
-  const listed = [...a.config.sites.values()]
-    .map(
-      (s) =>
-        `<li><span class="site"><span class="title">${escapeHtml(s.repo)}</span><span class="meta">tickets in ${escapeHtml(s.ticketRepos.join(', '))}${s.visibility === 'public' ? ', public' : ''}</span></span></li>`,
-    )
-    .join('');
+  const sites = [...a.config.sites.values()];
+  const pins = await pinsFor(a, found, sites);
+  const listed = sites.map((s, i) => siteRow(s, pins[i])).join('');
   const current = `<p class="note">Each site is a repo's docs, published at <code>/&lt;repo&gt;/</code> on the docs hostname.</p>${listed ? `<ul>${listed}</ul>` : '<p>No sites yet.</p>'}`;
   const missing = [
     !usable(a, found) && 'a GitHub App (the <a href="/_admin/github">GitHub App</a> tab)',
@@ -487,9 +535,10 @@ const addSitePost = async (a: Admin) => {
     throw err;
   });
   if (added instanceof AddSiteError) {
-    const made = added.made.length
-      ? `<p>Made before it stopped:</p><ul>${added.made.map((m) => `<li><span class="site"><span class="title">${escapeHtml(m.what)}</span>${m.url ? `<span class="meta"><a href="${escapeHtml(m.url)}">${escapeHtml(m.url)}</a></span>` : ''}</span></li>`).join('')}</ul><p class="note">Fix the cause and add the site again: the branch and any open pull request are reused.</p>`
-      : '';
+    const made = madeList(
+      added.made,
+      'Fix the cause and add the site again: the branch and any open pull request are reused.',
+    );
     return say(a, added.status, 'The site was not added', `<p>${escapeHtml(added.message)}.</p>${made}`);
   }
   const link = (u: string) => `<a href="${escapeHtml(u)}">${escapeHtml(u)}</a>`;
@@ -498,6 +547,40 @@ const addSitePost = async (a: Admin) => {
     200,
     `Pull requests opened for ${input.repo}`,
     `<ol><li>Merge ${link(added.config)} and wait for the apply workflow to finish green.</li><li>Then merge ${link(added.product)}. Its push publishes the site at <a href="https://${escapeHtml(docsHostnameOf(a))}/${escapeHtml(input.repo)}/">/${escapeHtml(input.repo)}/</a>.</li></ol><p class="note">If the docs run is refused because the hub did not know the site yet, re-run it once the hub is deployed.</p>`,
+  );
+};
+
+const madeList = (made: Made[], again: string) =>
+  made.length
+    ? `<p>Made before it stopped:</p><ul>${made.map((m) => `<li><span class="site"><span class="title">${escapeHtml(m.what)}</span>${m.url ? `<span class="meta"><a href="${escapeHtml(m.url)}">${escapeHtml(m.url)}</a></span>` : ''}</span></li>`).join('')}</ul><p class="note">${again}</p>`
+    : '';
+
+// Moving a site's workflow pins to the hub's commit (#148).
+const upgradePost = async (a: Admin) => {
+  if (a.request.headers.get('origin') !== a.url.origin) throw new AppError(403, 'BAD_ORIGIN');
+  const form = await formOf(a.request);
+  const repo = (form.get('repo') ?? '').trim().toLowerCase();
+  const site = isRepoName(repo) ? a.config.sites.get(repo) : undefined;
+  if (!site) return say(a, 400, 'Check the form', '<p>repo: one of the sites.</p>');
+  const done = await upgradeSite(site, { config: a.config, env: a.env, auth: a.deps.github, email: a.email }).catch(
+    (err: unknown) => {
+      if (err instanceof AddSiteError) return err;
+      throw err;
+    },
+  );
+  if (done instanceof AddSiteError)
+    return say(
+      a,
+      done.status,
+      'The workflow was not moved',
+      `<p>${escapeHtml(done.message)}.</p>${madeList(done.made, 'Fix the cause and try again: the branch and any open pull request are reused.')}`,
+    );
+  const link = `<a href="${escapeHtml(done.pull)}">${escapeHtml(done.pull)}</a>`;
+  return say(
+    a,
+    200,
+    `Pull request opened for ${site.repo}`,
+    `<p>Merge ${link}. Its push publishes the docs with the hub's version.</p><p><a href="/_admin/sites">Back to the sites</a></p>`,
   );
 };
 
@@ -626,6 +709,7 @@ const forget = async (a: Admin) => {
 const ROUTES: Record<string, Route> = {
   '/_admin/': { GET: (a) => people(a) },
   '/_admin/sites': { GET: sitesPage, POST: addSitePost },
+  '/_admin/sites/upgrade': { POST: upgradePost },
   '/_admin/github': { GET: githubPage },
   '/_admin/github/created': { GET: created },
   '/_admin/github/forget': { POST: forget },
