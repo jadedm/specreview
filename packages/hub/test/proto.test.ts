@@ -295,13 +295,28 @@ describe('112: the prototype hostname', () => {
   it('8: someone who may not read the site, or a reader removed on the admin page, is refused', async () => {
     await published();
     const path = `/${SIDECAR}/product/x/Main.dc.html`;
-    expect((await proto(path, { email: 'x@stranger.example' })).status).toBe(403);
+    expect((await proto(path, { email: 'x@stranger.example' })).status).toBe(404);
     await env.DB.prepare(
       'INSERT INTO pending_removals (site, list, entry, removed_by, removed_at) VALUES (?, ?, ?, ?, ?)',
     )
       .bind(`acme/${SIDECAR}`, 'readers', '@initech.example', 'owner@acme.dev', Date.now())
       .run();
-    expect((await proto(path)).status).toBe(403);
+    expect((await proto(path)).status).toBe(404);
+  });
+
+  it('#176: someone who may not read the site gets what a name that is not a site gets, for any method', async () => {
+    await published();
+    const shape = (r: { status: number; headers: Headers; body: unknown }) => [
+      r.status,
+      [...r.headers],
+      String(r.body),
+    ];
+    for (const method of ['GET', 'HEAD', 'POST', 'PUT']) {
+      const stranger = await proto(`/${SIDECAR}/product/x/Main.dc.html`, { email: 'x@stranger.example', method });
+      const nowhere = await proto('/no-such-site/product/x/Main.dc.html', { email: 'x@stranger.example', method });
+      expect(shape(stranger), method).toEqual(shape(nowhere));
+      expect(stranger.status, method).toBe(404);
+    }
   });
 
   it('9, 10: only GET and HEAD; HEAD is headers only', async () => {
@@ -437,7 +452,7 @@ describe('113: a docs link into a prototype folder', () => {
   it('9: no sign-in, or someone who may not read the site, gets no redirect', async () => {
     await published();
     expect((await docs(`/${SIDECAR}/product/x/Main.dc.html`, { email: null })).status).toBe(401);
-    expect((await docs(`/${SIDECAR}/product/x/Main.dc.html`, { email: 'x@stranger.example' })).status).toBe(403);
+    expect((await docs(`/${SIDECAR}/product/x/Main.dc.html`, { email: 'x@stranger.example' })).status).toBe(404);
   });
 
   it('a public site: an anonymous visitor is redirected, publicly cacheable for a minute like its pages', async () => {

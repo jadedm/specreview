@@ -173,7 +173,7 @@ describe('20: signing in on a public site', () => {
     expect((await anon(`/${SIDECAR}/_signin/x`, { email: 'dev@acme.dev' })).status).toBe(404);
   });
 
-  it('10: someone who may not read the site gets 403 at _signin', async () => {
-    expect((await anon(`/${SIDECAR}/_signin`, { email: 'x@stranger.example' })).status).toBe(403);
+  it('10: someone who may not read the site gets 404 at _signin', async () => {
+    expect((await anon(`/${SIDECAR}/_signin`, { email: 'x@stranger.example' })).status).toBe(404);
   });
 });

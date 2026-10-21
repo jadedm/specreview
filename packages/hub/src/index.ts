@@ -242,8 +242,9 @@ const handle = async (request: Request, env: Env, deps: Deps): Promise<Response>
   const configured = roleOf(email, route.site);
   const role = configured === 'none' ? configured : roleOf(email, await withPending(env, route.site));
   // Read access is decided before anything about the site is read: someone
-  // who may not read it gets the same 403 on every path, published or not.
-  if (!canRead(role)) throw new AppError(403, 'FORBIDDEN');
+  // who may not read it gets, on every path, published or not, the 404 a name
+  // that is not a site gets (#176).
+  if (!canRead(role)) throw new AppError(404, 'NOT_FOUND');
   const ctx: Ctx = makeCtx(env, deps, config, route.site);
   const req = { request, url, ctx, caller: { email, role } };
   const byKind: Record<Route['kind'], () => Promise<Response>> = {

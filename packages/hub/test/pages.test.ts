@@ -124,9 +124,9 @@ describe('153: a site never published', () => {
     expect(hist.headers.get('content-type')).toContain('application/json');
   });
 
-  it('8: someone who may not read the site still gets 403', async () => {
+  it('8: someone who may not read the site still gets 404', async () => {
     unpublishedStore();
-    expect((await page(`/${SIDECAR}/`, 'x@stranger.example')).status).toBe(403);
+    expect((await page(`/${SIDECAR}/`, 'x@stranger.example')).status).toBe(404);
   });
 
   it('9: a broken pointer keeps its JSON error', async () => {
@@ -180,7 +180,7 @@ describe('3-5: pages and assets of the current version', () => {
 });
 
 describe('6, 7, 18: who is refused, before anything is read', () => {
-  it('18: someone who may not read the site gets 403 everywhere, with no store or database read', async () => {
+  it('18: someone who may not read the site gets the 404 a name that is not a site gets, everywhere, with no store or database read (#176)', async () => {
     const { files, reads } = spyStore(publishedFiles());
     files.set(`${GLOBEX}/current.json`, 'not json');
     files.delete(`${WEB}/current.json`);
@@ -195,10 +195,21 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
       `/${SIDECAR}/_history/${'a'.repeat(40)}/${PAGE}.md`,
       `/${GLOBEX}/${PAGE}`,
     ];
+    const nowhere = await call(`/no-such-site/${PAGE}`, { raw: true, email: STRANGER, envOverride: noDb });
+    expect([nowhere.status, errorCode(nowhere)]).toEqual([404, 'NOT_FOUND']);
     for (const path of paths) {
       const r = await call(path, { raw: true, email: STRANGER, envOverride: noDb });
-      expect(r.status, path).toBe(403);
-      expect(errorCode(r), path).toBe('FORBIDDEN');
+      expect([r.status, r.body, [...r.headers]], path).toEqual([nowhere.status, nowhere.body, [...nowhere.headers]]);
+    }
+    for (const method of ['POST', 'DELETE']) {
+      const r = await call(`/${SIDECAR}/_api/comments`, {
+        raw: true,
+        email: STRANGER,
+        envOverride: noDb,
+        method,
+        body: {},
+      });
+      expect([r.status, errorCode(r)], method).toEqual([404, 'NOT_FOUND']);
     }
     expect(reads).toEqual([]);
   });
@@ -215,7 +226,7 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
     expect(await as('Riya@INITECH.example')).toBe(200);
     expect(await as('  riya@initech.example ')).toBe(200);
     expect(await as('riya@x@initech.example')).toBe(401);
-    expect(await as('riya@initech.example.evil')).toBe(403);
+    expect(await as('riya@initech.example.evil')).toBe(404);
   });
 
   it('8, 19: an exact reader entry admits that address only', async () => {
@@ -226,9 +237,9 @@ describe('6, 7, 18: who is refused, before anything is read', () => {
     const status = async (email: string) =>
       (await call(`/${SIDECAR}/${PAGE}`, { raw: true, email, envOverride: override })).status;
     expect(await status('pm@partner.example')).toBe(200);
-    expect(await status('pm+tag@partner.example')).toBe(403);
-    expect(await status('pm2@partner.example')).toBe(403);
-    expect(await status(READER)).toBe(403);
+    expect(await status('pm+tag@partner.example')).toBe(404);
+    expect(await status('pm2@partner.example')).toBe(404);
+    expect(await status(READER)).toBe(404);
   });
 
   it('20: team and approvers listed as readers stay team and approver', async () => {
@@ -279,7 +290,7 @@ describe('9, 25-28: methods, resolution, types and headers', () => {
   it('25: a conditional request is never a 304, signed in or not', async () => {
     const headers = { 'if-none-match': '*', 'if-modified-since': 'Thu, 01 Jan 2026 00:00:00 GMT' };
     expect((await page(`/${SIDECAR}/${PAGE}`, null, { headers })).status).toBe(401);
-    expect((await page(`/${SIDECAR}/${PAGE}`, STRANGER, { headers })).status).toBe(403);
+    expect((await page(`/${SIDECAR}/${PAGE}`, STRANGER, { headers })).status).toBe(404);
     expect((await page(`/${SIDECAR}/${PAGE}`, READER, { headers })).status).toBe(200);
   });
 

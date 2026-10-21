@@ -37,11 +37,17 @@ export const issueParts = (link: unknown): { repo: string | null; number: number
   return m && Number.isSafeInteger(n) && m[1] !== '.' && m[1] !== '..' ? { repo: m[1], number: n } : null;
 };
 
-const isPage = (p: unknown): p is ManifestPage => {
+// A page links at most this many tickets (#176): the hub reads each one from
+// GitHub when the page's ticket box opens. A build and a publish are held to
+// it; a manifest stored before the limit existed is still read (`maxIssues`).
+export const MAX_PAGE_ISSUES = 20;
+
+const isPage = (p: unknown, maxIssues: number): p is ManifestPage => {
   if (typeof p !== 'object' || p === null) return false;
   const page = p as ManifestPage;
   const issuesOk =
     Array.isArray(page.issues) &&
+    page.issues.length <= maxIssues &&
     page.issues.every((n) => issueParts(n) !== null) &&
     new Set(page.issues).size === page.issues.length;
   return (
@@ -81,7 +87,7 @@ const isPrototypes = (list: unknown): list is PrototypeFile[] =>
   ) &&
   new Set(list.map((p: PrototypeFile) => p.path.toLowerCase())).size === list.length;
 
-export const isManifest = (m: unknown): m is Manifest => {
+export const isManifest = (m: unknown, maxIssues = MAX_PAGE_ISSUES): m is Manifest => {
   if (typeof m !== 'object' || m === null || Array.isArray(m)) return false;
   const man = m as Manifest & { csp?: unknown };
   if (!COMMIT.test(String(man.commit)) || !isString(man.builtAt)) return false;
@@ -90,5 +96,5 @@ export const isManifest = (m: unknown): m is Manifest => {
   if (man.csp !== undefined && (!isString(man.csp) || !CSP.test(man.csp))) return false;
   if (typeof man.pages !== 'object' || man.pages === null || Array.isArray(man.pages)) return false;
   if (man.prototypes !== undefined && !isPrototypes(man.prototypes)) return false;
-  return Object.values(man.pages).every(isPage);
+  return Object.values(man.pages).every((p) => isPage(p, maxIssues));
 };

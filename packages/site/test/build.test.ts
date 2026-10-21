@@ -257,6 +257,22 @@ describe('builds that must fail, naming the cause', () => {
     }
   });
 
+  it('#176 1, 2: a page may link 20 tickets, not 21', () => {
+    const links = (n: number) => `issues: [${Array.from({ length: n }, (_, i) => i + 1).join(', ')}]\n`;
+    const ok = minimal();
+    write(ok, 'docs/a.md', page('A', 'x', links(20)));
+    commit(ok, 'a');
+    expect(build(ok).status).toBe(0);
+    expect(manifestOf(ok).pages.a.issues).toHaveLength(20);
+    const over = minimal();
+    write(over, 'docs/a.md', page('A', 'x', links(21)));
+    commit(over, 'a');
+    expect(build(over)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('a.md: front matter "issues" may list at most 20 tickets (it lists 21)'),
+    });
+  });
+
   it('#132 3: an error while rendering a page on the server fails the build, naming the page', () => {
     const repo = minimal();
     write(repo, 'docs/guide.md', page('Guide', 'Text.'));
