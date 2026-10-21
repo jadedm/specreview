@@ -1,6 +1,7 @@
 import { normalise } from '@specreview/shared';
+import { contextOf, TOP_SECTION } from './anchor';
 
-export const TOP_SECTION = '_top';
+export { TOP_SECTION };
 const MAX_QUOTE = 1_000;
 const DIAGRAM_PARTS = '.sr-diagram, .sr-diagram-source, .sr-diagram-error';
 
@@ -20,7 +21,7 @@ export const sectionIdBefore = (block: Element | null): string => {
   return TOP_SECTION;
 };
 
-type Picked = { quote: string; section: string; rect: DOMRect };
+type Picked = { quote: string; section: string; prefix: string; suffix: string; rect: DOMRect };
 
 // A selection counts only when it is inside the page text, within one
 // section, not inside a heading, and not too long to quote.
@@ -40,5 +41,7 @@ export const sectionOfSelection = (root: HTMLElement, selection: Selection | nul
   if (sectionIdBefore(end) !== section) return null;
   const quote = normalise(selection.toString());
   if (quote.length === 0 || quote.length > MAX_QUOTE) return null;
-  return { quote, section, rect: range.getBoundingClientRect() };
+  // #38: the text either side, to tell a repeated quote apart and to find it
+  // again after its heading is renamed.
+  return { quote, section, ...contextOf(root, section, range), rect: range.getBoundingClientRect() };
 };
