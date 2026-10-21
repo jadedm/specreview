@@ -54,8 +54,8 @@ describe('identity is per site', () => {
   it('M3, 6: team on one site may not read another site at all', async () => {
     expect((await call('/api/me', { site: SIDECAR, email: TEAM })).body).toMatchObject({ role: 'team' });
     const r = await call('/api/me', { site: GLOBEX, email: TEAM });
-    expect(r.status).toBe(403);
-    expect(errorCode(r)).toBe('FORBIDDEN');
+    expect(r.status).toBe(404);
+    expect(errorCode(r)).toBe('NOT_FOUND');
   });
 });
 
@@ -99,7 +99,7 @@ describe('paths', () => {
     // read rule: sidecar's team may not read globex.
     const across = `/sidecar/_history/${COMMIT_OLD}/../../../globex/_history/${COMMIT_OLD}/${PAGE}.md`;
     const r = await call(across, { raw: true, email: TEAM });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(404);
     expect(String(r.body)).not.toContain('Globex only');
   });
 

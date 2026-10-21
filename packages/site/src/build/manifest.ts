@@ -14,6 +14,7 @@ import {
   issueParts,
   isManifest,
   MAX_MANIFEST_BYTES,
+  MAX_PAGE_ISSUES,
   type Manifest,
   type ManifestPage,
   type Section,
@@ -37,6 +38,10 @@ export const parseIssues = (page: string, value: unknown): IssueLink[] => {
   if (!valid)
     throw new Error(
       `${page}: front matter "issues" must be a list of distinct ticket numbers, or <repo>#<number> for a ticket in another of the site's ticket repos`,
+    );
+  if (value.length > MAX_PAGE_ISSUES)
+    throw new Error(
+      `${page}: front matter "issues" may list at most ${MAX_PAGE_ISSUES} tickets (it lists ${value.length})`,
     );
   return value as IssueLink[];
 };

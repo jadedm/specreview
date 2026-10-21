@@ -309,7 +309,7 @@ describe('11-14, 26-29: page data', () => {
     files.set(`${SIDECAR}/current.json`, 'not json');
     const broken = await pagesAs(READER);
     expect([broken.status, errorCode(broken)]).toEqual([503, 'SITE_BROKEN']);
-    expect((await pagesAs('x@stranger.example')).status).toBe(403);
+    expect((await pagesAs('x@stranger.example')).status).toBe(404);
     expect((await call('/api/pages')).status).toBe(401);
   });
 

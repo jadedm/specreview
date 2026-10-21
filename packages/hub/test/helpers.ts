@@ -617,6 +617,7 @@ export const reset = async () => {
       'admin_states',
       'pending_removals',
       'label_repos',
+      'ticket_missing',
     ].map((t) => env.DB.prepare(`DELETE FROM ${t}`)),
   );
 };
