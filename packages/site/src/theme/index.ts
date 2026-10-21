@@ -5,6 +5,7 @@ import DefaultTheme from 'vitepress/theme-without-fonts';
 import { defineComponent, h } from 'vue';
 import { OrgBrand } from './brand';
 import { Diagrams } from './diagrams';
+import { Highlights } from './review/highlights';
 import { BOTTOM_MOUNT, TOP_MOUNT, startReview } from './review/start';
 import { failRenderOnError, RenderErrorForTests } from './render-errors';
 import { expired, SignedOutMessage, SignedOutProbe } from './signed-out';
@@ -25,7 +26,7 @@ export default {
         h(DefaultTheme.Layout, null, {
           'nav-bar-content-after': () => h(OrgBrand),
           'doc-before': () => h('div', { id: TOP_MOUNT }),
-          'doc-after': () => [h('div', { id: BOTTOM_MOUNT }), h(Diagrams)],
+          'doc-after': () => [h('div', { id: BOTTOM_MOUNT }), h(Diagrams), h(Highlights)],
           // #123: a 404 shown because the sign-in expired says so.
           'layout-bottom': () => [h(SignedOutProbe), h(RenderErrorForTests)],
           ...(expired.value ? { 'not-found': () => h(SignedOutMessage) } : {}),

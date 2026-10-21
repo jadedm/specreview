@@ -58,6 +58,9 @@ export type Thread = {
   id: string;
   heading: string;
   quote: string;
+  // The text either side of the quote (#38); empty for threads posted before.
+  prefix?: string;
+  suffix?: string;
   // Set for a reader when the quoted text has left the page; quote is then empty.
   quoteHidden?: boolean;
   pageHash: string;
@@ -123,8 +126,14 @@ export const apiFor = (base: string) => {
     comments: (page: string) => send<Thread[]>('GET', at(`comments?${q(page)}`)),
     statuses: () => send<PageStatus[]>('GET', at('status')),
     tickets: (page: string) => send<Ticket[]>('GET', at(`tickets?${q(page)}`)),
-    comment: (input: { page: string; heading: string; quote: string; body: string }) =>
-      send<{ id: string }>('POST', at('comments'), input),
+    comment: (input: {
+      page: string;
+      heading: string;
+      quote: string;
+      prefix?: string;
+      suffix?: string;
+      body: string;
+    }) => send<{ id: string }>('POST', at('comments'), input),
     reply: (id: string, body: string) => send<{ id: string }>('POST', at(`comments/${id}/replies`), { body }),
     resolve: (id: string, pr?: number) => send('POST', at(`comments/${id}/resolve`), pr ? { pr } : {}),
     reopen: (id: string) => send('POST', at(`comments/${id}/reopen`), {}),

@@ -1,5 +1,5 @@
 import { isExcludePattern } from '@specreview/shared';
-import { isRepoName, problemsIn, type HubConfig } from './config';
+import { isRepoName, problemsIn, type HubConfig, type Site } from './config';
 import type { Env } from './env';
 import { LIST_PAGES } from './github-app';
 import type { GitHubAuth, Purpose } from './github-auth';
@@ -81,8 +81,8 @@ const excludeBlock = (exclude: string[] = []) =>
 export const workflowFor = (input: SiteInput, branch: string, origin: string, commit: string) =>
   `# Builds this repo's docs folder and publishes it to the specreview hub.
 # Added from the hub's admin page; the actions are pinned to the commit the
-# hub runs. When the hub upgrades to a new specreview release, move both pins
-# to its commit.
+# hub runs. When the hub upgrades to a new specreview release, the admin
+# page's Sites tab opens a pull request moving both pins to its commit.
 name: docs
 
 on:
@@ -223,7 +223,7 @@ const steps = (call: Call, made: Made[]) => {
     if (other.length > 0)
       throw stop(
         409,
-        `${repo} already has a branch ${name} with other changes (${other.slice(0, 3).join(', ')}); delete it and add the site again`,
+        `${repo} already has a branch ${name} with other changes (${other.slice(0, 3).join(', ')}); delete it and try again`,
       );
   };
   const fileAt = async (repo: string, purpose: Purpose, path: string, ref: string) => {
@@ -265,10 +265,7 @@ const steps = (call: Call, made: Made[]) => {
     );
     if (open[0]?.base.ref === base) return open[0].html_url;
     if (open[0])
-      throw stop(
-        409,
-        `${open[0].html_url} already merges ${head} into ${open[0].base.ref}; close it and add the site again`,
-      );
+      throw stop(409, `${open[0].html_url} already merges ${head} into ${open[0].base.ref}; close it and try again`);
     const created = await json<{ html_url: string }>(
       await ask(`opening the pull request on ${repo}`, repo, purpose, 'POST', '/pulls', { title, head, base, body }),
       [201],
@@ -301,6 +298,16 @@ const configWith = (text: string, site: Record<string, unknown>, hub: HubConfig)
   return { text: `${JSON.stringify(next, null, 2)}\n`, problems };
 };
 
+// Installed, and holding the setup permissions, before anything is written.
+const canWrite = async (auth: GitHubAuth, repo: string, purpose: Purpose) => {
+  const installed = await auth.installed?.(repo);
+  if (installed === false) throw new AddSiteError(409, `the app is not installed on ${repo}`);
+  if (await auth.tokenFor(repo, purpose)) return;
+  if (installed === null)
+    throw new AddSiteError(409, `the app could not get a token for ${repo}; check its key and GitHub`);
+  throw new AddSiteError(409, `the app cannot write to ${repo}: it lacks Contents, Pull requests or Workflows write`);
+};
+
 export const addSite = async (
   input: SiteInput,
   ctx: { config: HubConfig; env: Env; auth: GitHubAuth; origin: string; email: string },
@@ -315,18 +322,8 @@ export const addSite = async (
   const tickets = `${config.org}/${input.ticketRepo}`;
   // Only the app can add a site; personal tokens cannot.
   if (!(await auth.hasApp?.())) throw new AddSiteError(409, 'the hub has no GitHub App');
-  // Installed, and holding the setup permissions, before anything is written.
-  for (const [repo, purpose] of [
-    [product, 'setup-product'],
-    [configRepo, 'setup-config'],
-  ] as const) {
-    const installed = await auth.installed?.(repo);
-    if (installed === false) throw new AddSiteError(409, `the app is not installed on ${repo}`);
-    if (await auth.tokenFor(repo, purpose)) continue;
-    if (installed === null)
-      throw new AddSiteError(409, `the app could not get a token for ${repo}; check its key and GitHub`);
-    throw new AddSiteError(409, `the app cannot write to ${repo}: it lacks Contents, Pull requests or Workflows write`);
-  }
+  await canWrite(auth, product, 'setup-product');
+  await canWrite(auth, configRepo, 'setup-config');
   if ((await auth.installed?.(tickets)) === false)
     throw new AddSiteError(409, `the app is not installed on ${tickets}`);
 
@@ -436,4 +433,116 @@ export const listBranches = async (auth: GitHubAuth, repo: string): Promise<Bran
     if (batch.length < 100) return { defaultBranch, names };
   }
   return { defaultBranch, names: 'too-many' };
+};
+
+// A site's docs workflow pins the build and publish actions to a commit
+// (#148). When the hub moves to a new release, the Sites tab shows which sites
+// still pin another commit and opens a pull request moving them.
+// Only a step's `uses:` key at the start of its line counts (after the
+// indent and a list dash): not a comment, a `run:` line or another owner's
+// action whose name ends the same way.
+const USES = /(?<=^[ \t]*(?:-[ \t]+)?uses:[ \t]*["']?)(jadedm\/specreview\/(build|publish)@)([^\s"'#]*)/gm;
+const COMMIT = /^[0-9a-f]{40}$/;
+// The commits both actions are pinned to; empty unless build and publish both
+// appear and every use of either is a commit.
+export const pinsOf = (text: string) => {
+  const uses = [...text.matchAll(USES)];
+  const names = new Set(uses.map((m) => m[2]));
+  if (!names.has('build') || !names.has('publish') || uses.some((m) => !COMMIT.test(m[3]))) return [];
+  return [...new Set(uses.map((m) => m[3]))];
+};
+const withPins = (text: string, commit: string) => text.replace(USES, `$1${commit}`);
+const unpinned = (text: string) => text.replace(USES, '$1');
+// The file as GitHub holds it: a byte-order mark kept, so writing it back
+// changes nothing but the pins; null when it is not UTF-8.
+const exactText = (content: string) => {
+  try {
+    return new TextDecoder('utf-8', { ignoreBOM: true, fatal: true }).decode(
+      Uint8Array.from(atob(content.replace(/\s+/g, '')), (c) => c.charCodeAt(0)),
+    );
+  } catch {
+    return null;
+  }
+};
+export const shortCommit = (commit: string) => commit.slice(0, 7);
+
+export type Pinned =
+  | { kind: 'current' }
+  | { kind: 'other'; commits: string[] }
+  | { kind: 'missing' }
+  | { kind: 'unpinned' }
+  | { kind: 'unreadable' };
+
+// The site's workflow on its branch, with a token holding only Contents read.
+export const pinnedOf = async (auth: GitHubAuth, repo: string, site: Site, commit: string): Promise<Pinned> => {
+  const token = await auth.tokenFor(repo, 'browse');
+  if (!token) return { kind: 'unreadable' };
+  const res = await githubFetch(
+    `${API}/repos/${repo}/contents/${site.workflow}?ref=${encodeURIComponent(site.branch)}`,
+    {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'specreview',
+      },
+      signal: AbortSignal.timeout(5_000),
+    },
+  ).catch(() => null);
+  if (res?.status === 404) return { kind: 'missing' };
+  const file = res?.ok ? ((await res.json().catch(() => null)) as { content?: unknown } | null) : null;
+  if (typeof file?.content !== 'string') return { kind: 'unreadable' };
+  const commits = pinsOf(exactText(file.content) ?? '');
+  if (commits.length === 0) return { kind: 'unpinned' };
+  return commits.every((c) => c === commit) ? { kind: 'current' } : { kind: 'other', commits };
+};
+
+// Opens a pull request on the site's repo moving the pins to the hub's commit,
+// changing nothing else in the file, so a team's own edits to it stay.
+export const upgradeSite = async (
+  site: Site,
+  ctx: { config: HubConfig; env: Env; auth: GitHubAuth; email: string },
+): Promise<{ pull: string; made: Made[] }> => {
+  const { config, env, auth } = ctx;
+  const commit = env.SPECREVIEW_COMMIT;
+  if (!commit) throw new AddSiteError(409, 'the hub does not know its specreview commit');
+  if (!(await auth.hasApp?.())) throw new AddSiteError(409, 'the hub has no GitHub App');
+  const product = `${config.org}/${site.repo}`;
+  const purpose = 'setup-product';
+  await canWrite(auth, product, purpose);
+  const made: Made[] = [];
+  const gh = steps(caller(auth), made);
+  const head = await gh.headOf(product, purpose, site.branch);
+  const file = await gh.fileAt(product, purpose, site.workflow, site.branch);
+  if (!file) throw gh.stop(409, `${product} has no ${site.workflow} on ${site.branch}`);
+  const current = exactText(file.content);
+  if (current === null) throw gh.stop(409, `${site.workflow} on ${site.branch} is not UTF-8 text`);
+  const commits = pinsOf(current);
+  if (commits.length === 0)
+    throw gh.stop(409, `${site.workflow} on ${site.branch} does not pin both specreview actions to a commit`);
+  if (commits.every((c) => c === commit)) throw gh.stop(409, `${site.repo} is already on the hub's commit`);
+  const short = shortCommit(commit);
+  // One branch per target commit: a branch left from an earlier upgrade,
+  // squash-merged, would conflict with the base it was merged into.
+  const work = `specreview/upgrade-${site.repo}-${short}`;
+  await gh.branchAt(product, purpose, work, site.branch, head, [site.workflow]);
+  // A branch from an earlier run is reused only if its workflow differs from
+  // the site's in the pins alone: an edit pushed there would be overwritten.
+  const there = await gh.fileAt(product, purpose, site.workflow, work);
+  const onBranch = there && exactText(there.content);
+  if (!onBranch || unpinned(onBranch) !== unpinned(current))
+    throw gh.stop(
+      409,
+      `${product} already has a branch ${work} with other changes to ${site.workflow}; delete it and try again`,
+    );
+  await gh.write(product, purpose, site.workflow, work, withPins(current, commit), `ci: move specreview to ${short}`);
+  const pull = await gh.pull(
+    product,
+    purpose,
+    work,
+    site.branch,
+    `Move specreview to ${short}`,
+    `Moves the specreview build and publish actions in \`${site.workflow}\` to ${commit}, the commit the docs hub runs, requested on the admin page by ${ctx.email}. Nothing else in the file changes.\n\nMerging publishes the docs with the hub's version.`,
+  );
+  return { pull, made };
 };
