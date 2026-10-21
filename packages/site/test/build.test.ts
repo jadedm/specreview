@@ -644,6 +644,52 @@ describe('15, 18: where the docs are, and git states', () => {
     }
   });
 
+  it("#175: a commit subject holding the old log's separators is read as one subject", () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/b.md', page('B', 'v1'));
+    const first = commit(repo, 'docs: first MARK');
+    write(repo, 'docs/b.md', page('B', 'v2'));
+    const second = commit(
+      repo,
+      'docs: edit b\x1eHEAD^{/MARK}|/../../../../outside\x1f2026-01-01T00:00:00Z\x1fx\x1fy (#7)',
+    );
+    expect(build(repo).status).toBe(0);
+    const history = manifestOf(repo).pages.b.history;
+    expect(history.map((h) => [h.commit, h.path, h.pr])).toEqual([
+      [second, 'b.md', 7],
+      [first, 'b.md', null],
+    ]);
+    expect(filesUnder(path.join(repo, '.specreview', 'history')).filter((f) => f.endsWith('b.md'))).toEqual(
+      [`${first}/b.md`, `${second}/b.md`].sort(),
+    );
+    // Nothing was written anywhere but the output folder.
+    expect(filesUnder(repo).filter((f) => !f.startsWith('.git/') && !f.startsWith('.specreview/'))).toEqual([
+      'docs/b.md',
+      'docs/index.md',
+    ]);
+  });
+
+  it('#175: a version under a name starting with a dot is not published', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', page('Home', 'x'));
+    write(repo, 'docs/.draft.md', page('Draft', 'the same text, so git sees a rename'));
+    commit(repo, 'draft');
+    git(repo, 'mv', 'docs/.draft.md', 'docs/draft.md');
+    const head = commit(repo, 'publish');
+    expect(build(repo).status).toBe(0);
+    expect(manifestOf(repo).pages.draft.history.map((h) => [h.commit, h.path])).toEqual([[head, 'draft.md']]);
+    expect(filesUnder(path.join(repo, '.specreview', 'history')).some((f) => f.includes('.draft'))).toBe(false);
+  });
+
+  it('#175: a snippet import with no space is refused, and nothing is published', () => {
+    const repo = newRepo();
+    write(repo, 'docs/index.md', '# Home\n\nText.\n\n<<</etc/hosts\n');
+    commit(repo, 'snippet');
+    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('snippet imports') });
+    expect(existsSync(path.join(repo, '.specreview', 'site'))).toBe(false);
+  });
+
   it('18: detached HEAD builds that commit', () => {
     const repo = newRepo();
     write(repo, 'docs/index.md', page('Home', 'v1'));
@@ -682,8 +728,10 @@ describe('15, 18: where the docs are, and git states', () => {
     git(repo, 'init', '-q', '-b', 'main', '--object-format=sha256');
     write(repo, 'docs/index.md', page('Home', 'x'));
     commit(repo, 'home');
-    expect(build(repo)).toMatchObject({ status: 1, stderr: expect.stringContaining('not one the hub would accept') });
-    // The pages were written before the manifest was refused; none are left.
+    expect(build(repo)).toMatchObject({
+      status: 1,
+      stderr: expect.stringContaining('does not use SHA-1 object names'),
+    });
     expect(existsSync(path.join(repo, '.specreview', 'site'))).toBe(false);
   });
 

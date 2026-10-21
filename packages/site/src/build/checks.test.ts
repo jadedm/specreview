@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkArguments, checkPaths, forbiddenIn, OUTPUT_MARK } from './checks.js';
+import { checkArguments, checkMarkdown, checkPaths, forbiddenIn, OUTPUT_MARK } from './checks.js';
 import { docsAsPagesOrAssets } from './config.js';
 
 describe('20: Markdown features that pull in files or run code', () => {
@@ -65,6 +65,62 @@ describe('20: Markdown features that pull in files or run code', () => {
       '1. ```a\\[b',
     ])
       expect(forbiddenIn(fenced(bad)), bad).toBe('code block languages other than letters, digits and _+.#{},:=-');
+  });
+
+  it('code is what markdown-it parses as code: a fence marker indented four spaces opens nothing', () => {
+    expect(forbiddenIn('# Page\n\nText.\n\n    ```\n<script setup>\nx\n</script>\n')).toBe('script blocks');
+    expect(forbiddenIn('# Page\n\n   ```\n<script setup>\n   ```\n')).toBeNull();
+    expect(forbiddenIn('# Page\n\n    <script setup>\n')).toBeNull();
+    expect(forbiddenIn('# Page\n\n- item\n\n  ```\n  <script>\n  ```\n')).toBeNull();
+  });
+
+  it('every form of a snippet import is refused: no space, indented up to three, nested, after a paragraph', () => {
+    for (const page of [
+      '<<</etc/hosts',
+      '<<<@/x.js',
+      '   <<< /etc/hosts',
+      '- <<< /etc/hosts',
+      '1. <<< /etc/hosts',
+      '> <<< /etc/hosts',
+      '> - > <<< /etc/hosts',
+      '::: tip\n<<< /etc/hosts\n:::',
+      '::: details Title\n- <<< /etc/hosts\n:::',
+      'Some text\n<<< /etc/hosts',
+      ' \t<<< x\n\nand\n\n<<<x',
+    ])
+      expect(forbiddenIn(`# Page\n\n${page}\n`), page).toBe('snippet imports (<<<)');
+  });
+
+  it('a fence inside a container ends with it, so what follows is checked', () => {
+    expect(forbiddenIn('# Page\n\n::: tip\n```\n:::\n<<< /etc/hosts\n')).toBe('snippet imports (<<<)');
+    expect(forbiddenIn('# Page\n\n::: code-group\n```sh\n:::\n<script setup>\n')).toBe('script blocks');
+  });
+
+  it('a fence marker in front matter hides nothing in the page', () => {
+    // Read as Markdown, the block scalar's line would open a fence running to the end.
+    expect(forbiddenIn('---\ntitle: |\n  ```\n---\n\n# Page\n\n<<< /etc/hosts\n')).toBe('snippet imports (<<<)');
+    expect(forbiddenIn('---\ntitle: <script>\n---\n\n# Page\n')).toBe('script blocks');
+  });
+
+  it('lines end as markdown-it ends them: a lone \\r too', () => {
+    // The fence is on line 0: split on \n alone, the whole page would be that line.
+    expect(forbiddenIn('```\rx\r```\r<script setup>\r')).toBe('script blocks');
+    expect(forbiddenIn('# Page\r\n\r\n```\r\n<script setup>\r\n```\r\n')).toBeNull();
+  });
+
+  it('front matter that is not valid YAML stops the build, naming the page', () => {
+    const docs = mkdtempSync(path.join(tmpdir(), 'checks-yaml-'));
+    try {
+      writeFileSync(path.join(docs, 'bad.md'), '---\ntitle: [unclosed\n---\n\n# Page\n');
+      expect(() => checkMarkdown(docs, ['bad.md'])).toThrow(/^bad\.md: /);
+    } finally {
+      rmSync(docs, { recursive: true, force: true });
+    }
+  });
+
+  it('<<< in code is fine: indented four columns (a tab is four), fenced, or inline', () => {
+    for (const page of ['    <<< /etc/hosts', '\t<<< x', '```\n<<< /etc/hosts\n```', 'Write `<<< file` to import.'])
+      expect(forbiddenIn(`# Page\n\n${page}\n`), page).toBeNull();
   });
 
   it('a fence closes only with its own character, at least as long', () => {

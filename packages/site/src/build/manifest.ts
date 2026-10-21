@@ -95,38 +95,64 @@ export const sectionsOf = (body: string): Section[] => {
   return sections.filter((s) => s.id !== TOP_SECTION || s.text.length > 0);
 };
 
-// `git log --follow` with name-status: one record per commit that touched the
-// file, with the file's path in that commit (renames and copies tracked).
-// Merges are compared with their first parent, so a merge that changed the
-// page has a record. Only versions inside the docs folder are kept: a page
-// moved in from elsewhere in the repo does not publish what it was before.
-export type LogEntry = Omit<HistoryEntry, 'hash'> & { repoPath: string };
+// `git log --follow -z --format=%H` with name-status: for each commit that
+// touched the file, its id, then each change as a status and one path (two
+// for a rename or copy, the new one last), every field ended by NUL and the
+// first status after a newline. Nothing in it is text a commit's author
+// wrote. Merges are compared with their first parent, so a merge that
+// changed the page has a change; one that did not has none. Only versions
+// inside the docs folder are kept: a page moved in from elsewhere in the
+// repo does not publish what it was before.
+export type LogEntry = { commit: string; path: string; repoPath: string };
 
-export const parseGitLog = (log: string, contentPrefix: string): LogEntry[] =>
-  log
-    .split('\x1e')
-    .map((r) => r.trim())
-    .filter(Boolean)
-    .flatMap((record) => {
-      const [header, ...rest] = record.split('\n');
-      const [commit, date, author, subject] = header.split('\x1f');
-      const change = rest.find((l) => /^[AMRC]/.test(l));
-      if (!change) return [];
-      const fields = change.split('\t');
-      const repoPath = fields[fields.length - 1];
-      if (!repoPath.startsWith(contentPrefix)) return [];
-      const pr = /\(#(\d+)\)\s*$/.exec(subject ?? '');
-      return [
-        {
-          commit,
-          date,
-          author,
-          pr: pr ? Number(pr[1]) : null,
-          repoPath,
-          path: repoPath.slice(contentPrefix.length),
-        },
-      ];
-    });
+// A commit id as a SHA-1 repo prints it, the only form used in a git
+// argument or a history path (the build refuses SHA-256 repos).
+const COMMIT = /^[0-9a-f]{40}$/;
+const STATUS = /^[ACDMRTUXB][0-9]*$/;
+
+const unreadable = (what: string, got: string | undefined) =>
+  new Error(`git log: expected ${what}, got ${got === undefined ? 'the end' : JSON.stringify(got.slice(0, 60))}`);
+
+export const parseGitLog = (log: string, contentPrefix: string): LogEntry[] => {
+  if (log === '') return [];
+  if (!log.endsWith('\0')) throw unreadable('a NUL at the end', log.slice(-60));
+  const fields = log.slice(0, -1).split('\0');
+  const entries: LogEntry[] = [];
+  let i = 0;
+  while (i < fields.length) {
+    const commit = fields[i++];
+    if (!COMMIT.test(commit)) throw unreadable('a commit id', commit);
+    let kept = false;
+    while (i < fields.length && !COMMIT.test(fields[i])) {
+      const status = fields[i++].replace(/^\n/, '');
+      if (!STATUS.test(status)) throw unreadable('a change status', status);
+      const count = /^[RC]/.test(status) ? 2 : 1;
+      const paths = fields.slice(i, i + count);
+      i += count;
+      if (paths.length !== count || paths.includes('')) throw unreadable('a path', paths.at(-1));
+      const repoPath = paths[count - 1];
+      if (kept || !/^[AMRC]/.test(status) || !repoPath.startsWith(contentPrefix)) continue;
+      kept = true;
+      entries.push({ commit, repoPath, path: repoPath.slice(contentPrefix.length) });
+    }
+  }
+  return entries;
+};
+
+// One commit's date, author and subject, from `git log -1
+// --format=%aI%x00%an%x00%s`: three fields, the subject last and on one line.
+export const COMMIT_DETAILS_FORMAT = '--format=%aI%x00%an%x00%s';
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
+
+export const parseCommitDetails = (text: string): Pick<HistoryEntry, 'date' | 'author' | 'pr'> => {
+  const fields = text.replace(/\n$/, '').split('\0');
+  if (fields.length !== 3)
+    throw new Error(`git log: expected a date, an author and a subject, got ${fields.length} fields`);
+  const [date, author, subject] = fields;
+  if (!ISO_DATE.test(date)) throw unreadable('an ISO 8601 date', date);
+  const pr = /\(#(\d+)\)\s*$/.exec(subject);
+  return { date, author, pr: pr ? Number(pr[1]) : null };
+};
 
 const inlineScripts = (html: string) =>
   [...html.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi)]
@@ -190,8 +216,8 @@ const htmlFiles = (dir: string): string[] =>
 
 export type Collected = Map<string, PageMeta>;
 
-// A path segment the hub's router serves.
-const SERVABLE = /^[A-Za-z0-9._~-]+$/;
+// A path segment the hub's router serves: no leading dot, so never . or ..
+const SERVABLE = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/;
 
 export const assertManifestSize = (text: string) => {
   const bytes = Buffer.byteLength(text);
@@ -229,16 +255,14 @@ export const buildEndFor =
       if (!meta) throw new Error(`${file}: no page data was collected`);
       const source = readFileSync(path.join(config.srcDir, file), 'utf8');
       const html = readFileSync(path.join(config.outDir, `${page}.html`), 'utf8');
-      // quotePath off: git would otherwise quote a non-ASCII path and the
-      // prefix check would drop that version.
+      // -z prints paths as they are, never quoted.
       const log = git(repo, [
-        '-c',
-        'core.quotePath=false',
         'log',
         '--follow',
         '--diff-merges=first-parent',
         '--name-status',
-        '--format=%x1e%H%x1f%aI%x1f%an%x1f%s',
+        '-z',
+        '--format=%H',
         '--',
         `${contentPrefix}${file}`,
       ]);
@@ -247,12 +271,13 @@ export const buildEndFor =
       const servable = parseGitLog(log, contentPrefix).filter(
         (e) => e.path.split('/').every((p) => SERVABLE.test(p)) && !excluded(e.path),
       );
-      const history: HistoryEntry[] = servable.map(({ repoPath, ...entry }) => {
-        const old = git(repo, ['show', `${entry.commit}:${repoPath}`]);
-        const target = path.join(historyDir, entry.commit, entry.path);
+      const history: HistoryEntry[] = servable.map(({ commit, path: pagePath, repoPath }) => {
+        const details = parseCommitDetails(git(repo, ['log', '-1', COMMIT_DETAILS_FORMAT, commit, '--']));
+        const old = git(repo, ['show', `${commit}:${repoPath}`]);
+        const target = path.join(historyDir, commit, pagePath);
         mkdirSync(path.dirname(target), { recursive: true });
         writeFileSync(target, old);
-        return { ...entry, hash: sha256(old) };
+        return { commit, ...details, path: pagePath, hash: sha256(old) };
       });
       pages[page] = {
         // VitePress's title is the front-matter title, else the first heading,
