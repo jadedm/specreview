@@ -103,7 +103,8 @@ describe('20: Markdown features that pull in files or run code', () => {
   });
 
   it('lines end as markdown-it ends them: a lone \\r too', () => {
-    expect(forbiddenIn('# Page\r\r```\rx\r```\r<script setup>\r')).toBe('script blocks');
+    // The fence is on line 0: split on \n alone, the whole page would be that line.
+    expect(forbiddenIn('```\rx\r```\r<script setup>\r')).toBe('script blocks');
     expect(forbiddenIn('# Page\r\n\r\n```\r\n<script setup>\r\n```\r\n')).toBeNull();
   });
 
