@@ -11,6 +11,7 @@ import {
   cspFor,
   docBodyOf,
   inlineScriptHashes,
+  parseCommitDetails,
   parseGitLog,
   parseIssues,
   sectionsOf,
@@ -73,37 +74,80 @@ describe('section text', () => {
 });
 
 describe('git history', () => {
-  it('follows renames and reads the PR from a squash subject', () => {
+  // As `git log --follow --name-status -z --format=%H` writes it: the id, a
+  // newline before the first status, every field ended by NUL.
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  const C = 'c'.repeat(40);
+  const D = 'd'.repeat(40);
+  const record = (commit: string, ...changes: string[][]) =>
+    `${commit}\0${changes.map((c, i) => `${i === 0 ? '\n' : ''}${c.join('\0')}\0`).join('')}`;
+
+  it('follows renames; only versions inside the content folder are kept', () => {
     const log = [
-      '\x1eaaa\x1f2026-10-07T10:00:00+05:30\x1fManish Jadhav\x1fdocs(docs): roster only (#58)\n\nM\tdocs/content/onboarding/roster.md\n',
-      '\x1ebbb\x1f2026-10-05T10:00:00+05:30\x1fManish Jadhav\x1fdocs: move page\n\nR100\tdocs/content/old.md\tdocs/content/onboarding/roster.md\n',
-      '\x1eccc\x1f2026-10-03T10:00:00+05:30\x1fShubham\x1fdocs: first draft (#51)\n\nA\tdocs/content/old.md\n',
+      record(A, ['M', 'docs/content/onboarding/roster.md']),
+      record(B, ['R100', 'docs/content/old.md', 'docs/content/onboarding/roster.md']),
+      record(C, ['A', 'docs/content/old.md']),
     ].join('');
-    const got = parseGitLog(log, 'docs/content/').map(({ commit, pr, path, repoPath }) => ({
-      commit,
-      pr,
-      path,
-      repoPath,
-    }));
-    expect(got).toEqual([
-      { commit: 'aaa', pr: 58, path: 'onboarding/roster.md', repoPath: 'docs/content/onboarding/roster.md' },
-      { commit: 'bbb', pr: null, path: 'onboarding/roster.md', repoPath: 'docs/content/onboarding/roster.md' },
-      { commit: 'ccc', pr: 51, path: 'old.md', repoPath: 'docs/content/old.md' },
+    expect(parseGitLog(log, 'docs/content/')).toEqual([
+      { commit: A, path: 'onboarding/roster.md', repoPath: 'docs/content/onboarding/roster.md' },
+      { commit: B, path: 'onboarding/roster.md', repoPath: 'docs/content/onboarding/roster.md' },
+      { commit: C, path: 'old.md', repoPath: 'docs/content/old.md' },
     ]);
   });
 
   it('a page moved in from outside the content folder publishes only its versions inside it', () => {
     const log = [
-      '\x1eaaa\x1f2026-10-07\x1fM\x1fdocs: move (#60)\n\nR090\tnotes/roster.md\tdocs/content/roster.md\n',
-      '\x1ebbb\x1f2026-10-05\x1fM\x1fnotes\n\nA\tnotes/roster.md\n',
-      '\x1eccc\x1f2026-10-04\x1fM\x1fMerge branch x\n',
-      '\x1eddd\x1f2026-10-03\x1fM\x1fcopy\n\nC075\tdocs/content/a.md\tdocs/content/roster.md\n',
+      record(A, ['R090', 'notes/roster.md', 'docs/content/roster.md']),
+      record(B, ['A', 'notes/roster.md']),
+      record(C),
+      record(D, ['C075', 'docs/content/a.md', 'docs/content/roster.md']),
     ].join('');
-    const got = parseGitLog(log, 'docs/content/').map(({ commit, path, repoPath }) => [commit, path, repoPath]);
-    expect(got).toEqual([
-      ['aaa', 'roster.md', 'docs/content/roster.md'],
-      ['ddd', 'roster.md', 'docs/content/roster.md'],
+    expect(parseGitLog(log, 'docs/content/').map((e) => e.commit)).toEqual([A, D]);
+  });
+
+  it('a deletion or a type change is not a version; a path may hold a tab or a newline', () => {
+    const log = [
+      record(A, ['A', 'docs/x\ty.md']),
+      record(B, ['D', 'docs/x\ty.md']),
+      record(C, ['T', 'docs/x\ty.md']),
+      record(D, ['A', 'docs/x\ny.md']),
+    ].join('');
+    expect(parseGitLog(log, 'docs/')).toEqual([
+      { commit: A, path: 'x\ty.md', repoPath: 'docs/x\ty.md' },
+      { commit: D, path: 'x\ny.md', repoPath: 'docs/x\ny.md' },
     ]);
+    expect(parseGitLog('', 'docs/')).toEqual([]);
+  });
+
+  it('only a 40-character lowercase hex commit id is read as one; anything else stops the build', () => {
+    for (const commit of ['a'.repeat(39), 'A'.repeat(40), `${'a'.repeat(40)}x`, `HEAD^{/x}`, '../../x', ''])
+      expect(() => parseGitLog(record(commit, ['M', 'docs/a.md']), 'docs/'), commit).toThrow(/expected a commit id/);
+  });
+
+  it('a field out of place, a missing path or a missing final NUL stops the build', () => {
+    expect(() => parseGitLog(record(A, ['Q', 'docs/a.md']), 'docs/')).toThrow(/expected a change status/);
+    expect(() => parseGitLog(`${A}\0\nR100\0docs/a.md\0`, 'docs/')).toThrow(/expected a path/);
+    expect(() => parseGitLog(`${A}\0\nM\0\0`, 'docs/')).toThrow(/expected a path/);
+    expect(() => parseGitLog(`${A}\0\nM\0docs/a.md`, 'docs/')).toThrow(/NUL at the end/);
+    // A subject never reaches this stream, but one shaped like records is refused if it did.
+    expect(() => parseGitLog(`${A}\0x\x1e${B}\x1f2026\0\nM\0docs/a.md\0`, 'docs/')).toThrow(/expected a change status/);
+  });
+
+  it("a commit's details: three fields, an ISO date, the PR from a squash subject", () => {
+    expect(parseCommitDetails('2026-10-07T10:00:00+05:30\0Manish Jadhav\0docs: roster only (#58)\n')).toEqual({
+      date: '2026-10-07T10:00:00+05:30',
+      author: 'Manish Jadhav',
+      pr: 58,
+    });
+    expect(parseCommitDetails('2026-10-07T10:00:00Z\0M\0edit\x1ex\x1f../y (#12)\n')).toEqual({
+      date: '2026-10-07T10:00:00Z',
+      author: 'M',
+      pr: 12,
+    });
+    expect(parseCommitDetails('2026-10-07T10:00:00Z\0M\0no number\n').pr).toBeNull();
+    for (const bad of ['2026-10-07T10:00:00Z\0M\n', '2026-10-07T10:00:00Z\0M\0s\0t\n', 'yesterday\0M\0s\n'])
+      expect(() => parseCommitDetails(bad), JSON.stringify(bad)).toThrow(/git log/);
   });
 });
 
