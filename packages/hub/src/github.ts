@@ -352,6 +352,26 @@ const syncTicket = async (hub: Hub, repo: string, n: number, wanted: string, pro
   return removed;
 };
 
+// Recorded before any label is written in a repo (#155), so the cron can clear
+// our labels there once no site lists it. Without the record nothing is
+// written: a label the hub does not know it set could never be cleared. A sync
+// records again after its writes, so a clearing that began while they were in
+// flight keeps the repo for its next run.
+const recordRepo = (hub: Hub, repo: string, problems: Problems) =>
+  hub.env.DB.prepare(
+    `INSERT INTO label_repos (repo, labelled_at) VALUES (?, ?)
+     ON CONFLICT (repo) DO UPDATE SET labelled_at = excluded.labelled_at, failing_since = NULL`,
+  )
+    .bind(repo, Date.now())
+    .run()
+    .then(
+      () => true,
+      (err: unknown) => {
+        problems.push(`recording ${repo} as labelled failed (${errorText(err)})`);
+        return false;
+      },
+    );
+
 // Sets each ticket's label from the statuses read at the start of the sync.
 // Two syncs that overlap on a shared ticket can still leave the older label
 // or two labels for a moment; the cron below puts it right within 5 minutes.
@@ -367,11 +387,12 @@ const syncTickets = async (
     problems.push(`reading page statuses failed (${errorText(err)})`);
     return null;
   });
-  if (!want || !(await ensureLabels(hub, repo, problems))) return 'failed';
+  if (!want || !(await recordRepo(hub, repo, problems)) || !(await ensureLabels(hub, repo, problems))) return 'failed';
   const results = await Promise.all(
     tickets.map((n) => syncTicket(hub, repo, n, STATUS_LABEL[want.get(n) ?? 'pending'], problems)),
   );
-  return results.every(Boolean) ? 'updated' : 'failed';
+  const recorded = await recordRepo(hub, repo, problems);
+  return recorded && results.every(Boolean) ? 'updated' : 'failed';
 };
 
 // Each ticket repo the page's links resolve to, on its own (#90).
@@ -444,6 +465,10 @@ const clearUnlinked = async (hub: Hub, repo: string, linked: Set<number>, proble
 };
 
 const reconcileRepo = async (hub: Hub, repo: string, problems: Problems): Promise<'updated' | 'failed' | 'none'> => {
+  // Every listed repo is recorded, whether or not a page links it now: labels
+  // it holds from before #155 are then cleared if it is dropped before they go,
+  // and an earlier failure to clear it is forgotten while it is listed.
+  if (!(await recordRepo(hub, repo, problems))) return 'failed';
   const snaps = await snapshotsFor(hub, repo, problems);
   // Without every site's links, "no page links this ticket" is unknown.
   if (!snaps) return 'failed';
@@ -458,17 +483,69 @@ const reconcileRepo = async (hub: Hub, repo: string, problems: Problems): Promis
   return cleared ? result : 'failed';
 };
 
-// Cron: each ticket repo on its own, so one failing repo stops nothing else.
+const GIVE_UP_MS = 7 * 24 * 60 * 60_000;
+type Recorded = { repo: string; failing_since: number | null };
+
+// A recorded repo no site lists any more (#155): no page link resolves to it
+// (resolveLink), so every one of our labels there goes. The repo is forgotten
+// once clear, unless it was recorded after the clearing began (an isolate
+// still holding a config that lists it, finishing its writes). One that keeps failing (the
+// app uninstalled, the repo deleted) is forgotten after a week, with a line
+// saying its labels are left for a person.
+const clearDropped = async (hub: Hub, row: Recorded, problems: Problems): Promise<'cleared' | 'failed'> => {
+  const started = Date.now();
+  if (await clearUnlinked(hub, row.repo, new Set(), problems)) {
+    await hub.env.DB.prepare('DELETE FROM label_repos WHERE repo = ? AND labelled_at < ?')
+      .bind(row.repo, started)
+      .run();
+    return 'cleared';
+  }
+  if (row.failing_since === null) {
+    await hub.env.DB.prepare('UPDATE label_repos SET failing_since = ? WHERE repo = ? AND failing_since IS NULL')
+      .bind(started, row.repo)
+      .run();
+    return 'failed';
+  }
+  if (started - row.failing_since <= GIVE_UP_MS) return 'failed';
+  const gone = await hub.env.DB.prepare(
+    'DELETE FROM label_repos WHERE repo = ? AND failing_since = ? AND labelled_at < ?',
+  )
+    .bind(row.repo, row.failing_since, started)
+    .run();
+  // Recorded again meanwhile: kept, and the next run tries afresh.
+  if (gone.meta.changes === 0) return 'failed';
+  problems.unshift('no site lists it and clearing has failed for over 7 days; forgotten, remove its labels by hand');
+  return 'failed';
+};
+
+const recordedRepos = (hub: Hub) =>
+  hub.env.DB.prepare('SELECT repo, failing_since FROM label_repos')
+    .all<Recorded>()
+    .then(
+      (r) => r.results,
+      (err: unknown) => {
+        console.error(`label sync could not read the repos it has labelled: ${errorText(err)}`);
+        return [] as Recorded[];
+      },
+    );
+
+// Cron: each ticket repo on its own, so one failing repo stops nothing else;
+// the listed ones first, then those no site lists any more.
 export const reconcileLabels = async (hub: Hub) => {
-  const repos = [...new Set([...hub.config.sites.values()].flatMap((s) => s.ticketRepos))];
+  const listed = [...new Set([...hub.config.sites.values()].flatMap((s) => s.ticketRepos))];
   const results: Record<string, string> = {};
-  for (const repo of repos) {
+  const run = async (repo: string, step: (problems: Problems) => Promise<string>) => {
     const problems: Problems = [];
-    results[repo] = await reconcileRepo(hub, repo, problems).catch((err: unknown) => {
+    results[repo] = await step(problems).catch((err: unknown) => {
       problems.push(`unexpected error (${errorText(err)})`);
-      return 'failed' as const;
+      return 'failed';
     });
     if (results[repo] === 'failed') console.error(`label sync failed for ${repo}: ${summary(problems)}`);
+  };
+  for (const repo of listed) await run(repo, (problems) => reconcileRepo(hub, repo, problems));
+  for (const row of await recordedRepos(hub)) {
+    if (listed.includes(row.repo)) continue;
+    await run(row.repo, (problems) => clearDropped(hub, row, problems));
   }
   return results;
 };
